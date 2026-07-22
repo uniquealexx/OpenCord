@@ -1,0 +1,20 @@
+{
+  "name": "opencord",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @opencord/shared build && pnpm --parallel --filter @opencord/server --filter @opencord/client dev",
+    "dev:client": "pnpm --filter @opencord/client dev",
+    "dev:server": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server dev",
+    "build": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm --filter @opencord/client build",
+    "package:win": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test"
+  }
+}

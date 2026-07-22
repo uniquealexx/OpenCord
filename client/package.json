@@ -1,0 +1,81 @@
+{
+  "name": "@opencord/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenCord desktop client prototype",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "pnpm build && electron .",
+    "build:electron": "tsup",
+    "build:renderer": "next build",
+    "build": "pnpm build:renderer && pnpm build:electron",
+    "package:win": "pnpm build && electron-builder --win nsis --x64",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:electron": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm build && playwright test"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "latest",
+    "@radix-ui/react-switch": "latest",
+    "@radix-ui/react-tooltip": "latest",
+    "@opencord/shared": "workspace:*",
+    "class-variance-authority": "latest",
+    "clsx": "latest",
+    "lucide-react": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwind-merge": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@tailwindcss/postcss": "latest",
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/react": "latest",
+    "@testing-library/user-event": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "latest",
+    "jsdom": "latest",
+    "tailwindcss": "latest",
+    "tsup": "latest",
+    "typescript": "^6.0.0",
+    "vitest": "latest"
+  },
+  "build": {
+    "appId": "org.opencord.desktop",
+    "productName": "OpenCord",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "OpenCord-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
