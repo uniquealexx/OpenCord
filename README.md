@@ -43,3 +43,9 @@ Windows-установщик создаётся в `client/release/`.
 pnpm dev:server
 curl http://127.0.0.1:3210/health
 ```
+
+## Развёртывание сервера на VPS
+
+Production-основа находится в `deploy/`: multi-stage образ Node.js 24, PostgreSQL с постоянным volume и Caddy для `wss://` через автоматический TLS. Подготовлен идемпотентный установщик Ubuntu 22.04/24.04; интеграция этого установщика с кнопкой `+` в Electron ещё не реализована.
+
+Инструкция, требования и диагностика: [`docs/deployment.md`](docs/deployment.md).

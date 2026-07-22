@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 const configSchema = z.object({
@@ -9,8 +10,24 @@ const configSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 
+const environmentSchema = configSchema.extend({
+  DATABASE_URL_FILE: z.string().min(1).optional(),
+}).superRefine((environment, context) => {
+  if (environment.DATABASE_URL && environment.DATABASE_URL_FILE) {
+    context.addIssue({ code: "custom", path: ["DATABASE_URL_FILE"], message: "Use DATABASE_URL or DATABASE_URL_FILE, not both" });
+  }
+});
+
 export type ServerConfig = z.infer<typeof configSchema>;
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ServerConfig {
-  return configSchema.parse(environment);
+  const parsed = environmentSchema.parse(environment);
+  const databaseUrl = parsed.DATABASE_URL_FILE ? readSecret(parsed.DATABASE_URL_FILE) : parsed.DATABASE_URL;
+  return configSchema.parse({ ...parsed, DATABASE_URL: databaseUrl });
+}
+
+function readSecret(filePath: string): string {
+  const value = readFileSync(filePath, "utf8").trim();
+  if (!value) throw new Error(`Secret file is empty: ${filePath}`);
+  return value;
 }
