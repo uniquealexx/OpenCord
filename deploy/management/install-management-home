@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 027
+
+if [[ "${EUID}" -ne 0 ]]; then
+  printf 'Management home installer must run as root.\n' >&2
+  exit 1
+fi
+
+INSTALL_MODE="${1:-}"
+INSECURE_MODE="${2:-}"
+PUBLIC_ENDPOINT="${3:-}"
+SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MANAGEMENT_ROOT="/home/opencord"
+
+if [[ "${INSTALL_MODE}" != "docker" && "${INSTALL_MODE}" != "native" ]]; then
+  printf 'Expected docker or native installation mode.\n' >&2
+  exit 1
+fi
+if [[ "${INSECURE_MODE}" != "true" && "${INSECURE_MODE}" != "false" ]]; then
+  printf 'Expected a boolean insecure-mode value.\n' >&2
+  exit 1
+fi
+if [[ -z "${PUBLIC_ENDPOINT}" || ${#PUBLIC_ENDPOINT} -gt 500 ]]; then
+  printf 'A public endpoint description is required.\n' >&2
+  exit 1
+fi
+if [[ ! -f "${SOURCE_DIR}/opencordctl" || ! -f "${SOURCE_DIR}/README.md" ]]; then
+  printf 'OpenCord management assets are incomplete.\n' >&2
+  exit 1
+fi
+
+if ! getent group opencord >/dev/null; then
+  groupadd --system opencord
+fi
+if ! getent passwd opencord >/dev/null; then
+  useradd --system --gid opencord --home-dir "${MANAGEMENT_ROOT}" --shell /usr/sbin/nologin opencord
+fi
+
+install -d -m 0750 -o root -g opencord \
+  "${MANAGEMENT_ROOT}" \
+  "${MANAGEMENT_ROOT}/backups" \
+  "${MANAGEMENT_ROOT}/data" \
+  "${MANAGEMENT_ROOT}/scripts" \
+  "${MANAGEMENT_ROOT}/settings"
+install -m 0750 -o root -g opencord "${SOURCE_DIR}/opencordctl" "${MANAGEMENT_ROOT}/opencordctl"
+install -m 0640 -o root -g opencord "${SOURCE_DIR}/README.md" "${MANAGEMENT_ROOT}/README.md"
+if [[ (-e /usr/local/bin/opencordctl || -L /usr/local/bin/opencordctl) && "$(readlink /usr/local/bin/opencordctl 2>/dev/null || true)" != "${MANAGEMENT_ROOT}/opencordctl" ]]; then
+  printf 'Refusing to replace an unrelated /usr/local/bin/opencordctl.\n' >&2
+  exit 1
+fi
+ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl
+
+{
+  printf 'INSTALL_MODE=%q\n' "${INSTALL_MODE}"
+  printf 'INSTALL_ROOT=%q\n' '/opt/opencord'
+  printf 'INSECURE_MODE=%q\n' "${INSECURE_MODE}"
+  printf 'PUBLIC_ENDPOINT=%q\n' "${PUBLIC_ENDPOINT}"
+} > "${MANAGEMENT_ROOT}/settings/server.env"
+chown root:opencord "${MANAGEMENT_ROOT}/settings/server.env"
+chmod 0640 "${MANAGEMENT_ROOT}/settings/server.env"
+
+if [[ "${INSTALL_MODE}" == "docker" ]]; then
+  cat > "${MANAGEMENT_ROOT}/data/README.md" <<'DATA'
+# Расположение данных
+
+- PostgreSQL: Docker volume `opencord_postgres_data` под управлением Docker.
+- Секреты: `/opt/opencord/deploy/secrets/`, доступны root и выделенному UID контейнера OpenCord Server.
+- Конфигурация Compose: `/opt/opencord/deploy/`.
+- Резервные копии: `/home/opencord/backups/`.
+
+Не редактируйте файлы volume напрямую. Используйте `sudo opencordctl backup`.
+DATA
+else
+  cat > "${MANAGEMENT_ROOT}/data/README.md" <<'DATA'
+# Расположение данных
+
+- PostgreSQL: системный кластер PostgreSQL, отдельная база `opencord`.
+- Секреты: `/etc/opencord/`, доступны только root и службе OpenCord.
+- Версии приложения: `/opt/opencord/releases/`.
+- Активная версия: `/opt/opencord/current`.
+- Резервные копии: `/home/opencord/backups/`.
+
+Не редактируйте файлы PostgreSQL напрямую. Используйте `sudo opencordctl backup`.
+DATA
+fi
+chown root:opencord "${MANAGEMENT_ROOT}/data/README.md"
+chmod 0640 "${MANAGEMENT_ROOT}/data/README.md"
+
+for command in status logs start stop restart settings backup clear-messages update uninstall; do
+  ln -sfn -- ../opencordctl "${MANAGEMENT_ROOT}/scripts/${command}.sh"
+done
+rm -f -- "${MANAGEMENT_ROOT}/.uninstalled"
+
+printf 'OpenCord management home is ready: %s\n' "${MANAGEMENT_ROOT}"

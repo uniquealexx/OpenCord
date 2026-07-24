@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const STATE_VERSION = 1 as const;
+export const STATE_VERSION = 2 as const;
+const LEGACY_TEMPLATE_SERVER_ID = "open-space";
 
 export const localProfileSchema = z.object({
   id: z.string().min(1),
@@ -22,6 +23,7 @@ export const mockMemberSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1).max(32),
   role: z.string().max(32),
+  serverRole: z.enum(["owner", "administrator", "member"]).optional(),
   status: z.enum(["online", "idle", "offline"]),
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
 });
@@ -51,18 +53,17 @@ export const clientPreferencesSchema = z.object({
   notifications: z.boolean(),
 });
 
-export const persistedClientStateSchema = z
-  .object({
-    version: z.literal(STATE_VERSION),
-    onboardingComplete: z.boolean(),
-    profile: localProfileSchema.nullable(),
-    servers: z.array(mockServerSchema),
-    messages: z.array(mockMessageSchema),
-    activeServerId: z.string().nullable(),
-    activeChannelId: z.string().nullable(),
-    preferences: clientPreferencesSchema,
-  })
-  .superRefine((state, context) => {
+const persistedStateFields = {
+  onboardingComplete: z.boolean(),
+  profile: localProfileSchema.nullable(),
+  servers: z.array(mockServerSchema),
+  messages: z.array(mockMessageSchema),
+  activeServerId: z.string().nullable(),
+  activeChannelId: z.string().nullable(),
+  preferences: clientPreferencesSchema,
+};
+
+function validateStateRelations(state: { servers: MockServer[]; activeServerId: string | null; activeChannelId: string | null }, context: z.RefinementCtx): void {
     const activeServer = state.servers.find((server) => server.id === state.activeServerId);
     if (state.activeServerId && !activeServer) {
       context.addIssue({ code: "custom", path: ["activeServerId"], message: "Unknown active server" });
@@ -70,7 +71,10 @@ export const persistedClientStateSchema = z
     if (state.activeChannelId && !activeServer?.channels.some((channel) => channel.id === state.activeChannelId)) {
       context.addIssue({ code: "custom", path: ["activeChannelId"], message: "Unknown active channel" });
     }
-  });
+}
+
+export const persistedClientStateSchema = z.object({ version: z.literal(STATE_VERSION), ...persistedStateFields }).superRefine(validateStateRelations);
+const persistedClientStateV1Schema = z.object({ version: z.literal(1), ...persistedStateFields }).superRefine(validateStateRelations);
 
 export type LocalProfile = z.infer<typeof localProfileSchema>;
 export type MockChannel = z.infer<typeof mockChannelSchema>;
@@ -80,73 +84,34 @@ export type MockMessage = z.infer<typeof mockMessageSchema>;
 export type ClientPreferences = z.infer<typeof clientPreferencesSchema>;
 export type PersistedClientState = z.infer<typeof persistedClientStateSchema>;
 
-const demoServer: MockServer = {
-  id: "open-space",
-  name: "Открытое пространство",
-    address: null,
-  accent: "#7c5cff",
-  channels: [
-    { id: "welcome", serverId: "open-space", name: "добро-пожаловать", kind: "text", description: "Начните знакомство с OpenCord" },
-    { id: "general", serverId: "open-space", name: "общий", kind: "text", description: "Разговоры обо всём" },
-    { id: "ideas", serverId: "open-space", name: "идеи-и-фидбек", kind: "text", description: "Обсуждаем будущее проекта" },
-    { id: "lounge", serverId: "open-space", name: "Гостиная", kind: "voice", description: "Голосовая комната появится позже" },
-  ],
-  members: [
-    { id: "mira", displayName: "Mira", role: "Администратор", status: "online", avatarColor: "#7c5cff" },
-    { id: "alex", displayName: "Alex", role: "Участник", status: "online", avatarColor: "#36c5f0" },
-    { id: "nova", displayName: "Nova", role: "Участник", status: "idle", avatarColor: "#f59e0b" },
-    { id: "echo", displayName: "Echo", role: "Участник", status: "offline", avatarColor: "#64748b" },
-  ],
-};
-
-const demoMessages: MockMessage[] = [
-  {
-    id: "welcome-1",
-    channelId: "welcome",
-    authorId: "mira",
-    authorName: "Mira",
-    authorColor: "#7c5cff",
-    content: "Добро пожаловать в OpenCord — пространство, которое принадлежит его участникам.",
-    createdAt: "2026-07-22T08:30:00.000Z",
-  },
-  {
-    id: "welcome-2",
-    channelId: "welcome",
-    authorId: "alex",
-    authorName: "Alex",
-    authorColor: "#36c5f0",
-    content: "Это локальный UI-прототип. Сообщения пока сохраняются только на вашем компьютере.",
-    createdAt: "2026-07-22T08:34:00.000Z",
-  },
-  {
-    id: "general-1",
-    channelId: "general",
-    authorId: "nova",
-    authorName: "Nova",
-    authorColor: "#f59e0b",
-    content: "Мне нравится, что каждый сможет разместить свой сервер на собственном VPS.",
-    createdAt: "2026-07-22T09:02:00.000Z",
-  },
-];
-
 export function createDefaultState(): PersistedClientState {
   return {
     version: STATE_VERSION,
     onboardingComplete: false,
     profile: null,
-    servers: [structuredClone(demoServer)],
-    messages: structuredClone(demoMessages),
-    activeServerId: demoServer.id,
-    activeChannelId: "welcome",
+    servers: [],
+    messages: [],
+    activeServerId: null,
+    activeChannelId: null,
     preferences: { compactMode: false, showMemberList: true, notifications: true },
   };
 }
 
 export function parsePersistedState(input: unknown): PersistedClientState {
-  return persistedClientStateSchema.parse(input);
+  const current = persistedClientStateSchema.safeParse(input);
+  if (current.success) return current.data;
+  const legacy = persistedClientStateV1Schema.parse(input);
+  const template = legacy.servers.find((server) => server.id === LEGACY_TEMPLATE_SERVER_ID);
+  const removedChannelIds = new Set(template?.channels.map((channel) => channel.id) ?? []);
+  const servers = legacy.servers.filter((server) => server.id !== LEGACY_TEMPLATE_SERVER_ID);
+  const activeServerId = legacy.activeServerId === LEGACY_TEMPLATE_SERVER_ID ? servers[0]?.id ?? null : legacy.activeServerId;
+  const activeServer = servers.find((server) => server.id === activeServerId);
+  const activeChannelId = activeServerId === legacy.activeServerId && activeServer?.channels.some((channel) => channel.id === legacy.activeChannelId)
+    ? legacy.activeChannelId
+    : activeServer?.channels.find((channel) => channel.kind === "text")?.id ?? null;
+  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId });
 }
 
 export function safePersistedState(input: unknown): PersistedClientState {
-  const parsed = persistedClientStateSchema.safeParse(input);
-  return parsed.success ? parsed.data : createDefaultState();
+  try { return parsePersistedState(input); } catch { return createDefaultState(); }
 }

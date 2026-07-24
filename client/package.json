@@ -17,16 +17,17 @@
     "test:electron": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm build && playwright test"
   },
   "dependencies": {
+    "@opencord/shared": "workspace:*",
     "@radix-ui/react-dialog": "latest",
     "@radix-ui/react-switch": "latest",
     "@radix-ui/react-tooltip": "latest",
-    "@opencord/shared": "workspace:*",
     "class-variance-authority": "latest",
     "clsx": "latest",
     "lucide-react": "latest",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "ssh2": "1.17.0",
     "tailwind-merge": "latest",
     "zod": "latest"
   },
@@ -39,6 +40,7 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/ssh2": "1.15.5",
     "@vitejs/plugin-react": "latest",
     "electron": "latest",
     "electron-builder": "latest",
@@ -62,11 +64,40 @@
       "out/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "deployment-bundle",
+        "filter": [
+          ".dockerignore",
+          "package.json",
+          "pnpm-lock.yaml",
+          "pnpm-workspace.yaml",
+          "tsconfig.base.json",
+          "deploy/Dockerfile",
+          "deploy/compose.yml",
+          "deploy/compose.insecure.yml",
+          "deploy/Caddyfile",
+          "deploy/.env.example",
+          "deploy/scripts/install-ubuntu.sh",
+          "deploy/scripts/install-native-ubuntu.sh",
+          "deploy/management/**/*",
+          "server/package.json",
+          "server/tsconfig.json",
+          "server/src/**/*",
+          "shared/package.json",
+          "shared/tsconfig.json",
+          "shared/src/**/*"
+        ]
+      }
+    ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "OpenCord-Setup-${version}-${arch}.${ext}"

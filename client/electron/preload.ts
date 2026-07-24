@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC, type OpenCordBridge } from "../src/shared/bridge";
 import { parsePersistedState } from "../src/shared/state";
+import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
 
 const bridge: OpenCordBridge = {
   window: {
@@ -23,6 +24,22 @@ const bridge: OpenCordBridge = {
     getOrCreate: () => ipcRenderer.invoke(IPC.identityGetOrCreate) as Promise<{ publicKey: string; fingerprint: string }>,
     signChallenge: (challenge) => ipcRenderer.invoke(IPC.identitySignChallenge, challenge) as Promise<string>,
     reset: () => ipcRenderer.invoke(IPC.identityReset) as Promise<{ publicKey: string; fingerprint: string }>,
+  },
+  deployment: {
+    selectPrivateKey: async () => {
+      const result: unknown = await ipcRenderer.invoke(IPC.deploymentSelectKey);
+      return result === null ? null : selectedSshKeySchema.parse(result);
+    },
+    releasePrivateKey: (credentialId) => ipcRenderer.invoke(IPC.deploymentReleaseKey, credentialId) as Promise<void>,
+    inspectHost: async (target) => sshHostIdentitySchema.parse(await ipcRenderer.invoke(IPC.deploymentInspectHost, sshTargetSchema.parse(target))),
+    inspectEnvironment: async (connection) => deploymentEnvironmentSchema.parse(await ipcRenderer.invoke(IPC.deploymentInspectEnvironment, deploymentConnectionSchema.parse(connection))),
+    start: async (request) => deploymentStartResultSchema.parse(await ipcRenderer.invoke(IPC.deploymentStart, deploymentRequestSchema.parse(request))),
+    cancel: (operationId) => ipcRenderer.invoke(IPC.deploymentCancel, operationId) as Promise<void>,
+    onProgress: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(deploymentProgressSchema.parse(value));
+      ipcRenderer.on(IPC.deploymentProgress, handler);
+      return () => ipcRenderer.removeListener(IPC.deploymentProgress, handler);
+    },
   },
 };
 

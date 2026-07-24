@@ -1,4 +1,4 @@
-# OpenCord Protocol v1
+# OpenCord Protocol v4
 
 ## Транспорт
 
@@ -21,18 +21,26 @@ Challenge одноразовый в рамках соединения. Прив�
 - `auth.respond`;
 - `history.request`;
 - `chat.send`;
+- `channel.create`;
+- `channel.update`;
+- `channel.delete`;
+- `member.role.set`;
+- `server.delete`;
 - `ping`.
 
 Сервер отправляет:
 
 - `auth.challenge`, `auth.ok`;
 - `server.snapshot`;
+- `server.deleted`;
 - `history.result`;
 - `message.created`;
 - `member.updated`;
 - `pong`, `error`.
 
-Точные поля и ограничения определяются схемами `shared/src/protocol.ts`. Несовместимые изменения требуют увеличения `PROTOCOL_VERSION`.
+`channel.create`, `channel.update` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`.
+
+`server.delete` доступен только владельцу. Сервер сохраняет tombstone и отправляет `server.deleted` всем активным клиентам; клиент, который был офлайн, получит то же событие после следующей аутентификации. Точные поля и ограничения определяются схемами `shared/src/protocol.ts`. Несовместимые изменения требуют увеличения `PROTOCOL_VERSION`.
 
 ## Хранение
 

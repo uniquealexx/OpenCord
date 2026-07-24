@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+MANAGEMENT_ROOT="/home/opencord"
+SETTINGS_FILE="${MANAGEMENT_ROOT}/settings/server.env"
+
+if [[ ! -r "${SETTINGS_FILE}" ]]; then
+  printf 'OpenCord settings are missing: %s\n' "${SETTINGS_FILE}" >&2
+  exit 1
+fi
+
+# This file is installed as root:opencord 0640 and contains paths and public
+# deployment settings only. Secrets are never sourced from the management home.
+source "${SETTINGS_FILE}"
+
+if [[ "${INSTALL_ROOT:-}" != "/opt/opencord" || "${MANAGEMENT_ROOT}" != "/home/opencord" ]]; then
+  printf 'Refusing to operate on an unexpected OpenCord path.\n' >&2
+  exit 1
+fi
+if [[ "${INSTALL_MODE:-}" != "docker" && "${INSTALL_MODE:-}" != "native" ]]; then
+  printf 'Unknown OpenCord installation mode.\n' >&2
+  exit 1
+fi
+
+command_name="${1:-}"
+invoked_as="$(basename -- "$0")"
+if [[ -z "${command_name}" && "${invoked_as}" == *.sh ]]; then
+  command_name="${invoked_as%.sh}"
+elif [[ "${invoked_as}" == *.sh ]]; then
+  command_name="${invoked_as%.sh}"
+else
+  shift || true
+fi
+
+usage() {
+  cat <<'USAGE'
+Использование: sudo opencordctl <команда>
+
+Команды:
+  status                 состояние OpenCord и его зависимостей
+  logs [строки]          последние логи сервера (по умолчанию 200)
+  start|stop|restart     управление сервером
+  settings               публичные настройки и расположение данных
+  backup                 резервная копия базы PostgreSQL
+  clear-messages DELETE-ALL-MESSAGES
+                         удалить всю историю сообщений после создания backup
+  update                 инструкция по безопасному обновлению
+  uninstall              отключить OpenCord, сохранив приложение и данные
+  uninstall --purge-data DELETE-OPENCORD-DATA
+                         полностью удалить OpenCord и его данные
+USAGE
+}
+
+require_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    printf 'Эта команда должна запускаться через sudo.\n' >&2
+    exit 1
+  fi
+}
+
+compose() {
+  local files=(--file "${INSTALL_ROOT}/deploy/compose.yml")
+  if [[ "${INSECURE_MODE:-false}" == "true" ]]; then
+    files+=(--file "${INSTALL_ROOT}/deploy/compose.insecure.yml")
+  fi
+  docker compose --project-directory "${INSTALL_ROOT}" --env-file "${INSTALL_ROOT}/deploy/.env" "${files[@]}" "$@"
+}
+
+service_action() {
+  local action="$1"
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    case "${action}" in
+      start) compose up --detach --remove-orphans ;;
+      stop) compose stop ;;
+      restart) compose restart server ;;
+    esac
+  else
+    systemctl "${action}" opencord-server
+  fi
+}
+
+show_status() {
+  printf 'Режим установки: %s\n' "${INSTALL_MODE}"
+  printf 'Адрес сервера: %s\n' "${PUBLIC_ENDPOINT:-не задан}"
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose ps
+  else
+    systemctl status opencord-server --no-pager
+    printf '\nPostgreSQL:\n'
+    systemctl is-active postgresql
+    if [[ "${INSECURE_MODE:-false}" != "true" ]]; then
+      printf 'Caddy: '
+      systemctl is-active caddy
+    fi
+  fi
+}
+
+show_logs() {
+  local lines="${1:-200}"
+  if [[ ! "${lines}" =~ ^[0-9]+$ || "${lines}" -lt 1 || "${lines}" -gt 5000 ]]; then
+    printf 'Количество строк должно быть числом от 1 до 5000.\n' >&2
+    exit 1
+  fi
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose logs --tail "${lines}" server
+  else
+    journalctl -u opencord-server -n "${lines}" --no-pager
+  fi
+}
+
+show_settings() {
+  cat <<SETTINGS
+Режим:                 ${INSTALL_MODE}
+Публичный адрес:       ${PUBLIC_ENDPOINT:-не задан}
+Приложение:            /opt/opencord
+Управление:            /home/opencord
+Резервные копии:       /home/opencord/backups
+Публичные настройки:   /home/opencord/settings/server.env
+SETTINGS
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    cat <<'SETTINGS'
+Секреты:               /opt/opencord/deploy/secrets (только root)
+База:                  Docker volume opencord_postgres_data
+Compose:               /opt/opencord/deploy/compose.yml
+SETTINGS
+  else
+    cat <<'SETTINGS'
+Секреты:               /etc/opencord (только root/opencord)
+База:                  системный PostgreSQL, база opencord
+Служба:                /etc/systemd/system/opencord-server.service
+SETTINGS
+  fi
+  printf '\nИзменение сетевого режима или домена выполняется повторным развёртыванием из OpenCord Client.\n'
+}
+
+create_backup() {
+  local timestamp backup_path temporary_path
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  backup_path="${MANAGEMENT_ROOT}/backups/opencord-${timestamp}-$$.dump"
+  temporary_path="${backup_path}.tmp"
+  install -d -m 0750 -o root -g opencord "${MANAGEMENT_ROOT}/backups"
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if ! compose exec -T database pg_dump --username opencord --format=custom opencord > "${temporary_path}"; then
+      rm -f -- "${temporary_path}"
+      printf 'Не удалось создать резервную копию PostgreSQL.\n' >&2
+      return 1
+    fi
+  else
+    if ! runuser -u postgres -- pg_dump --format=custom opencord > "${temporary_path}"; then
+      rm -f -- "${temporary_path}"
+      printf 'Не удалось создать резервную копию PostgreSQL.\n' >&2
+      return 1
+    fi
+  fi
+  mv -- "${temporary_path}" "${backup_path}"
+  chmod 0640 "${backup_path}"
+  chown root:opencord "${backup_path}"
+  printf 'Резервная копия создана: %s\n' "${backup_path}"
+}
+
+clear_messages() {
+  local confirmation="${1:-}" was_running="false" deleted_count
+  if [[ "${confirmation}" != "DELETE-ALL-MESSAGES" || $# -ne 1 ]]; then
+    printf 'Для удаления всей истории добавьте точную фразу: clear-messages DELETE-ALL-MESSAGES\n' >&2
+    return 1
+  fi
+
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if [[ -n "$(compose ps --status running --quiet server)" ]]; then
+      was_running="true"
+      compose stop server
+    fi
+  elif systemctl is-active --quiet opencord-server; then
+    was_running="true"
+    systemctl stop opencord-server
+  fi
+
+  restart_after_clear() {
+    if [[ "${was_running}" != "true" ]]; then return 0; fi
+    if [[ "${INSTALL_MODE}" == "docker" ]]; then
+      compose up --detach server
+    else
+      systemctl start opencord-server
+    fi
+  }
+
+  if ! create_backup; then
+    restart_after_clear || true
+    printf 'История не удалена: не удалось создать обязательную резервную копию.\n' >&2
+    return 1
+  fi
+
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if ! deleted_count="$(compose exec -T database psql --username opencord --dbname opencord --set ON_ERROR_STOP=1 --tuples-only --no-align --command 'WITH deleted AS (DELETE FROM messages RETURNING 1) SELECT count(*) FROM deleted;')"; then
+      restart_after_clear || true
+      printf 'Не удалось очистить историю сообщений.\n' >&2
+      return 1
+    fi
+  else
+    if ! deleted_count="$(runuser -u postgres -- psql --dbname opencord --set ON_ERROR_STOP=1 --tuples-only --no-align --command 'WITH deleted AS (DELETE FROM messages RETURNING 1) SELECT count(*) FROM deleted;')"; then
+      restart_after_clear || true
+      printf 'Не удалось очистить историю сообщений.\n' >&2
+      return 1
+    fi
+  fi
+
+  if ! restart_after_clear; then
+    printf 'Сообщения удалены, но OpenCord Server не удалось запустить. Проверьте sudo opencordctl status и logs.\n' >&2
+    return 1
+  fi
+  if [[ ! "${deleted_count}" =~ ^[0-9]+$ ]]; then deleted_count="неизвестно"; fi
+  printf 'История сообщений очищена. Удалено сообщений: %s.\n' "${deleted_count}"
+}
+
+disable_installation() {
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose down --remove-orphans
+  else
+    systemctl disable --now opencord-server || true
+    rm -f -- /etc/systemd/system/opencord-server.service
+    systemctl daemon-reload
+    if [[ -f /etc/caddy/Caddyfile ]] && grep -q '^# Managed by OpenCord$' /etc/caddy/Caddyfile; then
+      systemctl stop caddy || true
+      mv -- /etc/caddy/Caddyfile /etc/caddy/Caddyfile.opencord-disabled
+    fi
+  fi
+  touch "${MANAGEMENT_ROOT}/.uninstalled"
+  printf 'OpenCord остановлен и отключён. Приложение, настройки, база и резервные копии сохранены.\n'
+  printf 'Для повторной установки запустите развёртывание из OpenCord Client.\n'
+}
+
+purge_installation() {
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose down --volumes --remove-orphans
+  else
+    systemctl disable --now opencord-server || true
+    rm -f -- /etc/systemd/system/opencord-server.service
+    systemctl daemon-reload
+    runuser -u postgres -- dropdb --if-exists opencord
+    runuser -u postgres -- dropuser --if-exists opencord
+    if [[ -f /etc/caddy/Caddyfile ]] && grep -q '^# Managed by OpenCord$' /etc/caddy/Caddyfile; then
+      systemctl stop caddy || true
+      rm -f -- /etc/caddy/Caddyfile
+    fi
+    rm -rf -- /etc/opencord
+  fi
+  rm -rf -- /opt/opencord
+  if [[ -L /usr/local/bin/opencordctl && "$(readlink /usr/local/bin/opencordctl)" == "/home/opencord/opencordctl" ]]; then
+    rm -f -- /usr/local/bin/opencordctl
+  fi
+  rm -rf -- /home/opencord
+  userdel opencord >/dev/null 2>&1 || true
+  groupdel opencord >/dev/null 2>&1 || true
+  printf 'OpenCord, его база, настройки и локальные резервные копии удалены.\n'
+}
+
+require_root
+case "${command_name}" in
+  status) show_status ;;
+  logs) show_logs "${1:-200}" ;;
+  start|stop|restart) service_action "${command_name}" ;;
+  settings) show_settings ;;
+  backup) create_backup ;;
+  clear-messages) clear_messages "$@" ;;
+  update)
+    printf 'Обновление выполняется повторным SSH-развёртыванием из актуального OpenCord Client.\n'
+    printf 'Установщик сохранит базу и переключит сервер на новую версию после healthcheck.\n'
+    ;;
+  uninstall)
+    if [[ "${1:-}" == "--purge-data" ]]; then
+      if [[ "${2:-}" != "DELETE-OPENCORD-DATA" ]]; then
+        printf 'Для полного удаления добавьте точную фразу: --purge-data DELETE-OPENCORD-DATA\n' >&2
+        exit 1
+      fi
+      purge_installation
+    elif [[ $# -eq 0 ]]; then
+      disable_installation
+    else
+      usage
+      exit 1
+    fi
+    ;;
+  help|-h|--help|"") usage ;;
+  *) usage; exit 1 ;;
+esac

@@ -12,6 +12,10 @@ describe("production deployment", () => {
     expect(compose).toContain("internal: true");
     expect(compose).toContain("condition: service_healthy");
     expect(compose).toContain("POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password");
+    expect(compose).toContain("BOOTSTRAP_OWNER_PUBLIC_KEY_FILE: /run/secrets/owner_public_key");
+    expect(compose).toContain("SERVER_NAME_FILE: /run/secrets/server_name");
+    expect(compose).toContain("DEPLOYMENT_ID_FILE: /run/secrets/deployment_id");
+    expect(compose).toContain("owner_public_key:");
     expect(compose).not.toMatch(/5432:5432/);
   });
 
@@ -27,7 +31,65 @@ describe("production deployment", () => {
     expect(installer).toContain("umask 077");
     expect(installer).toContain('if [[ ! -s "${SECRETS_DIR}/postgres_password" ]]');
     expect(installer).toContain("compose up --detach --remove-orphans");
+    expect(installer).toContain("compose up --detach --force-recreate --no-deps server");
     expect(installer).not.toMatch(/curl[^\n]*\|[^\n]*(?:ba)?sh/);
     expect(installer).not.toMatch(/down[^\n]*(?:--volumes|-v)/);
+    expect(installer).toContain("--insecure");
+    expect(installer).toContain("--owner-public-key");
+    expect(installer).toContain("--server-name");
+    expect(installer).toContain('cat /proc/sys/kernel/random/uuid > "${SECRETS_DIR}/deployment_id"');
+    expect(installer).toContain('if [[ ! -s "${SECRETS_DIR}/owner_public_key" ]]');
+    expect(installer).toContain("chown 10001:10001");
+    expect(installer).toContain("chmod 0400");
+    expect(installer).toContain("install-management-home");
+    expect(installer).toContain("deploy/management");
+  });
+
+  it("publishes only the application port in explicit insecure mode", async () => {
+    const override = await readFile(path.join(repositoryRoot, "deploy", "compose.insecure.yml"), "utf8");
+    expect(override).toContain('"3210:3210"');
+    expect(override).not.toMatch(/(?:80|443):(?:80|443)/);
+  });
+
+  it("builds versioned native releases with a systemd rollback path", async () => {
+    const installer = await readFile(path.join(repositoryRoot, "deploy", "scripts", "install-native-ubuntu.sh"), "utf8");
+    expect(installer).toContain('NODE_VERSION="24.18.0"');
+    expect(installer).toContain("sha256sum --check --strict");
+    expect(installer).toContain("ProtectSystem=strict");
+    expect(installer).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK");
+    expect(installer).toContain('release_dir="${INSTALL_ROOT}/releases/${release_id}"');
+    expect(installer).toContain('readlink -e "${INSTALL_ROOT}/current"');
+    expect(installer).toContain("rollback_release");
+    expect(installer).toContain("systemctl enable --now postgresql");
+    expect(installer).toContain("--insecure");
+    expect(installer).toContain("--owner-public-key");
+    expect(installer).toContain("--server-name");
+    expect(installer).toContain("Environment=SERVER_NAME_FILE=/etc/opencord/server_name");
+    expect(installer).toContain("Environment=DEPLOYMENT_ID_FILE=/etc/opencord/deployment_id");
+    expect(installer).toContain('if [[ ! -s "${CONFIG_ROOT}/owner_public_key" ]]');
+    expect(installer).toContain("install-management-home");
+    expect(installer).toContain("# Managed by OpenCord");
+    expect(installer).toContain('bind_host="0.0.0.0"');
+    expect(installer).not.toMatch(/curl[^\n]*\|[^\n]*(?:ba)?sh/);
+    expect(installer).not.toMatch(/dropdb|DROP DATABASE|purge[^\n]*postgresql/i);
+  });
+
+  it("installs a protected management home with explicit data-preserving removal", async () => {
+    const controller = await readFile(path.join(repositoryRoot, "deploy", "management", "opencordctl"), "utf8");
+    const installer = await readFile(path.join(repositoryRoot, "deploy", "management", "install-management-home"), "utf8");
+    expect(controller).toContain('MANAGEMENT_ROOT="/home/opencord"');
+    expect(controller).toContain("compose down --remove-orphans");
+    expect(controller).toContain("compose down --volumes --remove-orphans");
+    expect(controller).toContain("DELETE-OPENCORD-DATA");
+    expect(controller).toContain("pg_dump --format=custom");
+    expect(controller).toContain("clear-messages DELETE-ALL-MESSAGES");
+    expect(controller).toContain("DELETE FROM messages RETURNING 1");
+    expect(controller).toContain("История не удалена: не удалось создать обязательную резервную копию");
+    expect(installer).toContain('chmod 0640 "${MANAGEMENT_ROOT}/settings/server.env"');
+    expect(installer).toContain('ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl');
+    expect(installer).toContain("backup clear-messages update");
+    expect(installer).toContain("OpenCord management assets are incomplete");
+    expect(installer).not.toContain("usermod");
+    expect(installer).not.toContain("database_password");
   });
 });

@@ -1,0 +1,8 @@
+name: opencord-local
+
+services:
+  server:
+    environment:
+      ALLOW_INSECURE_FIRST_USER_OWNER: "true"
+    ports:
+      - "127.0.0.1:3210:3210"

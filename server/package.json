@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "files": ["dist"],
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "cross-env ALLOW_INSECURE_FIRST_USER_OWNER=true tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsup src/index.ts --format esm --clean",
     "lint": "eslint src tests",
@@ -27,6 +27,7 @@
     "@types/node": "latest",
     "@types/pg": "latest",
     "@types/ws": "latest",
+    "cross-env": "latest",
     "eslint": "^9.39.0",
     "tsx": "latest",
     "tsup": "latest",

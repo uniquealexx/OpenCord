@@ -1,12 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { PROTOCOL_VERSION, clientEventSchema, type ClientEvent, type ServerEvent } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, type ClientEvent, type Permission, type ServerEvent } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
 import { runMigrations } from "./database/migrations";
-import { ChatRepository } from "./database/repository";
+import { ChatRepository, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 
 interface ConnectionState {
@@ -20,11 +20,16 @@ interface ConnectionState {
 export interface BuildAppOptions {
   database: Database;
   logger?: boolean | object;
+  bootstrapOwnerPublicKey?: string;
+  allowInsecureFirstUserOwner?: boolean;
+  serverName?: string;
+  deploymentId?: string;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   await runMigrations(options.database);
   const repository = new ChatRepository(options.database);
+  if (options.serverName && options.deploymentId) await repository.configureServer(options.serverName, options.deploymentId);
   const connections = new Set<ConnectionState>();
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 2_100_000 });
 
@@ -81,6 +86,40 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content);
       broadcast({ type: "message.created", message });
+      return;
+    }
+    if (event.type === "channel.create") {
+      if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для создания каналов");
+      await repository.createChannel(randomUUID(), event.name, event.kind, event.description);
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "channel.update") {
+      if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения каналов");
+      if (!(await repository.updateChannel(event.channelId, event.name, event.description))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "channel.delete") {
+      if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для удаления каналов");
+      if (!(await repository.deleteChannel(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "member.role.set") {
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может управлять администраторами");
+      const result = await repository.setMemberRole(event.userId, event.role);
+      if (result === "not_found") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден");
+      if (result === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Роль владельца нельзя изменить этой командой");
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "server.delete") {
+      if (!(await hasPermission(connection.userId, "DELETE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может удалить сервер для всех участников");
+      await repository.markServerDeleted();
+      const server = await repository.getServer();
+      broadcast({ type: "server.deleted", serverId: server.id });
+      for (const activeConnection of connections) activeConnection.socket.close(4001, "Server deleted");
     }
   }
 
@@ -90,12 +129,37 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return sendError(connection.socket, event.requestId, "AUTH_FAILED", "Не удалось подтвердить владение ключом");
     }
     const userId = userIdFromPublicKey(event.publicKey);
+    if (await repository.isServerDeleted()) {
+      const server = await repository.getServer();
+      send(connection.socket, { type: "server.deleted", serverId: server.id });
+      connection.socket.close(4001, "Server deleted");
+      return;
+    }
     await repository.upsertUser(userId, event.publicKey, event.profile);
+    await repository.ensureMembership(userId, event.publicKey, options.bootstrapOwnerPublicKey, options.allowInsecureFirstUserOwner === true);
     connection.userId = userId;
     const server = await repository.getServer();
     send(connection.socket, { type: "auth.ok", requestId: event.requestId, userId, serverId: server.id });
-    send(connection.socket, { type: "server.snapshot", server: { ...server, members: await repository.listMembers(onlineUserIds()) } });
+    await sendSnapshot(connection);
     await broadcastMember(userId, true);
+  }
+
+  async function hasPermission(userId: string, permission: Permission): Promise<boolean> {
+    return permissionsForRole(await repository.getMemberRole(userId)).includes(permission);
+  }
+
+  async function sendSnapshot(connection: ConnectionState): Promise<void> {
+    if (!connection.userId || connection.socket.readyState !== connection.socket.OPEN) return;
+    const server = await repository.getServer();
+    const role = await repository.getMemberRole(connection.userId);
+    send(connection.socket, {
+      type: "server.snapshot",
+      server: { ...server, members: await repository.listMembers(onlineUserIds()), currentUser: { id: connection.userId, role, permissions: permissionsForRole(role) } },
+    });
+  }
+
+  async function broadcastSnapshots(): Promise<void> {
+    await Promise.all([...connections].map((connection) => sendSnapshot(connection)));
   }
 
   function onlineUserIds(): Set<string> {

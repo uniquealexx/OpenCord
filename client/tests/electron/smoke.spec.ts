@@ -22,7 +22,7 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
     bridgeKeys: Object.keys(window.openCord ?? {}).sort(),
     hasNodeRequire: "require" in window,
   }));
-  expect(surface).toEqual({ hasBridge: true, bridgeKeys: ["identity", "storage", "window"], hasNodeRequire: false });
+  expect(surface).toEqual({ hasBridge: true, bridgeKeys: ["deployment", "identity", "storage", "window"], hasNodeRequire: false });
 
   const onboardingName = page.getByPlaceholder("Отображаемое имя");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);
@@ -34,7 +34,7 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   await page.screenshot({ path: "test-results/onboarding.png" });
   await onboardingName.fill("Лина");
   await page.getByRole("button", { name: "Создать локальный профиль" }).click();
-  await expect(page.getByText("Открытое пространство")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Главный экран" })).toBeVisible();
   await page.getByTitle("Подключиться").click();
   await page.getByLabel("HTTPS-адрес сервера").fill(`http://127.0.0.1:${port}`);
   await page.getByRole("button", { name: "Подключиться к серверу" }).click();

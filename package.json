@@ -11,10 +11,13 @@
     "dev": "pnpm --filter @opencord/shared build && pnpm --parallel --filter @opencord/server --filter @opencord/client dev",
     "dev:client": "pnpm --filter @opencord/client dev",
     "dev:server": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server dev",
+    "docker:up": "node deploy/scripts/local-compose.mjs up",
+    "docker:down": "node deploy/scripts/local-compose.mjs down",
+    "docker:logs": "node deploy/scripts/local-compose.mjs logs",
     "build": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm --filter @opencord/client build",
     "package:win": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --workspace-concurrency=1 --if-present test"
   }
 }

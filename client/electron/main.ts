@@ -1,14 +1,19 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { IPC } from "../src/shared/bridge";
+import { selectedSshKeySchema } from "../src/shared/deployment";
 import { parsePersistedState } from "../src/shared/state";
 import { ClientStateStore } from "./storage";
 import { IdentityStore } from "./identity";
+import { DeploymentManager } from "./deployment";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
 let store: ClientStateStore;
 let identityStore: IdentityStore;
+let deploymentManager: DeploymentManager;
+const selectedSshKeys = new Map<string, string>();
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -66,6 +71,26 @@ function registerIpc(): void {
   ipcMain.handle(IPC.identityGetOrCreate, () => identityStore.getOrCreate());
   ipcMain.handle(IPC.identitySignChallenge, (_event, challenge: unknown) => identityStore.signChallenge(challenge));
   ipcMain.handle(IPC.identityReset, () => identityStore.reset());
+  ipcMain.handle(IPC.deploymentSelectKey, async () => {
+    const options: OpenDialogOptions = {
+      title: "Выберите приватный SSH-ключ",
+      properties: ["openFile"],
+      filters: [{ name: "SSH-ключи", extensions: ["pem", "key", "ppk"] }, { name: "Все файлы", extensions: ["*"] }],
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    const keyPath = result.filePaths[0];
+    if (result.canceled || !keyPath) return null;
+    const credentialId = randomUUID();
+    selectedSshKeys.set(credentialId, keyPath);
+    return selectedSshKeySchema.parse({ credentialId, label: path.basename(keyPath) });
+  });
+  ipcMain.handle(IPC.deploymentReleaseKey, (_event, credentialId: unknown) => {
+    if (typeof credentialId === "string") selectedSshKeys.delete(credentialId);
+  });
+  ipcMain.handle(IPC.deploymentInspectHost, (_event, input: unknown) => deploymentManager.inspectHost(input));
+  ipcMain.handle(IPC.deploymentInspectEnvironment, (_event, input: unknown) => deploymentManager.inspectEnvironment(input));
+  ipcMain.handle(IPC.deploymentStart, (_event, input: unknown) => deploymentManager.start(input));
+  ipcMain.handle(IPC.deploymentCancel, (_event, operationId: unknown) => deploymentManager.cancel(operationId));
 }
 
 if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {
@@ -77,6 +102,13 @@ app.setAppUserModelId("org.opencord.desktop");
 void app.whenReady().then(() => {
   store = new ClientStateStore(app.getPath("userData"));
   identityStore = new IdentityStore(app.getPath("userData"));
+  const bundleRoot = app.isPackaged ? path.join(process.resourcesPath, "deployment-bundle") : path.resolve(app.getAppPath(), "..");
+  deploymentManager = new DeploymentManager(bundleRoot, (credentialId) => {
+    const keyPath = selectedSshKeys.get(credentialId);
+    return keyPath;
+  }, (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.deploymentProgress, progress);
+  });
   registerIpc();
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

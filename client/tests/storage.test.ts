@@ -37,8 +37,39 @@ describe("ClientStateStore", () => {
     expect(JSON.parse(await readFile(store.filePath, "utf8"))).toEqual(recovered);
   });
 
+  it("migrates legacy state without treating it as corrupt", async () => {
+    const { directory, store } = await makeStore();
+    const legacy = {
+      version: 1,
+      onboardingComplete: true,
+      profile: null,
+      servers: [{ id: "open-space", name: "Открытое пространство", address: null, accent: "#7c5cff", channels: [], members: [] }],
+      messages: [],
+      activeServerId: "open-space",
+      activeChannelId: null,
+      preferences: { compactMode: false, showMemberList: true, notifications: true },
+    };
+    await writeFile(store.filePath, JSON.stringify(legacy), "utf8");
+    const migrated = await store.load();
+    expect(migrated).toMatchObject({ version: 2, servers: [], activeServerId: null });
+    expect(JSON.parse(await readFile(store.filePath, "utf8"))).toEqual(migrated);
+    expect((await readdir(directory)).some((file) => file.startsWith("client-state.corrupt-"))).toBe(false);
+  });
+
   it("rejects unvalidated writes", async () => {
     const { store } = await makeStore();
     await expect(store.save({ version: 1 })).rejects.toThrow();
+  });
+
+  it("serializes concurrent writes and preserves the latest state", async () => {
+    const { directory, store } = await makeStore();
+    const initial = await store.load();
+    const first = { ...initial, preferences: { ...initial.preferences, compactMode: false } };
+    const latest = { ...initial, preferences: { ...initial.preferences, compactMode: true } };
+
+    await Promise.all([store.save(first), store.save(latest)]);
+
+    await expect(new ClientStateStore(directory).load()).resolves.toEqual(latest);
+    expect((await readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
   });
 });

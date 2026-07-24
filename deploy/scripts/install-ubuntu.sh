@@ -4,19 +4,25 @@ umask 077
 
 INSTALL_ROOT="/opt/opencord"
 INSTALL_DOCKER="true"
+INSECURE_MODE="false"
 OPENCORD_DOMAIN="${OPENCORD_DOMAIN:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
+OWNER_PUBLIC_KEY=""
+SERVER_NAME=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
 usage() {
-  printf 'Usage: sudo bash deploy/scripts/install-ubuntu.sh --domain chat.example.com --email admin@example.com [--install-dir /opt/opencord] [--skip-docker-install]\n'
+  printf 'Usage: sudo bash deploy/scripts/install-ubuntu.sh (--domain chat.example.com --email admin@example.com | --insecure) --owner-public-key BASE64_KEY --server-name NAME [--install-dir /opt/opencord] [--skip-docker-install]\n'
 }
 
 while (($#)); do
   case "$1" in
     --domain) OPENCORD_DOMAIN="${2:-}"; shift 2 ;;
     --email) ACME_EMAIL="${2:-}"; shift 2 ;;
+    --insecure) INSECURE_MODE="true"; shift ;;
+    --owner-public-key) OWNER_PUBLIC_KEY="${2:-}"; shift 2 ;;
+    --server-name) SERVER_NAME="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_ROOT="${2:-}"; shift 2 ;;
     --skip-docker-install) INSTALL_DOCKER="false"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -29,14 +35,25 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ -z "${OPENCORD_DOMAIN}" || ! "${OPENCORD_DOMAIN}" =~ ^[A-Za-z0-9.-]+$ || "${OPENCORD_DOMAIN}" != *.* ]]; then
-  printf 'A valid DNS hostname is required through --domain.\n' >&2
+if [[ ${#OWNER_PUBLIC_KEY} -lt 40 || ${#OWNER_PUBLIC_KEY} -gt 1000 || ! "${OWNER_PUBLIC_KEY}" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+  printf 'A valid OpenCord owner public key is required through --owner-public-key.\n' >&2
+  exit 1
+fi
+if [[ ${#SERVER_NAME} -lt 2 || ${#SERVER_NAME} -gt 48 || "${SERVER_NAME}" == *$'\n'* || "${SERVER_NAME}" == *$'\r'* ]]; then
+  printf 'A server name between 2 and 48 characters is required through --server-name.\n' >&2
   exit 1
 fi
 
-if [[ -z "${ACME_EMAIL}" || "${ACME_EMAIL}" != *@*.* ]]; then
-  printf 'A valid ACME contact email is required through --email.\n' >&2
-  exit 1
+if [[ "${INSECURE_MODE}" != "true" ]]; then
+  if [[ -z "${OPENCORD_DOMAIN}" || ! "${OPENCORD_DOMAIN}" =~ ^[A-Za-z0-9.-]+$ || "${OPENCORD_DOMAIN}" != *.* ]]; then
+    printf 'A valid DNS hostname is required through --domain.\n' >&2
+    exit 1
+  fi
+  email_pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$'
+  if [[ ${#ACME_EMAIL} -gt 254 || ! "${ACME_EMAIL}" =~ ${email_pattern} ]]; then
+    printf 'A valid ACME contact email is required through --email.\n' >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -r /etc/os-release ]]; then
@@ -51,7 +68,7 @@ if [[ "${ID:-}" != "ubuntu" || ! "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]]; then
   exit 1
 fi
 
-for required_file in .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json deploy/Dockerfile deploy/compose.yml deploy/Caddyfile server/package.json shared/package.json; do
+for required_file in .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
   if [[ ! -f "${SOURCE_ROOT}/${required_file}" ]]; then
     printf 'Installation bundle is incomplete: %s is missing.\n' "${required_file}" >&2
     exit 1
@@ -59,8 +76,7 @@ for required_file in .dockerignore package.json pnpm-lock.yaml pnpm-workspace.ya
 done
 
 install_docker_engine() {
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    systemctl enable --now docker
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     return
   fi
   if [[ "${INSTALL_DOCKER}" != "true" ]]; then
@@ -88,8 +104,10 @@ check_initial_ports() {
   if [[ -f "${deploy_environment}" ]] || ! command -v ss >/dev/null 2>&1; then
     return
   fi
-  if ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)(80|443)$'; then
-    printf 'TCP port 80 or 443 is already in use. Stop the conflicting service before installation.\n' >&2
+  local port_pattern='(^|:)(80|443)$'
+  if [[ "${INSECURE_MODE}" == "true" ]]; then port_pattern='(^|:)3210$'; fi
+  if ss -H -ltn | awk '{print $4}' | grep -Eq "${port_pattern}"; then
+    printf 'A required TCP port is already in use. Stop the conflicting service before installation.\n' >&2
     exit 1
   fi
 }
@@ -97,8 +115,11 @@ check_initial_ports() {
 install_docker_engine
 check_initial_ports
 
+if ! getent group opencord >/dev/null; then
+  groupadd --system opencord
+fi
 if ! getent passwd opencord >/dev/null; then
-  useradd --system --home-dir "${INSTALL_ROOT}" --shell /usr/sbin/nologin opencord
+  useradd --system --gid opencord --home-dir /home/opencord --shell /usr/sbin/nologin opencord
 fi
 
 install -d -m 0750 -o root -g opencord "${INSTALL_ROOT}" "${INSTALL_ROOT}/deploy"
@@ -106,7 +127,7 @@ install -d -m 0750 -o root -g opencord "${INSTALL_ROOT}" "${INSTALL_ROOT}/deploy
 tar --create --file - --directory "${SOURCE_ROOT}" \
   --exclude='node_modules' --exclude='dist' --exclude='.data' --exclude='coverage' \
   .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json \
-  server shared deploy/Dockerfile deploy/compose.yml deploy/Caddyfile deploy/.env.example \
+  server shared deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/.env.example deploy/management \
   | tar --extract --file - --directory "${INSTALL_ROOT}"
 
 DEPLOY_DIR="${INSTALL_ROOT}/deploy"
@@ -118,25 +139,61 @@ if [[ ! -s "${SECRETS_DIR}/postgres_password" ]]; then
 fi
 chmod 0600 "${SECRETS_DIR}/postgres_password"
 
+if [[ ! -s "${SECRETS_DIR}/owner_public_key" ]]; then
+  printf '%s\n' "${OWNER_PUBLIC_KEY}" > "${SECRETS_DIR}/owner_public_key"
+fi
+printf '%s\n' "${SERVER_NAME}" > "${SECRETS_DIR}/server_name"
+cat /proc/sys/kernel/random/uuid > "${SECRETS_DIR}/deployment_id"
+
 postgres_password="$(tr -d '\r\n' < "${SECRETS_DIR}/postgres_password")"
 printf 'postgresql://opencord:%s@database:5432/opencord\n' "${postgres_password}" > "${SECRETS_DIR}/database_url"
 unset postgres_password
-chmod 0600 "${SECRETS_DIR}/database_url"
 
-printf 'OPENCORD_DOMAIN=%s\nACME_EMAIL=%s\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n' \
-  "${OPENCORD_DOMAIN}" "${ACME_EMAIL}" > "${DEPLOY_DIR}/.env"
+# Compose file-backed secrets retain the numeric owner and mode of their source
+# files. The application image deliberately runs as UID/GID 10001, so only its
+# secrets are made readable by that identity. PostgreSQL reads its own password
+# during the root-owned entrypoint and keeps a separate root-only source file.
+chown 10001:10001 \
+  "${SECRETS_DIR}/owner_public_key" \
+  "${SECRETS_DIR}/server_name" \
+  "${SECRETS_DIR}/deployment_id" \
+  "${SECRETS_DIR}/database_url"
+chmod 0400 \
+  "${SECRETS_DIR}/owner_public_key" \
+  "${SECRETS_DIR}/server_name" \
+  "${SECRETS_DIR}/deployment_id" \
+  "${SECRETS_DIR}/database_url"
+
+if [[ "${INSECURE_MODE}" == "true" ]]; then
+  printf 'OPENCORD_DOMAIN=localhost\nACME_EMAIL=unused@example.invalid\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n' > "${DEPLOY_DIR}/.env"
+else
+  printf 'OPENCORD_DOMAIN=%s\nACME_EMAIL=%s\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n' \
+    "${OPENCORD_DOMAIN}" "${ACME_EMAIL}" > "${DEPLOY_DIR}/.env"
+fi
 chmod 0600 "${DEPLOY_DIR}/.env"
 
 compose() {
-  docker compose --project-directory "${INSTALL_ROOT}" --env-file "${DEPLOY_DIR}/.env" --file "${DEPLOY_DIR}/compose.yml" "$@"
+  local files=(--file "${DEPLOY_DIR}/compose.yml")
+  if [[ "${INSECURE_MODE}" == "true" ]]; then files+=(--file "${DEPLOY_DIR}/compose.insecure.yml"); fi
+  docker compose --project-directory "${INSTALL_ROOT}" --env-file "${DEPLOY_DIR}/.env" "${files[@]}" "$@"
 }
 
 printf 'Validating the OpenCord Compose configuration...\n'
 compose config --quiet
 printf 'Pulling infrastructure images and building OpenCord Server...\n'
-compose pull database caddy
+if [[ "${INSECURE_MODE}" == "true" ]]; then compose pull database; else compose pull database caddy; fi
 compose build --pull server
-compose up --detach --remove-orphans
+if [[ "${INSECURE_MODE}" == "true" ]]; then
+  compose stop caddy >/dev/null 2>&1 || true
+  compose rm --force caddy >/dev/null 2>&1 || true
+  compose up --detach --remove-orphans database server
+else
+  compose up --detach --remove-orphans
+fi
+# Recreate only the stateless application container so updated file-backed
+# secret ownership and a freshly built image are always applied. Database and
+# Caddy volumes remain intact across an idempotent redeployment.
+compose up --detach --force-recreate --no-deps server
 
 printf 'Waiting for OpenCord Server to become healthy...\n'
 server_container="$(compose ps --quiet server)"
@@ -158,19 +215,28 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
-public_health="pending"
-for _attempt in $(seq 1 30); do
-  if curl --fail --silent --show-error --max-time 10 "https://${OPENCORD_DOMAIN}/health" >/dev/null 2>&1; then
-    public_health="ready"
-    break
-  fi
-  sleep 3
-done
-
 printf '\nOpenCord containers are healthy.\n'
-if [[ "${public_health}" == "ready" ]]; then
-  printf 'Public endpoint: https://%s\nWebSocket endpoint: wss://%s/ws\n' "${OPENCORD_DOMAIN}" "${OPENCORD_DOMAIN}"
+if [[ "${INSECURE_MODE}" == "true" ]]; then
+  printf 'INSECURE endpoint: http://<server-address>:3210\nNo TLS is configured. Do not expose this mode to an untrusted network.\n'
 else
+  public_health="pending"
+  for _attempt in $(seq 1 30); do
+    if curl --fail --silent --show-error --max-time 10 "https://${OPENCORD_DOMAIN}/health" >/dev/null 2>&1; then
+      public_health="ready"
+      break
+    fi
+    sleep 3
+  done
+fi
+if [[ "${INSECURE_MODE}" != "true" && "${public_health:-pending}" == "ready" ]]; then
+  printf 'Public endpoint: https://%s\nWebSocket endpoint: wss://%s/ws\n' "${OPENCORD_DOMAIN}" "${OPENCORD_DOMAIN}"
+elif [[ "${INSECURE_MODE}" != "true" ]]; then
   printf 'TLS endpoint is not reachable yet. Check DNS A/AAAA records and inbound TCP ports 80/443 (plus UDP 443 for HTTP/3), then inspect: docker compose --env-file %s/.env -f %s/compose.yml logs caddy\n' "${DEPLOY_DIR}" "${DEPLOY_DIR}"
 fi
+if [[ "${INSECURE_MODE}" == "true" ]]; then
+  management_endpoint='http://<server-address>:3210'
+else
+  management_endpoint="https://${OPENCORD_DOMAIN}"
+fi
+bash "${DEPLOY_DIR}/management/install-management-home" docker "${INSECURE_MODE}" "${management_endpoint}"
 printf 'Re-running this installer updates the application without deleting the PostgreSQL volume.\n'

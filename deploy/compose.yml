@@ -25,7 +25,7 @@ services:
   server:
     image: opencord-server:${OPENCORD_VERSION:-local}
     build:
-      context: ..
+      context: .
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
     init: true
@@ -34,8 +34,14 @@ services:
       PORT: 3210
       LOG_LEVEL: ${SERVER_LOG_LEVEL:-info}
       DATABASE_URL_FILE: /run/secrets/database_url
+      BOOTSTRAP_OWNER_PUBLIC_KEY_FILE: /run/secrets/owner_public_key
+      SERVER_NAME_FILE: /run/secrets/server_name
+      DEPLOYMENT_ID_FILE: /run/secrets/deployment_id
     secrets:
       - database_url
+      - owner_public_key
+      - server_name
+      - deployment_id
     depends_on:
       database:
         condition: service_healthy
@@ -70,7 +76,7 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -84,9 +90,15 @@ services:
 
 secrets:
   postgres_password:
-    file: ./secrets/postgres_password
+    file: ./deploy/secrets/postgres_password
   database_url:
-    file: ./secrets/database_url
+    file: ./deploy/secrets/database_url
+  owner_public_key:
+    file: ./deploy/secrets/owner_public_key
+  server_name:
+    file: ./deploy/secrets/server_name
+  deployment_id:
+    file: ./deploy/secrets/deployment_id
 
 volumes:
   postgres_data:

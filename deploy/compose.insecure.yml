@@ -1,0 +1,4 @@
+services:
+  server:
+    ports:
+      - "3210:3210"

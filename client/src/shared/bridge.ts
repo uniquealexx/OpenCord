@@ -1,4 +1,5 @@
 import type { PersistedClientState } from "./state";
+import type { DeploymentConnection, DeploymentEnvironment, DeploymentProgress, DeploymentRequest, DeploymentStartResult, SelectedSshKey, SshHostIdentity, SshTarget } from "./deployment";
 
 export const IPC = {
   windowMinimize: "window:minimize",
@@ -12,6 +13,13 @@ export const IPC = {
   identityGetOrCreate: "identity:get-or-create",
   identitySignChallenge: "identity:sign-challenge",
   identityReset: "identity:reset",
+  deploymentSelectKey: "deployment:select-key",
+  deploymentReleaseKey: "deployment:release-key",
+  deploymentInspectHost: "deployment:inspect-host",
+  deploymentInspectEnvironment: "deployment:inspect-environment",
+  deploymentStart: "deployment:start",
+  deploymentCancel: "deployment:cancel",
+  deploymentProgress: "deployment:progress",
 } as const;
 
 export interface PublicIdentity {
@@ -36,5 +44,14 @@ export interface OpenCordBridge {
     getOrCreate(): Promise<PublicIdentity>;
     signChallenge(challenge: string): Promise<string>;
     reset(): Promise<PublicIdentity>;
+  };
+  deployment: {
+    selectPrivateKey(): Promise<SelectedSshKey | null>;
+    releasePrivateKey(credentialId: string): Promise<void>;
+    inspectHost(target: SshTarget): Promise<SshHostIdentity>;
+    inspectEnvironment(connection: DeploymentConnection): Promise<DeploymentEnvironment>;
+    start(request: DeploymentRequest): Promise<DeploymentStartResult>;
+    cancel(operationId: string): Promise<void>;
+    onProgress(listener: (progress: DeploymentProgress) => void): () => void;
   };
 }

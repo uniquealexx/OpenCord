@@ -1,23 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PROTOCOL_VERSION, clientEventSchema, serverEventSchema, type Channel, type ChatMessage, type ClientEvent, type Member } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, serverEventSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type ServerEvent } from "@opencord/shared";
 import type { LocalProfile, MockServer } from "@/shared/state";
 
 export type ConnectionStatus = "demo" | "connecting" | "authenticating" | "connected" | "reconnecting" | "error";
 
+type ServerSnapshot = Extract<ServerEvent, { type: "server.snapshot" }>["server"];
+
 interface ConnectionCallbacks {
-  onSnapshot(server: { id: string; name: string; channels: Channel[]; members: Member[] }): void;
+  onSnapshot(server: ServerSnapshot): void;
   onHistory(channelId: string, messages: ChatMessage[]): void;
   onMessage(message: ChatMessage): void;
   onMember(member: Member): void;
+  onServerDeleted(serverId: string): void;
   onError(message: string): void;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks): { status: ConnectionStatus; sendMessage(channelId: string, content: string): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks): { status: ConnectionStatus; sendMessage(channelId: string, content: string): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string): boolean; deleteChannel(channelId: string): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.displayName}|${profile.avatar ?? ""}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -104,6 +107,11 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           callbacksRef.current.onMessage(event.message);
         } else if (event.type === "member.updated") {
           callbacksRef.current.onMember(event.member);
+        } else if (event.type === "server.deleted") {
+          fatal = true;
+          clearHeartbeat();
+          callbacksRef.current.onServerDeleted(event.serverId);
+          socket.close(1000, "Server deleted");
         } else if (event.type === "error") {
           if (event.code === "AUTH_FAILED" || event.code === "PROTOCOL_MISMATCH") {
             fatal = true;
@@ -142,7 +150,42 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sendMessage };
+  const createChannel = useCallback((name: string, kind: Channel["kind"], description: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "channel.create", requestId: crypto.randomUUID(), name, kind, description });
+    return true;
+  }, [status]);
+
+  const updateChannel = useCallback((channelId: string, name: string, description: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "channel.update", requestId: crypto.randomUUID(), channelId, name, description });
+    return true;
+  }, [status]);
+
+  const deleteChannel = useCallback((channelId: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "channel.delete", requestId: crypto.randomUUID(), channelId });
+    return true;
+  }, [status]);
+
+  const setMemberRole = useCallback((userId: string, role: Exclude<MemberRole, "owner">): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "member.role.set", requestId: crypto.randomUUID(), userId, role });
+    return true;
+  }, [status]);
+
+  const deleteServer = useCallback((): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "server.delete", requestId: crypto.randomUUID() });
+    return true;
+  }, [status]);
+
+  return { status, sendMessage, createChannel, updateChannel, deleteChannel, setMemberRole, deleteServer };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {

@@ -51,6 +51,27 @@ const migrations = [
       ON CONFLICT (id) DO NOTHING;
     `,
   },
+  {
+    id: "003_server_roles",
+    sql: `
+      CREATE TABLE IF NOT EXISTS server_members (
+        server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role text NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'administrator', 'member')),
+        joined_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (server_id, user_id)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS server_single_owner_idx ON server_members(server_id) WHERE role = 'owner';
+      CREATE INDEX IF NOT EXISTS server_members_role_idx ON server_members(server_id, role);
+    `,
+  },
+  {
+    id: "004_server_lifecycle",
+    sql: `
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS deployment_id text NOT NULL DEFAULT 'legacy';
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

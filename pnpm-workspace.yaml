@@ -4,8 +4,10 @@ packages:
   - shared
 
 allowBuilds:
+  cpu-features: false
   electron: true
   electron-winstaller: false
   esbuild: true
   sharp: true
+  ssh2: false
   unrs-resolver: true

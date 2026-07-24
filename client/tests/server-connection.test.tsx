@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { PROTOCOL_VERSION } from "@opencord/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reconnectDelay, useServerConnection, websocketEndpoint } from "@/hooks/use-server-connection";
 import type { LocalProfile, MockServer } from "@/shared/state";
@@ -32,6 +33,7 @@ describe("server connection", () => {
         signChallenge: vi.fn(async () => "s".repeat(64)),
         reset: vi.fn(),
       },
+      deployment: { selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
     };
   });
 
@@ -52,7 +54,7 @@ describe("server connection", () => {
 
   it("authenticates and reconnects after the socket closes", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMember: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
     const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const first = FakeWebSocket.instances[0];
     expect(first?.url).toBe("ws://127.0.0.1:3210/ws");
@@ -61,7 +63,7 @@ describe("server connection", () => {
       first?.receive({
         type: "auth.challenge",
         requestId: "12515573-1ff0-4b9a-9bcf-2ad3fa14323d",
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         challenge: "challenge",
         expiresAt: "2026-07-22T12:00:00.000Z",
       });
@@ -77,11 +79,32 @@ describe("server connection", () => {
     }));
     expect(result.current.status).toBe("connected");
 
+    const channelId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
+    act(() => {
+      expect(result.current.updateChannel(channelId, "анонсы", "Важные новости")).toBe(true);
+      expect(result.current.deleteChannel(channelId)).toBe(true);
+    });
+    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string }) ?? [];
+    expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
+
     act(() => first?.disconnect());
     expect(result.current.status).toBe("reconnecting");
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(result.current.status).toBe("reconnecting");
+    unmount();
+  });
+
+  it("stops reconnecting when the server is deleted", async () => {
+    vi.useFakeTimers();
+    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const { unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket?.receive({ type: "server.deleted", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253" }));
+    expect(callbacks.onServerDeleted).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253");
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(FakeWebSocket.instances).toHaveLength(1);
     unmount();
   });
 });
