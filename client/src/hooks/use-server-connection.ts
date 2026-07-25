@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PROTOCOL_VERSION, clientEventSchema, serverEventSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type ServerEvent } from "@opencord/shared";
 import type { LocalProfile, MockServer } from "@/shared/state";
 
-export type ConnectionStatus = "demo" | "connecting" | "authenticating" | "connected" | "reconnecting" | "error";
+export type ConnectionStatus = "demo" | "connecting" | "authenticating" | "connected" | "reconnecting" | "server-outdated" | "client-outdated" | "error";
 
 type ServerSnapshot = Extract<ServerEvent, { type: "server.snapshot" }>["server"];
 
@@ -12,6 +12,8 @@ interface ConnectionCallbacks {
   onSnapshot(server: ServerSnapshot): void;
   onHistory(channelId: string, messages: ChatMessage[]): void;
   onMessage(message: ChatMessage): void;
+  onMessageUpdated(message: ChatMessage): void;
+  onMessageDeleted(messageId: string, channelId: string): void;
   onMember(member: Member): void;
   onServerDeleted(serverId: string): void;
   onError(message: string): void;
@@ -20,14 +22,16 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks): { status: ConnectionStatus; sendMessage(channelId: string, content: string): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string): boolean; deleteChannel(channelId: string): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean } {
-  const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.displayName}|${profile.avatar ?? ""}` : null;
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string): boolean; deleteMessage(messageId: string): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string): boolean; deleteChannel(channelId: string): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean } {
+  const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.displayName}|${profile.avatar ?? ""}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
+  const [sessionState, setSessionState] = useState<{ key: string; token: string } | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const callbacksRef = useRef(callbacks);
   useEffect(() => { callbacksRef.current = callbacks; }, [callbacks]);
   const status: ConnectionStatus = !connectionKey ? "demo" : !endpoint ? "error" : connectionState.key === connectionKey ? connectionState.status : "connecting";
+  const sessionToken = connectionKey && sessionState?.key === connectionKey ? sessionState.token : null;
 
   useEffect(() => {
     if (!connectionKey || !endpoint || !profile) return;
@@ -74,6 +78,17 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
       socket.addEventListener("message", (messageEvent) => {
         let decoded: unknown;
         try { decoded = JSON.parse(String(messageEvent.data)) as unknown; } catch { return callbacksRef.current.onError("Сервер отправил некорректный JSON"); }
+        const incompatible = protocolCompatibility(decoded);
+        if (incompatible) {
+          fatal = true;
+          clearHeartbeat();
+          setConnectionState({ key: connectionKey, status: incompatible });
+          callbacksRef.current.onError(incompatible === "server-outdated"
+            ? "Версия OpenCord Server устарела. Переразверните сервер через клиент, чтобы обновить его"
+            : "Этот сервер использует более новый протокол. Обновите приложение OpenCord Client");
+          socket.close(4002, "Protocol mismatch");
+          return;
+        }
         const parsed = serverEventSchema.safeParse(decoded);
         if (!parsed.success) return callbacksRef.current.onError("Ответ сервера не соответствует протоколу");
         const event = parsed.data;
@@ -90,6 +105,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           retryCount = 0;
           failureReported = false;
           setConnectionState({ key: connectionKey, status: "connected" });
+          setSessionState({ key: connectionKey, token: event.sessionToken });
           clearHeartbeat();
           heartbeatTimer = setInterval(() => {
             if (socket.readyState === WebSocket.OPEN) sendEvent(socket, { type: "ping", requestId: crypto.randomUUID() });
@@ -105,6 +121,10 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           callbacksRef.current.onHistory(event.channelId, event.messages);
         } else if (event.type === "message.created") {
           callbacksRef.current.onMessage(event.message);
+        } else if (event.type === "message.updated") {
+          callbacksRef.current.onMessageUpdated(event.message);
+        } else if (event.type === "message.deleted") {
+          callbacksRef.current.onMessageDeleted(event.messageId, event.channelId);
         } else if (event.type === "member.updated") {
           callbacksRef.current.onMember(event.member);
         } else if (event.type === "server.deleted") {
@@ -115,10 +135,10 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
         } else if (event.type === "error") {
           if (event.code === "AUTH_FAILED" || event.code === "PROTOCOL_MISMATCH") {
             fatal = true;
-            setConnectionState({ key: connectionKey, status: "error" });
+            setConnectionState({ key: connectionKey, status: event.code === "PROTOCOL_MISMATCH" ? "server-outdated" : "error" });
             socket.close(1000, "Authentication rejected");
           }
-          callbacksRef.current.onError(event.message);
+          callbacksRef.current.onError(event.code === "PROTOCOL_MISMATCH" ? "Версия OpenCord Server несовместима. Сервер необходимо обновить через повторное развёртывание" : event.message);
         }
       });
 
@@ -128,6 +148,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
       });
       socket.addEventListener("close", () => {
         if (socketRef.current === socket) socketRef.current = null;
+        setSessionState((current) => current?.key === connectionKey ? null : current);
         scheduleReconnect();
       });
     };
@@ -143,10 +164,24 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     };
   }, [connectionKey, endpoint, profile]);
 
-  const sendMessage = useCallback((channelId: string, content: string): boolean => {
+  const sendMessage = useCallback((channelId: string, content: string, attachmentIds: string[] = []): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
-    sendEvent(socket, { type: "chat.send", requestId: crypto.randomUUID(), channelId, content });
+    sendEvent(socket, { type: "chat.send", requestId: crypto.randomUUID(), channelId, content, attachmentIds });
+    return true;
+  }, [status]);
+
+  const updateMessage = useCallback((messageId: string, content: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "message.update", requestId: crypto.randomUUID(), messageId, content });
+    return true;
+  }, [status]);
+
+  const deleteMessage = useCallback((messageId: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "message.delete", requestId: crypto.randomUUID(), messageId });
     return true;
   }, [status]);
 
@@ -185,7 +220,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sendMessage, createChannel, updateChannel, deleteChannel, setMemberRole, deleteServer };
+  return { status, sessionToken, sendMessage, updateMessage, deleteMessage, createChannel, updateChannel, deleteChannel, setMemberRole, deleteServer };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {
@@ -221,6 +256,13 @@ export function websocketEndpoint(address: string): string {
 
 export function reconnectDelay(retryCount: number): number {
   return Math.min(1_000 * 2 ** Math.max(0, retryCount), MAX_RECONNECT_DELAY_MS);
+}
+
+export function protocolCompatibility(value: unknown): "server-outdated" | "client-outdated" | null {
+  if (typeof value !== "object" || value === null || !("type" in value) || value.type !== "auth.challenge" || !("protocolVersion" in value) || typeof value.protocolVersion !== "number") return null;
+  if (value.protocolVersion < PROTOCOL_VERSION) return "server-outdated";
+  if (value.protocolVersion > PROTOCOL_VERSION) return "client-outdated";
+  return null;
 }
 
 function safeWebsocketEndpoint(address: string): string | null {

@@ -16,11 +16,13 @@ sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
-sudo opencordctl update
+sudo opencordctl update --bundle-url https://releases.example/opencord-server.tar.gz --sha256 '<SHA256>'
 sudo opencordctl uninstall
 ```
 
-Аналогичные короткие сценарии находятся в `scripts/`. Резервные копии PostgreSQL создаются в `backups/` в custom-формате `pg_dump`.
+Аналогичные короткие сценарии находятся в `scripts/`. Команда `backup` создаёт в `backups/` пару файлов: PostgreSQL в custom-формате `pg_dump` и архив `.attachments.tar` с вложениями. Оба файла нужны для полного восстановления.
+
+Команда `update` принимает release bundle только по HTTPS либо из явно указанного локального файла и требует ожидаемую SHA-256 сумму. После проверки архива она создаёт обязательную резервную копию и запускает идемпотентный установщик текущего режима. PostgreSQL и вложения сохраняются. Пока официальный канал релизов не опубликован, URL и SHA-256 должны браться из конкретной доверенной публикации релиза; команда намеренно не скачивает «latest» из незафиксированного источника.
 
 Команда `clear-messages` останавливает только OpenCord Server, создаёт обязательную резервную копию базы, удаляет всю историю из таблицы сообщений и запускает сервер снова. Каналы, пользователи, роли и настройки не удаляются. Для защиты от случайного запуска требуется точная фраза `DELETE-ALL-MESSAGES`.
 
@@ -30,6 +32,6 @@ sudo opencordctl uninstall
 sudo opencordctl uninstall --purge-data DELETE-OPENCORD-DATA
 ```
 
-Полное удаление уничтожает также локальные резервные копии из `/home/opencord/backups`. Перед его запуском скопируйте нужные `.dump` на другой компьютер или носитель.
+Полное удаление уничтожает также вложения и локальные резервные копии из `/home/opencord/backups`. Перед его запуском скопируйте нужные `.dump` и `.attachments.tar` на другой компьютер или носитель.
 
 Сетевой режим, домен и TLS пока изменяются повторным развёртыванием из OpenCord Client: такой путь повторно проверяет окружение и выполняет healthcheck перед завершением обновления.

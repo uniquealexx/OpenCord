@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ru } from "@/lib/i18n/ru";
-import type { DeploymentConnection, DeploymentEnvironment, DeploymentMode, DeploymentProgress, SelectedSshKey, SshHostIdentity } from "@/shared/deployment";
+import type { DeploymentConnection, DeploymentEnvironment, DeploymentMode, DeploymentProgress, SavedDeploymentConfiguration, SelectedSshKey, SshHostIdentity } from "@/shared/deployment";
 
 type Authentication = "private-key" | "password";
 type Step = "configuration" | "fingerprint" | "environment" | "progress";
@@ -14,18 +14,20 @@ type Step = "configuration" | "fingerprint" | "environment" | "progress";
 interface DeploymentDialogProps {
   open: boolean;
   onOpenChange(open: boolean): void;
-  onDeployed(serverUrl: string, serverName: string): void;
+  onDeployed(serverUrl: string, serverName: string, configuration: SavedDeploymentConfiguration): void;
+  preset?: Partial<SavedDeploymentConfiguration>;
+  updateOnly?: boolean;
 }
 
-export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentDialogProps): React.ReactElement {
+export function DeploymentDialog({ open, onOpenChange, onDeployed, preset, updateOnly = false }: DeploymentDialogProps): React.ReactElement {
   const [step, setStep] = useState<Step>("configuration");
-  const [host, setHost] = useState("");
-  const [serverName, setServerName] = useState("Мой OpenCord Server");
-  const [port, setPort] = useState("22");
-  const [username, setUsername] = useState("root");
-  const [domain, setDomain] = useState("");
-  const [email, setEmail] = useState("");
-  const [authentication, setAuthentication] = useState<Authentication>("private-key");
+  const [host, setHost] = useState(preset?.host ?? "");
+  const [serverName, setServerName] = useState(preset?.serverName ?? "Мой OpenCord Server");
+  const [port, setPort] = useState(String(preset?.port ?? 22));
+  const [username, setUsername] = useState(preset?.username ?? "root");
+  const [domain, setDomain] = useState(preset?.domain ?? "");
+  const [email, setEmail] = useState(preset?.email ?? "");
+  const [authentication, setAuthentication] = useState<Authentication>(preset?.authentication ?? "private-key");
   const [password, setPassword] = useState("");
   const [keyPassphrase, setKeyPassphrase] = useState("");
   const [sudoPassword, setSudoPassword] = useState("");
@@ -39,6 +41,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
   const deployedRef = useRef(false);
   const serverNameRef = useRef(serverName);
   const onDeployedRef = useRef(onDeployed);
+  const deploymentConfigurationRef = useRef<SavedDeploymentConfiguration | null>(null);
   const [progress, setProgress] = useState<DeploymentProgress[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -48,6 +51,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
   const failedByError = finalProgress?.phase === "failed";
   const cancelled = finalProgress?.phase === "cancelled";
   const failed = failedByError || cancelled;
+  const redeployment = environment?.openCordInstalled ?? false;
 
   useEffect(() => {
     serverNameRef.current = serverName;
@@ -63,7 +67,8 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
       if (event.phase === "completed" && event.serverUrl && !deployedRef.current) {
         deployedRef.current = true;
         setPassword(""); setKeyPassphrase(""); setSudoPassword("");
-        onDeployedRef.current(event.serverUrl, serverNameRef.current.trim());
+        const configuration = deploymentConfigurationRef.current;
+        if (configuration) onDeployedRef.current(event.serverUrl, serverNameRef.current.trim(), configuration);
       }
     });
   }, []);
@@ -78,7 +83,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
     if (selectedKey) void window.openCord?.deployment.releasePrivateKey(selectedKey.credentialId);
     setPassword(""); setKeyPassphrase(""); setSudoPassword(""); setSelectedKey(null);
     setIdentity(null); setFingerprintConfirmed(false); setEnvironment(null); setInsecureConfirmed(false); setProgress([]); setError(""); setBusy(false);
-    setStep("configuration"); setOperationId(null); operationIdRef.current = null; deployedRef.current = false;
+    setStep("configuration"); setOperationId(null); operationIdRef.current = null; deploymentConfigurationRef.current = null; deployedRef.current = false;
   }
 
   async function chooseKey(): Promise<void> {
@@ -141,6 +146,10 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
       const ownerIdentity = await window.openCord?.identity.getOrCreate();
       if (!ownerIdentity) throw new Error("Не удалось получить публичный ключ владельца");
       const secureEndpoint = domain.trim() ? { domain: domain.trim(), email: email.trim() } : {};
+      deploymentConfigurationRef.current = {
+        host: host.trim(), port: Number(port), username: username.trim(), serverName: serverName.trim(),
+        ...secureEndpoint, mode, authentication, ...(authentication === "private-key" && selectedKey ? { keyLabel: selectedKey.label } : {}),
+      };
       const result = await bridge.start({ ...connectionPayload(), ...secureEndpoint, ownerPublicKey: ownerIdentity.publicKey, serverName: serverName.trim(), mode });
       operationIdRef.current = result.operationId;
       setOperationId(result.operationId); setStep("progress");
@@ -156,8 +165,8 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
     <DialogContent className="max-w-2xl">
       <DialogHeader>
         <div className="mb-3 grid size-11 place-items-center rounded-2xl bg-violet-500/12 text-violet-300"><ServerCog className="size-5" /></div>
-        <DialogTitle>{ru.deployment.title}</DialogTitle>
-        <DialogDescription>{ru.deployment.description}</DialogDescription>
+        <DialogTitle>{updateOnly ? ru.deployment.updateTitle : redeployment ? ru.deployment.redeploymentTitle : ru.deployment.title}</DialogTitle>
+        <DialogDescription>{updateOnly ? ru.deployment.updateDescription : redeployment ? ru.deployment.redeploymentWarning : ru.deployment.description}</DialogDescription>
       </DialogHeader>
 
       {step === "configuration" && <form onSubmit={(event) => void inspect(event)} className="space-y-4">
@@ -178,7 +187,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
           </div>
         </Field>
         {authentication === "private-key" ? <div className="grid grid-cols-2 gap-3">
-          <Field label={ru.deployment.privateKey}><Button type="button" variant="secondary" aria-label={ru.deployment.chooseKey} onClick={() => void chooseKey()} className="w-full">{selectedKey?.label ?? ru.deployment.chooseKey}</Button></Field>
+          <Field label={ru.deployment.privateKey}><Button type="button" variant="secondary" aria-label={ru.deployment.chooseKey} onClick={() => void chooseKey()} className="w-full">{selectedKey?.label ?? (preset?.keyLabel ? `${preset.keyLabel} — выбрать снова` : ru.deployment.chooseKey)}</Button></Field>
           <Field label={ru.deployment.passphrase}><Input value={keyPassphrase} onChange={(event) => setKeyPassphrase(event.target.value)} type="password" autoComplete="off" /></Field>
         </div> : <Field label={ru.deployment.password}><Input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="off" required /></Field>}
         {username !== "root" && <Field label={ru.deployment.sudoPassword}><Input value={sudoPassword} onChange={(event) => setSudoPassword(event.target.value)} type="password" autoComplete="off" /></Field>}
@@ -207,14 +216,15 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
           <div><div className="mb-1 text-slate-600">Порты</div><div className={environment.occupiedPorts.length ? "text-amber-300" : "text-emerald-300"}>{environment.occupiedPorts.length ? environment.occupiedPorts.join(", ") : "80, 443 и 3210 свободны"}</div></div>
         </section>
         {!environment.supported && <ErrorMessage>{ru.deployment.environmentUnsupported}</ErrorMessage>}
+        {environment.openCordInstalled && <section className="rounded-2xl border border-amber-300/20 bg-amber-300/[.06] p-4 text-xs leading-5 text-amber-100/75"><div className="flex gap-3"><AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-300" /><div><p className="font-semibold text-amber-100">{ru.deployment.redeploymentWarning}</p><p className="mt-2">{ru.deployment.recreateWarning}</p><code className="mt-2 block select-all overflow-x-auto rounded-lg bg-black/30 px-3 py-2 font-mono text-[11px] text-red-200">{ru.deployment.recreateCommand}</code></div></div></section>}
         {environment.occupiedPorts.length > 0 && <p className="flex items-center gap-2 rounded-xl border border-amber-300/15 bg-amber-300/5 p-3 text-xs text-amber-200"><AlertTriangle className="size-4 shrink-0" />{ru.deployment.occupiedPorts}: {environment.occupiedPorts.join(", ")}</p>}
         {!domain.trim() && <section className="space-y-3 rounded-2xl border border-red-400/25 bg-red-400/[.07] p-4"><div className="flex gap-3"><AlertTriangle className="mt-0.5 size-5 shrink-0 text-red-300" /><div><h4 className="text-sm font-semibold text-red-200">{ru.deployment.insecureTitle}</h4><p className="mt-1 text-xs leading-5 text-red-200/65">{ru.deployment.insecureWarning}</p></div></div><label className="flex cursor-pointer items-start gap-3 rounded-xl border border-red-300/15 bg-black/15 p-3 text-xs text-red-100"><input type="checkbox" checked={insecureConfirmed} onChange={(event) => setInsecureConfirmed(event.target.checked)} className="mt-0.5 size-4 accent-red-500" />{ru.deployment.insecureConfirm}</label></section>}
-        <button type="button" disabled={!environment.supported || busy || (!domain.trim() && !insecureConfirmed)} onClick={() => void start("docker")} className="flex w-full items-start gap-3 rounded-2xl border border-violet-400/25 bg-violet-400/8 p-4 text-left transition hover:bg-violet-400/12 disabled:opacity-40">
-          <Container className="mt-0.5 size-5 shrink-0 text-violet-300" /><span><span className="block text-sm font-semibold text-slate-100">{environment.dockerUsable ? ru.deployment.dockerExisting : ru.deployment.dockerInstall}<span className="ml-2 rounded bg-violet-400/15 px-1.5 py-0.5 text-[9px] uppercase text-violet-200">рекомендуется</span></span><span className="mt-1 block text-xs leading-5 text-slate-500">{ru.deployment.dockerHint}</span></span>
-        </button>
-        <button type="button" disabled={!environment.supported || busy || (!domain.trim() && !insecureConfirmed)} onClick={() => void start("native")} className="flex w-full items-start gap-3 rounded-2xl border border-white/10 bg-white/[.025] p-4 text-left transition hover:bg-white/[.05] disabled:opacity-40">
-          <HardDrive className="mt-0.5 size-5 shrink-0 text-cyan-300" /><span><span className="block text-sm font-semibold text-slate-100">{ru.deployment.native}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{ru.deployment.nativeHint}</span></span>
-        </button>
+        {(!updateOnly || !preset?.mode || preset.mode === "docker") && <button type="button" disabled={!environment.supported || busy || (!domain.trim() && !insecureConfirmed)} onClick={() => void start("docker")} className="flex w-full items-start gap-3 rounded-2xl border border-violet-400/25 bg-violet-400/8 p-4 text-left transition hover:bg-violet-400/12 disabled:opacity-40">
+          <Container className="mt-0.5 size-5 shrink-0 text-violet-300" /><span><span className="block text-sm font-semibold text-slate-100">{environment.openCordInstalled ? ru.deployment.dockerRedeploy : environment.dockerUsable ? ru.deployment.dockerExisting : ru.deployment.dockerInstall}<span className="ml-2 rounded bg-violet-400/15 px-1.5 py-0.5 text-[9px] uppercase text-violet-200">рекомендуется</span></span><span className="mt-1 block text-xs leading-5 text-slate-500">{ru.deployment.dockerHint}</span></span>
+        </button>}
+        {(!updateOnly || !preset?.mode || preset.mode === "native") && <button type="button" disabled={!environment.supported || busy || (!domain.trim() && !insecureConfirmed)} onClick={() => void start("native")} className="flex w-full items-start gap-3 rounded-2xl border border-white/10 bg-white/[.025] p-4 text-left transition hover:bg-white/[.05] disabled:opacity-40">
+          <HardDrive className="mt-0.5 size-5 shrink-0 text-cyan-300" /><span><span className="block text-sm font-semibold text-slate-100">{environment.openCordInstalled ? ru.deployment.nativeRedeploy : ru.deployment.native}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{ru.deployment.nativeHint}</span></span>
+        </button>}
         {busy && <p className="flex items-center justify-center gap-2 text-xs text-slate-500"><LoaderCircle className="size-4 animate-spin" />Запуск установки…</p>}
         {error && <ErrorMessage>{error}</ErrorMessage>}
         <Button variant="secondary" onClick={() => setStep("fingerprint")} disabled={busy} className="w-full">Назад</Button>
@@ -225,11 +235,11 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed }: DeploymentD
           {finished
             ? <CheckCircle2 className="size-5 text-emerald-400" />
             : failedByError
-              ? <CircleX role="img" aria-label={ru.deployment.failed} className="size-5 text-red-400" />
+              ? <CircleX role="img" aria-label={redeployment ? ru.deployment.redeploymentFailed : ru.deployment.failed} className="size-5 text-red-400" />
               : cancelled
                 ? <CircleX role="img" aria-label={ru.deployment.cancelled} className="size-5 text-amber-300" />
                 : <LoaderCircle className="size-5 animate-spin text-violet-300" />}
-          <div><div className={`text-sm font-semibold ${failedByError ? "text-red-200" : ""}`}>{finished ? ru.deployment.done : failedByError ? ru.deployment.failed : cancelled ? ru.deployment.cancelled : ru.deployment.progress}</div><div className="text-xs text-slate-500">{domain || `http://${host}:3210`}</div></div>
+          <div><div className={`text-sm font-semibold ${failedByError ? "text-red-200" : ""}`}>{finished ? redeployment ? ru.deployment.redeploymentDone : ru.deployment.done : failedByError ? redeployment ? ru.deployment.redeploymentFailed : ru.deployment.failed : cancelled ? ru.deployment.cancelled : redeployment ? ru.deployment.redeploymentProgress : ru.deployment.progress}</div><div className="text-xs text-slate-500">{domain || `http://${host}:3210`}</div></div>
         </div>
         <div aria-label="Журнал развёртывания" className="scrollbar-thin h-64 overflow-y-auto rounded-xl bg-[#080a10] p-3 font-mono text-[11px] leading-5 text-slate-400">
           {progress.length ? progress.map((item, index) => <div key={`${item.phase}-${index}`} className={item.level === "error" ? "text-red-300" : item.level === "success" ? "text-emerald-300" : ""}>[{item.phase}] {item.message}</div>) : <div>Ожидание запуска операции…</div>}

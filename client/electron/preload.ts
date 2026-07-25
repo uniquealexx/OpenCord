@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { IPC, type OpenCordBridge } from "../src/shared/bridge";
 import { parsePersistedState } from "../src/shared/state";
 import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
+import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
 
 const bridge: OpenCordBridge = {
   window: {
@@ -40,6 +41,11 @@ const bridge: OpenCordBridge = {
       ipcRenderer.on(IPC.deploymentProgress, handler);
       return () => ipcRenderer.removeListener(IPC.deploymentProgress, handler);
     },
+  },
+  attachments: {
+    selectAndUpload: async (context) => attachmentUploadResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentSelectAndUpload, attachmentTransferContextSchema.parse(context))),
+    download: async (request) => (await ipcRenderer.invoke(IPC.attachmentDownload, attachmentDownloadRequestSchema.parse(request))) === true,
+    preview: async (request) => attachmentPreviewResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentPreview, attachmentDownloadRequestSchema.parse(request))),
   },
 };
 

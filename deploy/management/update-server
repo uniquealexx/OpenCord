@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+MANAGEMENT_ROOT="/home/opencord"
+SETTINGS_FILE="${MANAGEMENT_ROOT}/settings/server.env"
+BUNDLE_URL=""
+BUNDLE_FILE=""
+EXPECTED_SHA256=""
+
+usage() {
+  cat <<'USAGE'
+Использование:
+  sudo opencordctl update --bundle-url https://example.com/opencord-server.tar.gz --sha256 HEX
+  sudo opencordctl update --bundle-file /absolute/path/opencord-server.tar.gz --sha256 HEX
+
+Архив должен быть официальным OpenCord Server bundle, а SHA-256 необходимо
+получить из отдельного доверенного источника релиза.
+USAGE
+}
+
+while (($#)); do
+  case "$1" in
+    --bundle-url) BUNDLE_URL="${2:-}"; shift 2 ;;
+    --bundle-file) BUNDLE_FILE="${2:-}"; shift 2 ;;
+    --sha256) EXPECTED_SHA256="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) printf 'Неизвестный параметр обновления: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ "${EUID}" -ne 0 ]]; then
+  printf 'Обновление должно запускаться через sudo.\n' >&2
+  exit 1
+fi
+if [[ ! -r "${SETTINGS_FILE}" ]]; then
+  printf 'Не найдены настройки установленного OpenCord Server.\n' >&2
+  exit 1
+fi
+if [[ -n "${BUNDLE_URL}" && -n "${BUNDLE_FILE}" ]] || [[ -z "${BUNDLE_URL}" && -z "${BUNDLE_FILE}" ]]; then
+  printf 'Укажите ровно один источник: --bundle-url или --bundle-file.\n' >&2
+  exit 2
+fi
+EXPECTED_SHA256="${EXPECTED_SHA256,,}"
+if [[ ! "${EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'Для обновления требуется ожидаемая SHA-256 сумма из 64 hex-символов.\n' >&2
+  exit 2
+fi
+if [[ -n "${BUNDLE_URL}" && ! "${BUNDLE_URL}" =~ ^https://[^[:space:]]+$ ]]; then
+  printf 'Удалённый bundle разрешено загружать только по HTTPS.\n' >&2
+  exit 2
+fi
+
+# shellcheck disable=SC1090
+source "${SETTINGS_FILE}"
+if [[ "${INSTALL_ROOT:-}" != "/opt/opencord" || ("${INSTALL_MODE:-}" != "docker" && "${INSTALL_MODE:-}" != "native") ]]; then
+  printf 'Настройки OpenCord содержат неожиданные пути или режим установки.\n' >&2
+  exit 1
+fi
+
+temporary_root="$(mktemp -d /tmp/opencord-update.XXXXXXXX)"
+cleanup() {
+  if [[ "${temporary_root}" == /tmp/opencord-update.* && -d "${temporary_root}" ]]; then
+    rm -rf -- "${temporary_root}"
+  fi
+}
+trap cleanup EXIT
+archive_path="${temporary_root}/server-bundle.tar.gz"
+source_root="${temporary_root}/bundle"
+
+if [[ -n "${BUNDLE_URL}" ]]; then
+  printf 'Загрузка OpenCord Server bundle по HTTPS...\n'
+  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 600 "${BUNDLE_URL}" --output "${archive_path}"
+else
+  resolved_bundle="$(readlink -f -- "${BUNDLE_FILE}")"
+  if [[ ! -f "${resolved_bundle}" ]]; then
+    printf 'Локальный bundle не найден: %s\n' "${BUNDLE_FILE}" >&2
+    exit 1
+  fi
+  install -m 0600 -- "${resolved_bundle}" "${archive_path}"
+fi
+
+actual_sha256="$(sha256sum -- "${archive_path}" | awk '{print $1}')"
+if [[ "${actual_sha256}" != "${EXPECTED_SHA256}" ]]; then
+  printf 'SHA-256 bundle не совпадает. Ожидалось %s, получено %s.\n' "${EXPECTED_SHA256}" "${actual_sha256}" >&2
+  exit 1
+fi
+if ! tar --list --gzip --file "${archive_path}" >/dev/null; then
+  printf 'Bundle не является корректным tar.gz архивом.\n' >&2
+  exit 1
+fi
+if tar --list --gzip --file "${archive_path}" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+  printf 'Bundle содержит небезопасные пути.\n' >&2
+  exit 1
+fi
+
+install -d -m 0700 "${source_root}"
+tar --extract --gzip --file "${archive_path}" --directory "${source_root}" --no-same-owner --no-same-permissions
+installer_name="install-${INSTALL_MODE}-ubuntu.sh"
+if [[ "${INSTALL_MODE}" == "docker" ]]; then installer_name="install-ubuntu.sh"; fi
+installer="${source_root}/deploy/scripts/${installer_name}"
+for required_file in "${installer}" "${source_root}/deploy/management/opencordctl" "${source_root}/server/package.json" "${source_root}/shared/package.json"; do
+  if [[ ! -f "${required_file}" ]]; then
+    printf 'Bundle обновления неполон: отсутствует %s.\n' "${required_file#${source_root}/}" >&2
+    exit 1
+  fi
+done
+
+if [[ "${INSTALL_MODE}" == "docker" ]]; then
+  owner_key_file="${INSTALL_ROOT}/deploy/secrets/owner_public_key"
+  server_name_file="${INSTALL_ROOT}/deploy/secrets/server_name"
+else
+  owner_key_file="/etc/opencord/owner_public_key"
+  server_name_file="/etc/opencord/server_name"
+fi
+owner_public_key="$(tr -d '\r\n' < "${owner_key_file}")"
+server_name="$(tr -d '\r\n' < "${server_name_file}")"
+
+printf 'Создание обязательной резервной копии перед обновлением...\n'
+"${MANAGEMENT_ROOT}/opencordctl" backup
+
+installer_arguments=(--owner-public-key "${owner_public_key}" --server-name "${server_name}")
+if [[ "${INSECURE_MODE:-false}" == "true" ]]; then
+  installer_arguments=(--insecure "${installer_arguments[@]}")
+else
+  if [[ -z "${OPENCORD_DOMAIN:-}" || -z "${ACME_EMAIL:-}" ]]; then
+    printf 'В настройках отсутствуют домен или ACME email; сначала выполните одно переразвёртывание из клиента.\n' >&2
+    exit 1
+  fi
+  installer_arguments=(--domain "${OPENCORD_DOMAIN}" --email "${ACME_EMAIL}" "${installer_arguments[@]}")
+fi
+
+printf 'Установка проверенного обновления OpenCord Server...\n'
+bash "${installer}" "${installer_arguments[@]}"
+printf 'OpenCord Server успешно обновлён. Данные и резервная копия сохранены.\n'

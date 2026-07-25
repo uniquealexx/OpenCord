@@ -4,6 +4,7 @@ umask 077
 
 INSTALL_ROOT="/opt/opencord"
 CONFIG_ROOT="/etc/opencord"
+DATA_ROOT="/var/lib/opencord"
 NODE_VERSION="24.18.0"
 INSECURE_MODE="false"
 OPENCORD_DOMAIN="${OPENCORD_DOMAIN:-}"
@@ -153,6 +154,7 @@ if ! getent passwd opencord >/dev/null; then
   useradd --system --gid opencord --home-dir /home/opencord --shell /usr/sbin/nologin opencord
 fi
 install -d -m 0750 -o root -g opencord "${INSTALL_ROOT}" "${INSTALL_ROOT}/releases" "${CONFIG_ROOT}"
+install -d -m 0700 -o opencord -g opencord "${DATA_ROOT}" "${DATA_ROOT}/attachments"
 
 if [[ ! -s "${CONFIG_ROOT}/owner_public_key" ]]; then
   printf '%s\n' "${OWNER_PUBLIC_KEY}" > "${CONFIG_ROOT}/owner_public_key"
@@ -218,6 +220,7 @@ Environment=DATABASE_URL_FILE=/etc/opencord/database_url
 Environment=BOOTSTRAP_OWNER_PUBLIC_KEY_FILE=/etc/opencord/owner_public_key
 Environment=SERVER_NAME_FILE=/etc/opencord/server_name
 Environment=DEPLOYMENT_ID_FILE=/etc/opencord/deployment_id
+Environment=ATTACHMENTS_DIR=/var/lib/opencord/attachments
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -229,6 +232,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=true
+ReadWritePaths=/var/lib/opencord/attachments
 
 [Install]
 WantedBy=multi-user.target
@@ -317,7 +321,7 @@ if [[ "${INSECURE_MODE}" == "true" ]]; then
 else
   management_endpoint="https://${OPENCORD_DOMAIN}"
 fi
-bash "${SOURCE_ROOT}/deploy/management/install-management-home" native "${INSECURE_MODE}" "${management_endpoint}"
+bash "${SOURCE_ROOT}/deploy/management/install-management-home" native "${INSECURE_MODE}" "${management_endpoint}" "${OPENCORD_DOMAIN}" "${ACME_EMAIL}"
 printf '\nOpenCord native services are healthy.\n'
 if [[ "${INSECURE_MODE}" == "true" ]]; then
   printf 'INSECURE endpoint: http://<server-address>:3210\nNo TLS is configured. Do not expose this mode to an untrusted network.\n'

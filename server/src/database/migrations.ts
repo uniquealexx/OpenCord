@@ -72,6 +72,41 @@ const migrations = [
       ALTER TABLE servers ADD COLUMN IF NOT EXISTS deployment_id text NOT NULL DEFAULT 'legacy';
     `,
   },
+  {
+    id: "005_message_attachments",
+    sql: `
+      CREATE TABLE IF NOT EXISTS attachments (
+        id uuid PRIMARY KEY,
+        server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        uploader_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        storage_key text NOT NULL UNIQUE,
+        original_name text NOT NULL CHECK (char_length(original_name) BETWEEN 1 AND 255),
+        mime_type text NOT NULL CHECK (char_length(mime_type) BETWEEN 1 AND 100),
+        size_bytes integer NOT NULL CHECK (size_bytes BETWEEN 1 AND 10485760),
+        sha256 text NOT NULL CHECK (sha256 ~ '^[a-f0-9]{64}$'),
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS message_attachments (
+        message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        attachment_id uuid NOT NULL UNIQUE REFERENCES attachments(id) ON DELETE CASCADE,
+        position integer NOT NULL CHECK (position BETWEEN 0 AND 4),
+        PRIMARY KEY (message_id, attachment_id)
+      );
+      CREATE INDEX IF NOT EXISTS attachments_uploader_created_idx ON attachments(uploader_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS message_attachments_message_position_idx ON message_attachments(message_id, position);
+    `,
+  },
+  {
+    id: "006_attachment_only_messages",
+    sql: `
+      ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_content_check;
+      ALTER TABLE messages ADD CONSTRAINT messages_content_check CHECK (char_length(content) BETWEEN 0 AND 4000);
+    `,
+  },
+  {
+    id: "007_message_editing",
+    sql: `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at timestamptz;`,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

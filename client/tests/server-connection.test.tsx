@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { reconnectDelay, useServerConnection, websocketEndpoint } from "@/hooks/use-server-connection";
+import { protocolCompatibility, reconnectDelay, useServerConnection, websocketEndpoint } from "@/hooks/use-server-connection";
 import type { LocalProfile, MockServer } from "@/shared/state";
 
 const profile: LocalProfile = {
@@ -34,6 +34,7 @@ describe("server connection", () => {
         reset: vi.fn(),
       },
       deployment: { selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
     };
   });
 
@@ -52,9 +53,31 @@ describe("server connection", () => {
     expect([0, 1, 2, 3, 4, 10].map(reconnectDelay)).toEqual([1_000, 2_000, 4_000, 8_000, 10_000, 10_000]);
   });
 
+  it("detects whether the server or client protocol is outdated", () => {
+    expect(protocolCompatibility({ type: "auth.challenge", protocolVersion: PROTOCOL_VERSION - 1 })).toBe("server-outdated");
+    expect(protocolCompatibility({ type: "auth.challenge", protocolVersion: PROTOCOL_VERSION + 1 })).toBe("client-outdated");
+    expect(protocolCompatibility({ type: "auth.challenge", protocolVersion: PROTOCOL_VERSION })).toBeNull();
+  });
+
+  it("stops reconnecting and requests an update for an outdated server", async () => {
+    vi.useFakeTimers();
+    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const { result, rerender, unmount } = renderHook(({ reconnectToken }) => useServerConnection(server, profile, callbacks, reconnectToken), { initialProps: { reconnectToken: 0 } });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "old", expiresAt: new Date().toISOString() }));
+    expect(result.current.status).toBe("server-outdated");
+    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining("Переразверните сервер"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    rerender({ reconnectToken: 1 });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(result.current.status).toBe("connecting");
+    unmount();
+  });
+
   it("authenticates and reconnects after the socket closes", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
     const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const first = FakeWebSocket.instances[0];
     expect(first?.url).toBe("ws://127.0.0.1:3210/ws");
@@ -76,17 +99,32 @@ describe("server connection", () => {
       requestId: "12515573-1ff0-4b9a-9bcf-2ad3fa14323d",
       userId: "user-id",
       serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253",
+      sessionToken: "A".repeat(43),
+      sessionExpiresAt: "2026-07-22T13:00:00.000Z",
     }));
     expect(result.current.status).toBe("connected");
+    expect(result.current.sessionToken).toBe("A".repeat(43));
 
     const channelId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
     act(() => {
       expect(result.current.updateChannel(channelId, "анонсы", "Важные новости")).toBe(true);
       expect(result.current.deleteChannel(channelId)).toBe(true);
+      expect(result.current.updateMessage(channelId, "Исправлено")).toBe(true);
+      expect(result.current.deleteMessage(channelId)).toBe(true);
     });
     const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "message.update")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "message.delete")).toBe(true);
+
+    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [] };
+    act(() => {
+      first?.receive({ type: "message.updated", message });
+      first?.receive({ type: "message.deleted", messageId: channelId, channelId });
+    });
+    expect(callbacks.onMessageUpdated).toHaveBeenCalledWith(message);
+    expect(callbacks.onMessageDeleted).toHaveBeenCalledWith(channelId, channelId);
 
     act(() => first?.disconnect());
     expect(result.current.status).toBe("reconnecting");
@@ -98,7 +136,7 @@ describe("server connection", () => {
 
   it("stops reconnecting when the server is deleted", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
     const { unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const socket = FakeWebSocket.instances[0];
     act(() => socket?.receive({ type: "server.deleted", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253" }));

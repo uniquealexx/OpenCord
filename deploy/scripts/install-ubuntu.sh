@@ -238,5 +238,5 @@ if [[ "${INSECURE_MODE}" == "true" ]]; then
 else
   management_endpoint="https://${OPENCORD_DOMAIN}"
 fi
-bash "${DEPLOY_DIR}/management/install-management-home" docker "${INSECURE_MODE}" "${management_endpoint}"
+bash "${DEPLOY_DIR}/management/install-management-home" docker "${INSECURE_MODE}" "${management_endpoint}" "${OPENCORD_DOMAIN}" "${ACME_EMAIL}"
 printf 'Re-running this installer updates the application without deleting the PostgreSQL volume.\n'

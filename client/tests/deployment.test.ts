@@ -55,7 +55,7 @@ describe("SSH deployment boundary", () => {
   it("parses the remote environment probe", () => {
     expect(parseDeploymentEnvironment("OS_ID=ubuntu\nOS_VERSION=24.04\nARCH=x86_64\nSYSTEMD=true\nDOCKER_CLI=true\nDOCKER_COMPOSE=true\nDOCKER_USABLE=true\nPORT_80=false\nPORT_443=true\nPORT_3210=false\n")).toEqual({
       osId: "ubuntu", osVersion: "24.04", architecture: "x86_64", systemd: true,
-      dockerCli: true, dockerCompose: true, dockerUsable: true, occupiedPorts: [443], supported: true,
+      dockerCli: true, dockerCompose: true, dockerUsable: true, occupiedPorts: [443], openCordInstalled: false, supported: true,
     });
   });
 

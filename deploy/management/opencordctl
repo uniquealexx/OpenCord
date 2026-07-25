@@ -42,10 +42,12 @@ usage() {
   logs [строки]          последние логи сервера (по умолчанию 200)
   start|stop|restart     управление сервером
   settings               публичные настройки и расположение данных
-  backup                 резервная копия базы PostgreSQL
+  backup                 резервная копия PostgreSQL и вложений
   clear-messages DELETE-ALL-MESSAGES
                          удалить всю историю сообщений после создания backup
-  update                 инструкция по безопасному обновлению
+  update --bundle-url URL --sha256 HEX
+  update --bundle-file PATH --sha256 HEX
+                         проверить bundle, создать backup и обновить сервер
   uninstall              отключить OpenCord, сохранив приложение и данные
   uninstall --purge-data DELETE-OPENCORD-DATA
                          полностью удалить OpenCord и его данные
@@ -135,10 +137,12 @@ SETTINGS
 }
 
 create_backup() {
-  local timestamp backup_path temporary_path
+  local timestamp backup_path temporary_path attachments_path attachments_temporary_path
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   backup_path="${MANAGEMENT_ROOT}/backups/opencord-${timestamp}-$$.dump"
   temporary_path="${backup_path}.tmp"
+  attachments_path="${MANAGEMENT_ROOT}/backups/opencord-${timestamp}-$$.attachments.tar"
+  attachments_temporary_path="${attachments_path}.tmp"
   install -d -m 0750 -o root -g opencord "${MANAGEMENT_ROOT}/backups"
   if [[ "${INSTALL_MODE}" == "docker" ]]; then
     if ! compose exec -T database pg_dump --username opencord --format=custom opencord > "${temporary_path}"; then
@@ -153,10 +157,24 @@ create_backup() {
       return 1
     fi
   fi
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if ! compose run --rm --no-deps --user 10001:10001 --entrypoint tar server -C /var/lib/opencord/attachments -cf - . > "${attachments_temporary_path}"; then
+      rm -f -- "${temporary_path}" "${attachments_temporary_path}"
+      printf 'Не удалось создать резервную копию вложений.\n' >&2
+      return 1
+    fi
+  else
+    if ! tar -C /var/lib/opencord/attachments -cf "${attachments_temporary_path}" .; then
+      rm -f -- "${temporary_path}" "${attachments_temporary_path}"
+      printf 'Не удалось создать резервную копию вложений.\n' >&2
+      return 1
+    fi
+  fi
   mv -- "${temporary_path}" "${backup_path}"
-  chmod 0640 "${backup_path}"
-  chown root:opencord "${backup_path}"
-  printf 'Резервная копия создана: %s\n' "${backup_path}"
+  mv -- "${attachments_temporary_path}" "${attachments_path}"
+  chmod 0640 "${backup_path}" "${attachments_path}"
+  chown root:opencord "${backup_path}" "${attachments_path}"
+  printf 'Резервные копии созданы: %s и %s\n' "${backup_path}" "${attachments_path}"
 }
 
 clear_messages() {
@@ -244,6 +262,7 @@ purge_installation() {
       rm -f -- /etc/caddy/Caddyfile
     fi
     rm -rf -- /etc/opencord
+    rm -rf -- /var/lib/opencord
   fi
   rm -rf -- /opt/opencord
   if [[ -L /usr/local/bin/opencordctl && "$(readlink /usr/local/bin/opencordctl)" == "/home/opencord/opencordctl" ]]; then
@@ -263,10 +282,7 @@ case "${command_name}" in
   settings) show_settings ;;
   backup) create_backup ;;
   clear-messages) clear_messages "$@" ;;
-  update)
-    printf 'Обновление выполняется повторным SSH-развёртыванием из актуального OpenCord Client.\n'
-    printf 'Установщик сохранит базу и переключит сервер на новую версию после healthcheck.\n'
-    ;;
+  update) "${MANAGEMENT_ROOT}/libexec/update-server" "$@" ;;
   uninstall)
     if [[ "${1:-}" == "--purge-data" ]]; then
       if [[ "${2:-}" != "DELETE-OPENCORD-DATA" ]]; then

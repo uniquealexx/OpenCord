@@ -1,10 +1,21 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import type { DeploymentProgress } from "@/shared/deployment";
 
 describe("DeploymentDialog", () => {
+  afterEach(cleanup);
+  it("prefills a server update without restoring secrets", () => {
+    window.openCord = undefined;
+    render(<DeploymentDialog open updateOnly preset={{ host: "vps.example.com", port: 2202, username: "opencord", serverName: "Команда", domain: "chat.example.com", email: "admin@example.com", mode: "native", authentication: "password" }} onOpenChange={vi.fn()} onDeployed={vi.fn()} />);
+    expect(screen.getByText("Обновить OpenCord Server")).toBeInTheDocument();
+    expect(screen.getByLabelText("IP-адрес или имя VPS")).toHaveValue("vps.example.com");
+    expect(screen.getByLabelText("SSH-порт")).toHaveValue(2202);
+    expect(screen.getByLabelText("SSH-пользователь")).toHaveValue("opencord");
+    expect(screen.getByLabelText("Пароль")).toHaveValue("");
+  });
+
   it("requires host fingerprint confirmation and reports a deployed server", async () => {
     const user = userEvent.setup();
     let progressListener: ((event: DeploymentProgress) => void) | undefined;
@@ -17,11 +28,12 @@ describe("DeploymentDialog", () => {
         selectPrivateKey: vi.fn(async () => ({ credentialId: "123e4567-e89b-42d3-a456-426614174000", label: "id_ed25519" })),
         releasePrivateKey: vi.fn(),
         inspectHost: vi.fn(async () => ({ host: "203.0.113.10", port: 22, algorithm: "ssh-ed25519", fingerprint: `SHA256:${"A".repeat(43)}` })),
-        inspectEnvironment: vi.fn(async () => ({ osId: "ubuntu", osVersion: "24.04", architecture: "x86_64", systemd: true, dockerCli: true, dockerCompose: true, dockerUsable: true, occupiedPorts: [], supported: true })),
+        inspectEnvironment: vi.fn(async () => ({ osId: "ubuntu", osVersion: "24.04", architecture: "x86_64", systemd: true, dockerCli: true, dockerCompose: true, dockerUsable: true, occupiedPorts: [], openCordInstalled: false, supported: true })),
         start: vi.fn(async () => ({ operationId: "123e4567-e89b-42d3-a456-426614174001" })),
         cancel: vi.fn(),
         onProgress: vi.fn((listener) => { progressListener = listener; return () => undefined; }),
       },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
     };
 
     render(<DeploymentDialog open onOpenChange={vi.fn()} onDeployed={onDeployed} />);
@@ -58,7 +70,12 @@ describe("DeploymentDialog", () => {
       message: "OpenCord Server установлен и доступен",
       serverUrl: "https://chat.example.com",
     }));
-    expect(onDeployed).toHaveBeenCalledWith("https://chat.example.com", "Команда OpenCord");
+    expect(onDeployed).toHaveBeenCalledWith("https://chat.example.com", "Команда OpenCord", expect.objectContaining({ host: "203.0.113.10", port: 22, username: "root", mode: "docker", authentication: "private-key", keyLabel: "id_ed25519" }));
+    const savedConfiguration = onDeployed.mock.calls[0]?.[2];
+    expect(savedConfiguration).not.toHaveProperty("password");
+    expect(savedConfiguration).not.toHaveProperty("passphrase");
+    expect(savedConfiguration).not.toHaveProperty("sudoPassword");
+    expect(savedConfiguration).not.toHaveProperty("expectedFingerprint");
     expect(await screen.findByText("Сервер готов и добавлен в OpenCord")).toBeInTheDocument();
   });
 
@@ -73,11 +90,12 @@ describe("DeploymentDialog", () => {
         selectPrivateKey: vi.fn(async () => ({ credentialId: "123e4567-e89b-42d3-a456-426614174000", label: "id_ed25519" })),
         releasePrivateKey: vi.fn(),
         inspectHost: vi.fn(async () => ({ host: "localhost", port: 2222, algorithm: "ssh-ed25519", fingerprint: `SHA256:${"A".repeat(43)}` })),
-        inspectEnvironment: vi.fn(async () => ({ osId: "ubuntu", osVersion: "24.04", architecture: "x86_64", systemd: true, dockerCli: false, dockerCompose: false, dockerUsable: false, occupiedPorts: [], supported: true })),
+        inspectEnvironment: vi.fn(async () => ({ osId: "ubuntu", osVersion: "24.04", architecture: "x86_64", systemd: true, dockerCli: false, dockerCompose: false, dockerUsable: false, occupiedPorts: [], openCordInstalled: true, supported: true })),
         start,
         cancel: vi.fn(),
         onProgress: vi.fn(() => () => undefined),
       },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
     };
 
     render(<DeploymentDialog open onOpenChange={vi.fn()} onDeployed={vi.fn()} />);
@@ -94,7 +112,9 @@ describe("DeploymentDialog", () => {
     await user.click(screen.getByRole("button", { name: "Проверить окружение" }));
 
     expect(await screen.findByText("Подключение без TLS небезопасно")).toBeInTheDocument();
-    const nativeButton = screen.getByRole("button", { name: /Установить нативно/ });
+    expect(screen.getByText("Переразвернуть OpenCord Server")).toBeInTheDocument();
+    expect(screen.getByText("sudo opencordctl uninstall --purge-data DELETE-OPENCORD-DATA")).toBeInTheDocument();
+    const nativeButton = screen.getByRole("button", { name: /Переразвернуть нативно/ });
     expect(nativeButton).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: /Я понимаю риск/ }));
     expect(nativeButton).toBeEnabled();

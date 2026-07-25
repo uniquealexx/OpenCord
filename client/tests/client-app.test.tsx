@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, ChannelSidebar, ClientApp, upsertDeployedServer } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer } from "@/components/client-app";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 
 function readyState(): PersistedClientState {
@@ -38,10 +38,49 @@ describe("ClientApp", () => {
       storage: { load: vi.fn(async () => readyState()), save, reset: vi.fn(async () => createDefaultState()) },
       identity: { getOrCreate: vi.fn(async () => ({ publicKey: "test-public-key", fingerprint: "test" })), signChallenge: vi.fn(async () => "test-signature"), reset: vi.fn(async () => ({ publicKey: "new-test-public-key", fingerprint: "new-test" })) },
       deployment: { selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
     };
   });
 
   afterEach(cleanup);
+
+  it("shows the saved one-button server update action only to the owner", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
+    const { rerender } = render(<LeaveServerDialog server={server} canUpdate canDeleteForAll open onOpenChange={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    rerender(<LeaveServerDialog server={server} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
+  });
+
+  it("derives a safe recovery preset for an outdated legacy server", () => {
+    expect(deploymentPresetFromServer({ ...readyState().servers[0]!, name: "Legacy", address: "https://chat.example.com" })).toEqual({ host: "chat.example.com", port: 22, username: "root", serverName: "Legacy", authentication: "private-key", domain: "chat.example.com" });
+    expect(deploymentPresetFromServer({ ...readyState().servers[0]!, name: "WSL", address: "http://127.0.0.1:3210" })).toEqual({ host: "127.0.0.1", port: 22, username: "root", serverName: "WSL", authentication: "private-key" });
+  });
+
+  it("edits and deletes an own message from its action menu", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn(() => true);
+    const onDelete = vi.fn(() => true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "До правки", createdAt: new Date().toISOString(), editedAt: null };
+    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Редактировать" }));
+    const editor = screen.getByRole("textbox", { name: "Редактирование сообщения" });
+    await user.clear(editor);
+    await user.type(editor, "После правки{Enter}");
+    expect(onEdit).toHaveBeenCalledWith(message, "После правки");
+
+    await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Удалить" }));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(onDelete).toHaveBeenCalledWith(message);
+  });
 
   it("switches channels and sends a local message", async () => {
     const user = userEvent.setup();
@@ -53,6 +92,83 @@ describe("ClientApp", () => {
     await user.click(screen.getByRole("button", { name: "Отправить" }));
     expect(await screen.findByText("Привет, OpenCord!")).toBeInTheDocument();
     expect(save).toHaveBeenCalled();
+  });
+
+  it("shows uploaded attachments in the composer and allows removing them", async () => {
+    const user = userEvent.setup();
+    const onAttach = vi.fn();
+    const onRemoveAttachment = vi.fn();
+    render(<Composer draft="сообщение" channelName="общий" disabled={false} uploading={false} canAttach attachments={[{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "план.pdf", mimeType: "application/pdf", sizeBytes: 1024, sha256: "a".repeat(64) }]} onAttach={onAttach} onRemoveAttachment={onRemoveAttachment} onDraft={vi.fn()} onSubmit={vi.fn()} />);
+    expect(screen.getByText("план.pdf")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Прикрепить файл" }));
+    expect(onAttach).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Убрать план.pdf" }));
+    expect(onRemoveAttachment).toHaveBeenCalledWith("12959e6f-7ea9-41d9-8be3-f412354d3e95");
+  });
+
+  it("allows submitting an attachment without message text", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "фото.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) }]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("opens an image attachment in the media viewer", async () => {
+    const user = userEvent.setup();
+    let activeFullscreenElement: Element | null = null;
+    const requestFullscreen = vi.fn(async () => {
+      activeFullscreenElement = screen.getByRole("button", { name: "На весь экран: фото.png" }).parentElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    });
+    const exitFullscreen = vi.fn(async () => {
+      activeFullscreenElement = null;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => activeFullscreenElement });
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { configurable: true, value: requestFullscreen });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exitFullscreen });
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "фото.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) };
+    render(<AttachmentView attachment={attachment} onDownload={vi.fn()} onPreview={vi.fn(async () => "data:image/png;base64,AA==")} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Открыть фото.png" }));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "На весь экран: фото.png" }));
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+    await user.click(await screen.findByRole("button", { name: "Выйти из полноэкранного режима: фото.png" }));
+    expect(exitFullscreen).toHaveBeenCalledOnce();
+  });
+
+  it("renders a video player and requests fullscreen", async () => {
+    const user = userEvent.setup();
+    const requestFullscreen = vi.fn(async () => undefined);
+    Object.defineProperty(HTMLVideoElement.prototype, "requestFullscreen", { configurable: true, value: requestFullscreen });
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "ролик.mp4", mimeType: "video/mp4", sizeBytes: 2048, sha256: "a".repeat(64) };
+    render(<AttachmentView attachment={attachment} onDownload={vi.fn()} onPreview={vi.fn(async () => "data:video/mp4;base64,AA==")} />);
+
+    expect(await screen.findByLabelText("Видео: ролик.mp4")).toHaveAttribute("controls");
+    await user.click(screen.getByRole("button", { name: "На весь экран: ролик.mp4" }));
+
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+  });
+
+  it("waits for authentication before loading a cached media preview", async () => {
+    const onPreview = vi.fn(async () => "data:image/png;base64,AA==");
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "после-входа.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) };
+    const { rerender } = render(<AttachmentView attachment={attachment} previewAvailable={false} onDownload={vi.fn()} onPreview={onPreview} />);
+
+    expect(onPreview).not.toHaveBeenCalled();
+    rerender(<AttachmentView attachment={attachment} previewAvailable onDownload={vi.fn()} onPreview={onPreview} />);
+
+    await waitFor(() => expect(onPreview).toHaveBeenCalledOnce());
+    expect(await screen.findByRole("button", { name: "Открыть после-входа.png" })).toBeEnabled();
+  });
+
+  it("shows a persistent instruction when the server protocol is outdated", () => {
+    render(<ProtocolNotice status="server-outdated" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("OpenCord Server необходимо обновить");
+    expect(screen.getByRole("alert")).toHaveTextContent("Повторно разверните сервер");
   });
 
   it("shows an empty-server state instead of a fake channel when no text channels exist", async () => {

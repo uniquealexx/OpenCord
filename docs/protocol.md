@@ -1,4 +1,4 @@
-# OpenCord Protocol v4
+# OpenCord Protocol v7
 
 ## Транспорт
 
@@ -14,6 +14,17 @@
 
 Challenge одноразовый в рамках соединения. Приватный ключ не входит ни в одно сетевое событие.
 
+`auth.ok` также содержит непродолжительный bearer-токен HTTP-сессии. Он хранится только в памяти клиента, удаляется сервером при закрытии WebSocket и используется исключительно для загрузки и скачивания вложений.
+
+## Вложения
+
+- `POST /api/attachments` принимает поток `application/octet-stream` размером до 10 МБ. Имя передаётся в `x-opencord-file-name` как UTF-8 base64url, MIME-тип — в `x-opencord-mime-type`.
+- `chat.send.attachmentIds` связывает с сообщением до пяти предварительно загруженных текущим пользователем файлов.
+- Текст `chat.send.content` может быть пустым, если передан хотя бы один `attachmentId`; полностью пустое сообщение отклоняется протоколом.
+- `GET /api/attachments/:id` доступен аутентифицированному участнику сервера и всегда отдаёт файл как скачивание с `X-Content-Type-Options: nosniff`.
+
+Метаданные и связи хранятся в PostgreSQL, байты — через абстракцию `AttachmentStorage`; текущая реализация использует файловую систему. Это не сквозное шифрование: владелец VPS имеет технический доступ к файлам. Антивирусная проверка, квоты, S3/MinIO и сборщик потерянных загрузок пока не реализованы.
+
 ## Основные события
 
 Клиент отправляет:
@@ -21,6 +32,8 @@ Challenge одноразовый в рамках соединения. Прив�
 - `auth.respond`;
 - `history.request`;
 - `chat.send`;
+- `message.update`;
+- `message.delete`;
 - `channel.create`;
 - `channel.update`;
 - `channel.delete`;
@@ -34,14 +47,16 @@ Challenge одноразовый в рамках соединения. Прив�
 - `server.snapshot`;
 - `server.deleted`;
 - `history.result`;
-- `message.created`;
+- `message.created`, `message.updated`, `message.deleted`;
 - `member.updated`;
 - `pong`, `error`.
 
 `channel.create`, `channel.update` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`.
 
+`message.update` разрешён исключительно автору сообщения. Даже владелец и администратор не могут редактировать чужой текст. После изменения сервер устанавливает `editedAt` и рассылает `message.updated`. `message.delete` разрешён автору, а для чужих сообщений — владельцу и администраторам с правом `MANAGE_MESSAGES`; сервер рассылает `message.deleted` и удаляет связанные вложения.
+
 `server.delete` доступен только владельцу. Сервер сохраняет tombstone и отправляет `server.deleted` всем активным клиентам; клиент, который был офлайн, получит то же событие после следующей аутентификации. Точные поля и ограничения определяются схемами `shared/src/protocol.ts`. Несовместимые изменения требуют увеличения `PROTOCOL_VERSION`.
 
 ## Хранение
 
-Локальный development использует PGlite с PostgreSQL-совместимыми миграциями. Production использует тот же repository и миграции через обычный PostgreSQL `DATABASE_URL`. Текущая схема содержит сервер, каналы, публичные профили и сообщения.
+Локальный development использует PGlite с PostgreSQL-совместимыми миграциями. Production использует тот же repository и миграции через обычный PostgreSQL `DATABASE_URL`. Текущая схема содержит сервер, каналы, публичные профили, сообщения и метаданные вложений. Файлы лежат в `ATTACHMENTS_DIR` (`server/.data/attachments` локально, отдельный volume Docker или `/var/lib/opencord/attachments` при native-установке).

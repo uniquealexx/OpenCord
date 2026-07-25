@@ -7,6 +7,8 @@ import { parsePersistedState } from "../src/shared/state";
 import { ClientStateStore } from "./storage";
 import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
+import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
+import { downloadAttachment, previewAttachment, uploadAttachment } from "./attachments";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
@@ -42,6 +44,9 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    console.error(`OpenCord preload failed (${preloadPath}):`, error);
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     const allowed = developmentUrl ? url.startsWith(developmentUrl) : url.startsWith("file://");
@@ -91,6 +96,26 @@ function registerIpc(): void {
   ipcMain.handle(IPC.deploymentInspectEnvironment, (_event, input: unknown) => deploymentManager.inspectEnvironment(input));
   ipcMain.handle(IPC.deploymentStart, (_event, input: unknown) => deploymentManager.start(input));
   ipcMain.handle(IPC.deploymentCancel, (_event, operationId: unknown) => deploymentManager.cancel(operationId));
+  ipcMain.handle(IPC.attachmentSelectAndUpload, async (_event, input: unknown) => {
+    const context = attachmentTransferContextSchema.parse(input);
+    const options: OpenDialogOptions = { title: "Выберите файл", properties: ["openFile"] };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    const filePath = result.filePaths[0];
+    if (result.canceled || !filePath) return null;
+    return uploadAttachment(filePath, context.serverAddress, context.sessionToken);
+  });
+  ipcMain.handle(IPC.attachmentDownload, async (_event, input: unknown) => {
+    const request = attachmentDownloadRequestSchema.parse(input);
+    const options = { title: "Сохранить вложение", defaultPath: request.attachment.fileName };
+    const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return false;
+    await downloadAttachment(request.serverAddress, request.sessionToken, request.attachment, result.filePath);
+    return true;
+  });
+  ipcMain.handle(IPC.attachmentPreview, async (_event, input: unknown) => {
+    const request = attachmentDownloadRequestSchema.parse(input);
+    return previewAttachment(request.serverAddress, request.sessionToken, request.attachment);
+  });
 }
 
 if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {

@@ -14,10 +14,11 @@
     "docker:up": "node deploy/scripts/local-compose.mjs up",
     "docker:down": "node deploy/scripts/local-compose.mjs down",
     "docker:logs": "node deploy/scripts/local-compose.mjs logs",
+    "bundle:server": "node deploy/scripts/create-update-bundle.mjs",
     "build": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm --filter @opencord/client build",
     "package:win": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --workspace-concurrency=1 --if-present test"
+    "test": "pnpm --filter @opencord/shared build && pnpm -r --workspace-concurrency=1 --if-present test"
   }
 }

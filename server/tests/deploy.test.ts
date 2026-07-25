@@ -15,6 +15,9 @@ describe("production deployment", () => {
     expect(compose).toContain("BOOTSTRAP_OWNER_PUBLIC_KEY_FILE: /run/secrets/owner_public_key");
     expect(compose).toContain("SERVER_NAME_FILE: /run/secrets/server_name");
     expect(compose).toContain("DEPLOYMENT_ID_FILE: /run/secrets/deployment_id");
+    expect(compose).toContain("ATTACHMENTS_DIR: /var/lib/opencord/attachments");
+    expect(compose).toContain("attachments_data:/var/lib/opencord/attachments");
+    expect(compose).toContain("condition: service_completed_successfully");
     expect(compose).toContain("owner_public_key:");
     expect(compose).not.toMatch(/5432:5432/);
   });
@@ -66,6 +69,8 @@ describe("production deployment", () => {
     expect(installer).toContain("--server-name");
     expect(installer).toContain("Environment=SERVER_NAME_FILE=/etc/opencord/server_name");
     expect(installer).toContain("Environment=DEPLOYMENT_ID_FILE=/etc/opencord/deployment_id");
+    expect(installer).toContain("Environment=ATTACHMENTS_DIR=/var/lib/opencord/attachments");
+    expect(installer).toContain("ReadWritePaths=/var/lib/opencord/attachments");
     expect(installer).toContain('if [[ ! -s "${CONFIG_ROOT}/owner_public_key" ]]');
     expect(installer).toContain("install-management-home");
     expect(installer).toContain("# Managed by OpenCord");
@@ -77,11 +82,15 @@ describe("production deployment", () => {
   it("installs a protected management home with explicit data-preserving removal", async () => {
     const controller = await readFile(path.join(repositoryRoot, "deploy", "management", "opencordctl"), "utf8");
     const installer = await readFile(path.join(repositoryRoot, "deploy", "management", "install-management-home"), "utf8");
+    const updater = await readFile(path.join(repositoryRoot, "deploy", "management", "update-server"), "utf8");
+    const bundler = await readFile(path.join(repositoryRoot, "deploy", "scripts", "create-update-bundle.mjs"), "utf8");
     expect(controller).toContain('MANAGEMENT_ROOT="/home/opencord"');
     expect(controller).toContain("compose down --remove-orphans");
     expect(controller).toContain("compose down --volumes --remove-orphans");
     expect(controller).toContain("DELETE-OPENCORD-DATA");
     expect(controller).toContain("pg_dump --format=custom");
+    expect(controller).toContain("opencord/attachments -cf");
+    expect(controller).toContain("--user 10001:10001 --entrypoint tar");
     expect(controller).toContain("clear-messages DELETE-ALL-MESSAGES");
     expect(controller).toContain("DELETE FROM messages RETURNING 1");
     expect(controller).toContain("История не удалена: не удалось создать обязательную резервную копию");
@@ -89,6 +98,13 @@ describe("production deployment", () => {
     expect(installer).toContain('ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl');
     expect(installer).toContain("backup clear-messages update");
     expect(installer).toContain("OpenCord management assets are incomplete");
+    expect(installer).toContain('"${SOURCE_DIR}/update-server"');
+    expect(updater).toContain("EXPECTED_SHA256");
+    expect(updater).toContain("--proto '=https'");
+    expect(updater).toContain('"${MANAGEMENT_ROOT}/opencordctl" backup');
+    expect(updater).toContain("--no-same-owner --no-same-permissions");
+    expect(bundler).toContain('"deploy/management"');
+    expect(bundler).toContain('createHash("sha256")');
     expect(installer).not.toContain("usermod");
     expect(installer).not.toContain("database_password");
   });

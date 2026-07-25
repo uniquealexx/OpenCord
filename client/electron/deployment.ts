@@ -69,7 +69,9 @@ export class DeploymentManager {
       await connect(client, await this.createConnectionConfiguration(connection));
       const result = await executeCapture(client, PREFLIGHT_COMMAND, 20_000);
       if (result.exitCode !== 0) throw new Error("Не удалось проверить окружение VPS");
-      return parseDeploymentEnvironment(result.stdout);
+      const installation = await executeCapture(client, privilegedInstallationProbe(connection), 20_000, connection.username !== "root" && connection.sudoPassword ? `${connection.sudoPassword}\n` : undefined);
+      if (installation.exitCode !== 0) throw new Error("Не удалось проверить существующую установку OpenCord через sudo");
+      return parseDeploymentEnvironment(`${result.stdout}\n${installation.stdout}`);
     } finally {
       client.end();
     }
@@ -103,14 +105,18 @@ export class DeploymentManager {
       await connect(active.client, configuration);
       this.assertActive(active);
 
+      const installation = await executeCapture(active.client, privilegedInstallationProbe(request), 20_000, request.username !== "root" && request.sudoPassword ? `${request.sudoPassword}\n` : undefined);
+      if (installation.exitCode !== 0) throw new Error("Не удалось проверить существующую установку OpenCord через sudo");
+      const redeployment = installation.stdout.includes("OPENCORD_INSTALLED=true");
+
       const remoteRoot = `/tmp/opencord-install-${operationId}`;
-      this.emit(operationId, "uploading", "info", "Загрузка проверенного комплекта OpenCord на VPS");
+      this.emit(operationId, "uploading", "info", redeployment ? "Загрузка проверенного комплекта для переразвёртывания OpenCord" : "Загрузка проверенного комплекта OpenCord на VPS");
       const sftp = await openSftp(active.client);
       await uploadBundle(sftp, this.bundleRoot, remoteRoot);
       sftp.end();
       this.assertActive(active);
 
-      this.emit(operationId, "installing", "info", "Запуск идемпотентного установщика Ubuntu");
+      this.emit(operationId, "installing", "info", redeployment ? "Запуск безопасного переразвёртывания с сохранением данных" : "Запуск идемпотентного установщика Ubuntu");
       const command = buildInstallCommand(remoteRoot, request);
       const exitCode = await executeInstaller(active.client, command, request.sudoPassword, (line, isError) => {
         const clean = redact(line, secrets);
@@ -122,7 +128,7 @@ export class DeploymentManager {
       const serverUrl = request.domain ? `https://${request.domain}` : insecureServerUrl(request.host);
       this.emit(operationId, "verifying", "info", `Проверка ${serverUrl}/health`);
       await waitForPublicHealth(`${serverUrl}/health`);
-      this.emit(operationId, "completed", "success", "OpenCord Server установлен и доступен", serverUrl);
+      this.emit(operationId, "completed", "success", redeployment ? "OpenCord Server переразвёрнут; база и вложения сохранены" : "OpenCord Server установлен и доступен", serverUrl);
     } catch (error) {
       if (!active.cancelled) this.emit(operationId, "failed", "error", redact(toMessage(error), secrets));
     } finally {
@@ -256,8 +262,15 @@ export function parseDeploymentEnvironment(output: string): DeploymentEnvironmen
     dockerCompose: values.get("DOCKER_COMPOSE") === "true",
     dockerUsable: values.get("DOCKER_USABLE") === "true",
     occupiedPorts,
+    openCordInstalled: values.get("OPENCORD_INSTALLED") === "true",
     supported: osId === "ubuntu" && /^(22\.04|24\.04)$/u.test(osVersion) && /^(x86_64|aarch64|arm64)$/u.test(values.get("ARCH") ?? "") && values.get("SYSTEMD") === "true",
   });
+}
+
+function privilegedInstallationProbe(connection: Pick<DeploymentConnection, "username" | "sudoPassword">): string {
+  const probe = `sh -c 'if [ -x /home/opencord/opencordctl ] && [ -f /home/opencord/settings/server.env ]; then echo OPENCORD_INSTALLED=true; else echo OPENCORD_INSTALLED=false; fi'`;
+  if (connection.username === "root") return probe;
+  return connection.sudoPassword ? `sudo -S -p '' -- ${probe}` : `sudo -n -- ${probe}`;
 }
 
 export function redact(value: string, secrets: string[]): string {
@@ -349,7 +362,7 @@ function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Prom
   return new Promise((resolve, reject) => sftp.fastPut(localPath, remotePath, (error) => error ? reject(error) : resolve()));
 }
 
-function executeCapture(client: Client, command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function executeCapture(client: Client, command: string, timeoutMs: number, stdin?: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => client.exec(command, { pty: false }, (error, stream) => {
     if (error) { reject(error); return; }
     let stdout = "";
@@ -365,7 +378,7 @@ function executeCapture(client: Client, command: string, timeoutMs: number): Pro
       clearTimeout(timeout);
       resolve({ exitCode: code ?? 1, stdout, stderr });
     });
-    stream.end();
+    stream.end(stdin);
   }));
 }
 

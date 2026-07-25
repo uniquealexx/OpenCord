@@ -1,11 +1,13 @@
-import type { Channel, ChatMessage, Member, MemberRole, Permission, PublicProfile } from "@opencord/shared";
+import type { Attachment, Channel, ChatMessage, Member, MemberRole, Permission, PublicProfile } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string }
 interface UserRow extends QueryRow { id: string; display_name: string; avatar: string | null; role: MemberRole }
-interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string }
+interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null }
+interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
+interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 
 export class ChatRepository {
   constructor(private readonly database: Database) {}
@@ -122,36 +124,156 @@ export class ChatRepository {
     return { id: user.id, displayName: user.display_name, avatar: user.avatar, status: online ? "online" : "offline", role: user.role };
   }
 
-  async createMessage(id: string, channelId: string, authorId: string, content: string): Promise<ChatMessage> {
-    const rows = await this.database.query<MessageRow>(
-      `INSERT INTO messages (id, channel_id, author_id, content) VALUES ($1, $2, $3, $4)
-       RETURNING id, channel_id, author_id, content, created_at,
-       (SELECT display_name FROM users WHERE id = author_id) AS author_name,
-       (SELECT avatar FROM users WHERE id = author_id) AS author_avatar`,
-      [id, channelId, authorId, content],
+  async createAttachment(id: string, uploaderId: string, storageKey: string, fileName: string, mimeType: string, sizeBytes: number, sha256: string): Promise<Attachment> {
+    const rows = await this.database.query<AttachmentRow>(
+      `INSERT INTO attachments (id, server_id, uploader_id, storage_key, original_name, mime_type, size_bytes, sha256)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, storage_key, original_name, mime_type, size_bytes, sha256`,
+      [id, DEFAULT_SERVER_ID, uploaderId, storageKey, fileName, mimeType, sizeBytes, sha256],
     );
-    return mapMessage(required(rows[0], "Created message is missing"));
+    return mapAttachment(required(rows[0], "Created attachment is missing"));
+  }
+
+  async countPendingAttachments(uploaderId: string): Promise<number> {
+    const [row] = await this.database.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM attachments a
+       WHERE a.uploader_id = $1 AND a.server_id = $2
+       AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id)`,
+      [uploaderId, DEFAULT_SERVER_ID],
+    );
+    return Number(row?.count ?? 0);
+  }
+
+  async getAccessibleAttachment(attachmentId: string, userId: string): Promise<(Attachment & { storageKey: string }) | null> {
+    const [row] = await this.database.query<AttachmentRow>(
+      `SELECT a.id, a.storage_key, a.original_name, a.mime_type, a.size_bytes, a.sha256
+       FROM attachments a WHERE a.id = $1 AND a.server_id = $3
+       AND (a.uploader_id = $2 OR EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id))`,
+      [attachmentId, userId, DEFAULT_SERVER_ID],
+    );
+    return row ? { ...mapAttachment(row), storageKey: row.storage_key } : null;
+  }
+
+  async createMessage(id: string, channelId: string, authorId: string, content: string, attachmentIds: string[] = []): Promise<ChatMessage | null> {
+    const rows = await this.database.query<MessageRow>(
+      `WITH requested AS (
+         SELECT value::uuid AS id, (position - 1)::integer AS position
+         FROM unnest($5::uuid[]) WITH ORDINALITY AS input(value, position)
+       ), available AS (
+         SELECT r.id, r.position FROM requested r JOIN attachments a ON a.id = r.id
+         WHERE a.uploader_id = $3 AND a.server_id = $6
+         AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id)
+       ), inserted AS (
+         INSERT INTO messages (id, channel_id, author_id, content)
+         SELECT $1, $2, $3, $4
+         WHERE (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
+         RETURNING id, channel_id, author_id, content, created_at, edited_at
+       ), linked AS (
+         INSERT INTO message_attachments (message_id, attachment_id, position)
+         SELECT inserted.id, available.id, available.position FROM inserted CROSS JOIN available
+       )
+       SELECT id, channel_id, author_id, content, created_at, edited_at,
+       (SELECT display_name FROM users WHERE users.id = author_id) AS author_name,
+       (SELECT avatar FROM users WHERE users.id = author_id) AS author_avatar FROM inserted`,
+      [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const attachments = await this.getAttachmentsForMessages([id]);
+    return mapMessage(row, attachments.get(id) ?? []);
+  }
+
+  async getMessageAccess(messageId: string): Promise<{ authorId: string; channelId: string } | null> {
+    const [row] = await this.database.query<{ author_id: string; channel_id: string }>(
+      `SELECT m.author_id, m.channel_id FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       WHERE m.id = $1 AND c.server_id = $2`,
+      [messageId, DEFAULT_SERVER_ID],
+    );
+    return row ? { authorId: row.author_id, channelId: row.channel_id } : null;
+  }
+
+  async updateMessage(messageId: string, authorId: string, content: string): Promise<ChatMessage | null> {
+    const rows = await this.database.query<MessageRow>(
+      `UPDATE messages AS m SET content = $3, edited_at = now()
+       WHERE m.id = $1 AND m.author_id = $2
+       AND EXISTS (SELECT 1 FROM channels c WHERE c.id = m.channel_id AND c.server_id = $4)
+       AND ($3 <> '' OR EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.message_id = m.id))
+       RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at,
+       (SELECT display_name FROM users WHERE users.id = m.author_id) AS author_name,
+       (SELECT avatar FROM users WHERE users.id = m.author_id) AS author_avatar`,
+      [messageId, authorId, content, DEFAULT_SERVER_ID],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const attachments = await this.getAttachmentsForMessages([messageId]);
+    return mapMessage(row, attachments.get(messageId) ?? []);
+  }
+
+  async deleteMessage(messageId: string, authorId: string, allowAnyAuthor: boolean): Promise<{ channelId: string; storageKeys: string[] } | null> {
+    const candidates = await this.database.query<DeleteCandidateRow>(
+      `SELECT m.author_id, m.channel_id, a.id AS attachment_id, a.storage_key
+       FROM messages m JOIN channels c ON c.id = m.channel_id
+       LEFT JOIN message_attachments ma ON ma.message_id = m.id
+       LEFT JOIN attachments a ON a.id = ma.attachment_id
+       WHERE m.id = $1 AND c.server_id = $2`,
+      [messageId, DEFAULT_SERVER_ID],
+    );
+    const candidate = candidates[0];
+    if (!candidate || (candidate.author_id !== authorId && !allowAnyAuthor)) return null;
+    const deleted = await this.database.query<{ channel_id: string }>(
+      `DELETE FROM messages WHERE id = $1 AND (author_id = $2 OR $3 = true) RETURNING channel_id`,
+      [messageId, authorId, allowAnyAuthor],
+    );
+    if (!deleted[0]) return null;
+    const attachmentIds = candidates.flatMap((row) => row.attachment_id ? [row.attachment_id] : []);
+    if (attachmentIds.length) await this.database.query("DELETE FROM attachments WHERE id = ANY($1::uuid[]) AND server_id = $2", [attachmentIds, DEFAULT_SERVER_ID]);
+    return { channelId: deleted[0].channel_id, storageKeys: candidates.flatMap((row) => row.storage_key ? [row.storage_key] : []) };
   }
 
   async getHistory(channelId: string, limit: number): Promise<ChatMessage[]> {
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at
+      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at
        FROM messages m JOIN users u ON u.id = m.author_id
        WHERE m.channel_id = $1 ORDER BY m.created_at DESC LIMIT $2`,
       [channelId, limit],
     );
-    return rows.reverse().map(mapMessage);
+    const ordered = rows.reverse();
+    const attachments = await this.getAttachmentsForMessages(ordered.map((message) => message.id));
+    return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? []));
+  }
+
+  private async getAttachmentsForMessages(messageIds: string[]): Promise<Map<string, Attachment[]>> {
+    const result = new Map<string, Attachment[]>();
+    if (!messageIds.length) return result;
+    const rows = await this.database.query<AttachmentRow>(
+      `SELECT ma.message_id, a.id, a.storage_key, a.original_name, a.mime_type, a.size_bytes, a.sha256
+       FROM message_attachments ma JOIN attachments a ON a.id = ma.attachment_id
+       WHERE ma.message_id = ANY($1::uuid[]) ORDER BY ma.message_id, ma.position`,
+      [messageIds],
+    );
+    for (const row of rows) {
+      if (!row.message_id) continue;
+      const current = result.get(row.message_id) ?? [];
+      current.push(mapAttachment(row));
+      result.set(row.message_id, current);
+    }
+    return result;
   }
 }
 
 export function permissionsForRole(role: MemberRole): Permission[] {
-  if (role === "owner") return ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"];
-  if (role === "administrator") return ["MANAGE_CHANNELS"];
+  if (role === "owner") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER"];
+  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES"];
   return [];
 }
 
-function mapMessage(row: MessageRow): ChatMessage {
-  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString() };
+function mapMessage(row: MessageRow, attachments: Attachment[] = []): ChatMessage {
+  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments };
+}
+
+function mapAttachment(row: AttachmentRow): Attachment {
+  return { id: row.id, fileName: row.original_name, mimeType: row.mime_type, sizeBytes: Number(row.size_bytes), sha256: row.sha256 };
 }
 
 function required<T>(value: T | undefined, message: string): T {

@@ -7,6 +7,6 @@ export default defineConfig({
   target: "es2022",
   outDir: "dist-electron",
   external: ["electron"],
-  noExternal: ["zod"],
+  noExternal: ["zod", "@opencord/shared"],
   clean: true,
 });

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { attachmentSchema } from "@opencord/shared";
+import { savedDeploymentConfigurationSchema } from "./deployment";
 
 export const STATE_VERSION = 2 as const;
 const LEGACY_TEMPLATE_SERVER_ID = "open-space";
@@ -35,6 +37,7 @@ export const mockServerSchema = z.object({
   accent: z.string().regex(/^#[0-9a-f]{6}$/i),
   channels: z.array(mockChannelSchema),
   members: z.array(mockMemberSchema),
+  deployment: savedDeploymentConfigurationSchema.optional(),
 });
 
 export const mockMessageSchema = z.object({
@@ -43,8 +46,12 @@ export const mockMessageSchema = z.object({
   authorId: z.string().min(1),
   authorName: z.string().min(1).max(32),
   authorColor: z.string().regex(/^#[0-9a-f]{6}$/i),
-  content: z.string().trim().min(1).max(4_000),
+  content: z.string().trim().max(4_000),
   createdAt: z.string().datetime(),
+  editedAt: z.string().datetime().nullable().optional(),
+  attachments: z.array(attachmentSchema).max(5).optional(),
+}).superRefine((message, context) => {
+  if (!message.content && !message.attachments?.length) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
 
 export const clientPreferencesSchema = z.object({

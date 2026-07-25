@@ -11,6 +11,8 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   const server = spawn(process.execPath, [path.resolve("..", "server", "dist", "index.js")], { env: { ...process.env, PORT: String(port), PGLITE_DATA_DIR: serverData, LOG_LEVEL: "silent" }, stdio: "ignore" });
   await waitForServer(`http://127.0.0.1:${port}/health`);
   const app = await electron.launch({ args: ["."], cwd: process.cwd(), env: { ...process.env, NODE_ENV: "test", OPENCORD_TEST_USER_DATA: userData, ELECTRON_RENDERER_URL: process.env.ELECTRON_RENDERER_URL ?? "" } });
+  const electronErrors: string[] = [];
+  app.process().stderr?.on("data", (chunk: Buffer) => electronErrors.push(chunk.toString("utf8")));
   const page = await app.firstWindow();
   const rendererErrors: string[] = [];
   page.on("console", (message) => { if (["error", "warning"].includes(message.type())) rendererErrors.push(`console.${message.type()}: ${message.text()}`); });
@@ -22,7 +24,7 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
     bridgeKeys: Object.keys(window.openCord ?? {}).sort(),
     hasNodeRequire: "require" in window,
   }));
-  expect(surface).toEqual({ hasBridge: true, bridgeKeys: ["deployment", "identity", "storage", "window"], hasNodeRequire: false });
+  expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "storage", "window"], hasNodeRequire: false });
 
   const onboardingName = page.getByPlaceholder("Отображаемое имя");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);

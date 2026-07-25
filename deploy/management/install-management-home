@@ -10,6 +10,8 @@ fi
 INSTALL_MODE="${1:-}"
 INSECURE_MODE="${2:-}"
 PUBLIC_ENDPOINT="${3:-}"
+OPENCORD_DOMAIN="${4:-}"
+ACME_EMAIL="${5:-}"
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MANAGEMENT_ROOT="/home/opencord"
 
@@ -25,7 +27,14 @@ if [[ -z "${PUBLIC_ENDPOINT}" || ${#PUBLIC_ENDPOINT} -gt 500 ]]; then
   printf 'A public endpoint description is required.\n' >&2
   exit 1
 fi
-if [[ ! -f "${SOURCE_DIR}/opencordctl" || ! -f "${SOURCE_DIR}/README.md" ]]; then
+if [[ "${INSECURE_MODE}" == "false" ]]; then
+  email_pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$'
+  if [[ ! "${OPENCORD_DOMAIN}" =~ ^[A-Za-z0-9.-]+$ || "${OPENCORD_DOMAIN}" != *.* || ! "${ACME_EMAIL}" =~ ${email_pattern} ]]; then
+    printf 'Secure management settings require a valid domain and ACME email.\n' >&2
+    exit 1
+  fi
+fi
+if [[ ! -f "${SOURCE_DIR}/opencordctl" || ! -f "${SOURCE_DIR}/update-server" || ! -f "${SOURCE_DIR}/README.md" ]]; then
   printf 'OpenCord management assets are incomplete.\n' >&2
   exit 1
 fi
@@ -41,9 +50,11 @@ install -d -m 0750 -o root -g opencord \
   "${MANAGEMENT_ROOT}" \
   "${MANAGEMENT_ROOT}/backups" \
   "${MANAGEMENT_ROOT}/data" \
+  "${MANAGEMENT_ROOT}/libexec" \
   "${MANAGEMENT_ROOT}/scripts" \
   "${MANAGEMENT_ROOT}/settings"
 install -m 0750 -o root -g opencord "${SOURCE_DIR}/opencordctl" "${MANAGEMENT_ROOT}/opencordctl"
+install -m 0750 -o root -g opencord "${SOURCE_DIR}/update-server" "${MANAGEMENT_ROOT}/libexec/update-server"
 install -m 0640 -o root -g opencord "${SOURCE_DIR}/README.md" "${MANAGEMENT_ROOT}/README.md"
 if [[ (-e /usr/local/bin/opencordctl || -L /usr/local/bin/opencordctl) && "$(readlink /usr/local/bin/opencordctl 2>/dev/null || true)" != "${MANAGEMENT_ROOT}/opencordctl" ]]; then
   printf 'Refusing to replace an unrelated /usr/local/bin/opencordctl.\n' >&2
@@ -56,6 +67,8 @@ ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl
   printf 'INSTALL_ROOT=%q\n' '/opt/opencord'
   printf 'INSECURE_MODE=%q\n' "${INSECURE_MODE}"
   printf 'PUBLIC_ENDPOINT=%q\n' "${PUBLIC_ENDPOINT}"
+  printf 'OPENCORD_DOMAIN=%q\n' "${OPENCORD_DOMAIN}"
+  printf 'ACME_EMAIL=%q\n' "${ACME_EMAIL}"
 } > "${MANAGEMENT_ROOT}/settings/server.env"
 chown root:opencord "${MANAGEMENT_ROOT}/settings/server.env"
 chmod 0640 "${MANAGEMENT_ROOT}/settings/server.env"
@@ -65,6 +78,7 @@ if [[ "${INSTALL_MODE}" == "docker" ]]; then
 # Расположение данных
 
 - PostgreSQL: Docker volume `opencord_postgres_data` под управлением Docker.
+- Вложения: Docker volume `opencord_attachments_data` под управлением Docker.
 - Секреты: `/opt/opencord/deploy/secrets/`, доступны root и выделенному UID контейнера OpenCord Server.
 - Конфигурация Compose: `/opt/opencord/deploy/`.
 - Резервные копии: `/home/opencord/backups/`.
@@ -76,6 +90,7 @@ else
 # Расположение данных
 
 - PostgreSQL: системный кластер PostgreSQL, отдельная база `opencord`.
+- Вложения: `/var/lib/opencord/attachments`, доступ только системному пользователю OpenCord.
 - Секреты: `/etc/opencord/`, доступны только root и службе OpenCord.
 - Версии приложения: `/opt/opencord/releases/`.
 - Активная версия: `/opt/opencord/current`.

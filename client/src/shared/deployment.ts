@@ -40,6 +40,19 @@ export const deploymentConnectionSchema = sshTargetSchema.extend({
 
 export const deploymentModeSchema = z.enum(["docker", "native"]);
 
+export const savedDeploymentConfigurationSchema = sshTargetSchema.extend({
+  username: z.string().trim().regex(usernamePattern, "Некорректное имя пользователя"),
+  serverName: z.string().trim().min(2).max(48).regex(/^[^\u0000-\u001f\u007f]+$/u, "Название содержит недопустимые символы"),
+  domain: z.string().trim().toLowerCase().regex(domainPattern).optional(),
+  email: z.string().trim().email().max(254).optional(),
+  mode: deploymentModeSchema,
+  authentication: z.enum(["private-key", "password"]),
+  keyLabel: z.string().min(1).max(260).optional(),
+}).strict().superRefine((configuration, context) => {
+  if (configuration.domain && !configuration.email) context.addIssue({ code: "custom", path: ["email"], message: "Для TLS-сертификата нужен email" });
+  if (configuration.email && !configuration.domain) context.addIssue({ code: "custom", path: ["domain"], message: "Email используется только вместе с доменом" });
+});
+
 export const deploymentRequestSchema = deploymentConnectionSchema.extend({
   ownerPublicKey: z.string().min(40).max(1_000),
   serverName: z.string().trim().min(2).max(48).regex(/^[^\u0000-\u001f\u007f]+$/u, "Название содержит недопустимые символы"),
@@ -60,6 +73,7 @@ export const deploymentEnvironmentSchema = z.object({
   dockerCompose: z.boolean(),
   dockerUsable: z.boolean(),
   occupiedPorts: z.array(z.number().int().min(1).max(65_535)).max(3),
+  openCordInstalled: z.boolean(),
   supported: z.boolean(),
 }).strict();
 
@@ -89,6 +103,7 @@ export type SelectedSshKey = z.infer<typeof selectedSshKeySchema>;
 export type DeploymentRequest = z.infer<typeof deploymentRequestSchema>;
 export type DeploymentConnection = z.infer<typeof deploymentConnectionSchema>;
 export type DeploymentMode = z.infer<typeof deploymentModeSchema>;
+export type SavedDeploymentConfiguration = z.infer<typeof savedDeploymentConfigurationSchema>;
 export type DeploymentEnvironment = z.infer<typeof deploymentEnvironmentSchema>;
 export type DeploymentProgress = z.infer<typeof deploymentProgressSchema>;
 export type DeploymentStartResult = z.infer<typeof deploymentStartResultSchema>;

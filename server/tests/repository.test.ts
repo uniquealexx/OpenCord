@@ -21,9 +21,15 @@ describe("ChatRepository", () => {
     const channel = server.channels.find((item) => item.kind === "text");
     expect(channel).toBeDefined();
     await repository.upsertUser("user-1", "public-key", { displayName: "Лина", avatar: null });
-    const created = await repository.createMessage(randomUUID(), channel!.id, "user-1", "Первое настоящее сообщение");
-    const history = await repository.getHistory(channel!.id, 50);
-    expect(history).toEqual([created]);
+    const messageId = randomUUID();
+    const created = await repository.createMessage(messageId, channel!.id, "user-1", "Первое настоящее сообщение");
+    expect(created?.editedAt).toBeNull();
+    const updated = await repository.updateMessage(messageId, "user-1", "Исправленное сообщение");
+    expect(updated).toMatchObject({ id: messageId, content: "Исправленное сообщение" });
+    expect(updated?.editedAt).toBeTruthy();
+    expect(await repository.getHistory(channel!.id, 50)).toEqual([updated]);
+    expect(await repository.deleteMessage(messageId, "user-1", false)).toMatchObject({ channelId: channel!.id });
+    expect(await repository.getHistory(channel!.id, 50)).toEqual([]);
   });
 
   it("updates channels and deletes their message history", async () => {
@@ -41,7 +47,8 @@ describe("ChatRepository", () => {
     await repository.upsertUser("member", "member-public-key", { displayName: "Участник", avatar: null });
     expect(await repository.ensureMembership("owner", "owner-public-key", "owner-public-key")).toBe("owner");
     expect(await repository.ensureMembership("member", "member-public-key", "owner-public-key")).toBe("member");
-    expect(permissionsForRole("owner")).toEqual(["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"]);
+    expect(permissionsForRole("owner")).toEqual(["MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER"]);
+    expect(permissionsForRole("administrator")).toContain("MANAGE_MESSAGES");
     expect(await repository.setMemberRole("member", "administrator")).toBe("updated");
     expect((await repository.listMembers(new Set())).find((member) => member.id === "member")?.role).toBe("administrator");
     expect(await repository.setMemberRole("owner", "member")).toBe("owner");

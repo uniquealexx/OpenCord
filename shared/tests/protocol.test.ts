@@ -26,4 +26,24 @@ describe("OpenCord protocol", () => {
     expect(clientEventSchema.parse({ type: "server.delete", requestId: crypto.randomUUID() })).toMatchObject({ type: "server.delete" });
     expect(serverEventSchema.parse({ type: "server.deleted", serverId: crypto.randomUUID() })).toMatchObject({ type: "server.deleted" });
   });
+
+  it("limits message attachments and validates their metadata", () => {
+    const attachmentId = crypto.randomUUID();
+    expect(clientEventSchema.parse({ type: "chat.send", requestId: crypto.randomUUID(), channelId: crypto.randomUUID(), content: "Файл", attachmentIds: [attachmentId] })).toMatchObject({ attachmentIds: [attachmentId] });
+    expect(clientEventSchema.parse({ type: "chat.send", requestId: crypto.randomUUID(), channelId: crypto.randomUUID(), content: "", attachmentIds: [attachmentId] })).toMatchObject({ content: "", attachmentIds: [attachmentId] });
+    expect(() => clientEventSchema.parse({ type: "chat.send", requestId: crypto.randomUUID(), channelId: crypto.randomUUID(), content: "", attachmentIds: [] })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "chat.send", requestId: crypto.randomUUID(), channelId: crypto.randomUUID(), content: "Слишком много", attachmentIds: Array.from({ length: 6 }, () => crypto.randomUUID()) })).toThrow();
+    expect(serverEventSchema.parse({
+      type: "message.created",
+      message: { id: crypto.randomUUID(), channelId: crypto.randomUUID(), authorId: "user", authorName: "Лина", authorAvatar: null, content: "Файл", createdAt: new Date().toISOString(), attachments: [{ id: attachmentId, fileName: "план.pdf", mimeType: "application/pdf", sizeBytes: 1024, sha256: "a".repeat(64) }] },
+    })).toMatchObject({ type: "message.created" });
+  });
+
+  it("validates message editing and deletion events", () => {
+    const messageId = crypto.randomUUID();
+    const channelId = crypto.randomUUID();
+    expect(clientEventSchema.parse({ type: "message.update", requestId: crypto.randomUUID(), messageId, content: "Исправлено" })).toMatchObject({ type: "message.update", messageId });
+    expect(clientEventSchema.parse({ type: "message.delete", requestId: crypto.randomUUID(), messageId })).toMatchObject({ type: "message.delete", messageId });
+    expect(serverEventSchema.parse({ type: "message.deleted", messageId, channelId })).toEqual({ type: "message.deleted", messageId, channelId });
+  });
 });

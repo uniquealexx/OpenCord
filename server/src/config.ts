@@ -7,6 +7,7 @@ const configSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3210),
   DATABASE_URL: z.string().url().optional(),
   PGLITE_DATA_DIR: z.string().default(path.resolve(".data", "opencord")),
+  ATTACHMENTS_DIR: z.string().default(path.resolve(".data", "attachments")),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   BOOTSTRAP_OWNER_PUBLIC_KEY: z.string().min(40).max(1_000).optional(),
   SERVER_NAME: z.string().trim().min(2).max(48).regex(/^[^\u0000-\u001f\u007f]+$/u).default("OpenCord Server"),

@@ -1,5 +1,8 @@
 import { generateKeyPairSync, randomUUID, sign, type KeyObject } from "node:crypto";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PROTOCOL_VERSION, serverEventSchema, type ServerEvent } from "@opencord/shared";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,9 +10,11 @@ import { buildApp } from "../src/app";
 import { PGliteDatabase } from "../src/database/database";
 
 const openApps: Awaited<ReturnType<typeof buildApp>>[] = [];
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("WebSocket chat flow", () => {
@@ -42,6 +47,52 @@ describe("WebSocket chat flow", () => {
     await Promise.all(closed);
   }, 15_000);
 
+  it("uploads, attaches and downloads a file through an authenticated session", async () => {
+    const attachmentsDir = await mkdtemp(path.join(tmpdir(), "opencord-attachments-"));
+    temporaryDirectories.push(attachmentsDir);
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), attachmentsDir });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const client = await connectAndAuthenticate(`${baseUrl.replace("http", "ws")}/ws`, "Файловый пользователь");
+    const channel = client.snapshot.server.channels.find((item) => item.kind === "text");
+    if (!channel) throw new Error("Text channel expected");
+    const file = Buffer.from("OpenCord attachment test", "utf8");
+
+    const upload = await fetch(`${baseUrl}/api/attachments`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${client.sessionToken}`,
+        "content-type": "application/octet-stream",
+        "content-length": String(file.length),
+        "x-opencord-file-name": Buffer.from("проверка.txt").toString("base64url"),
+        "x-opencord-mime-type": "text/plain",
+      },
+      body: file,
+    });
+    expect(upload.status).toBe(201);
+    const attachment = await upload.json() as { id: string; fileName: string; sizeBytes: number };
+    expect(attachment).toMatchObject({ fileName: "проверка.txt", sizeBytes: file.length });
+
+    const createdPromise = waitForEvent(client.socket, "message.created");
+    client.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: "", attachmentIds: [attachment.id] }));
+    const created = await createdPromise;
+    if (created.type !== "message.created") throw new Error("Message expected");
+    expect(created.message.content).toBe("");
+    expect(created.message.attachments[0]).toMatchObject({ id: attachment.id, fileName: "проверка.txt" });
+
+    const download = await fetch(`${baseUrl}/api/attachments/${attachment.id}`, { headers: { authorization: `Bearer ${client.sessionToken}` } });
+    expect(download.status).toBe(200);
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(file);
+    expect((await fetch(`${baseUrl}/api/attachments/${attachment.id}`)).status).toBe(401);
+
+    const closed = once(client.socket, "close");
+    client.socket.close();
+    await closed;
+  }, 15_000);
+
   it("bootstraps one owner, enforces permissions and promotes an administrator", async () => {
     const ownerKeys = generateKeyPairSync("ed25519");
     const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
@@ -68,9 +119,37 @@ describe("WebSocket chat flow", () => {
     member.socket.send(JSON.stringify({ type: "channel.delete", requestId: randomUUID(), channelId: existingChannel.id }));
     expect((await forbiddenDelete).code).toBe("FORBIDDEN");
 
+    const ownerMessageCreated = waitForEvent(member.socket, "message.created");
+    owner.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: existingChannel.id, content: "Сообщение владельца" }));
+    const ownerMessage = await ownerMessageCreated;
+    if (ownerMessage.type !== "message.created") throw new Error("Owner message expected");
+
+    const memberMessageCreated = waitForEvent(owner.socket, "message.created");
+    member.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: existingChannel.id, content: "Сообщение участника" }));
+    const memberMessage = await memberMessageCreated;
+    if (memberMessage.type !== "message.created") throw new Error("Member message expected");
+
+    const foreignEditDenied = waitForEvent(owner.socket, "error");
+    owner.socket.send(JSON.stringify({ type: "message.update", requestId: randomUUID(), messageId: memberMessage.message.id, content: "Чужая правка" }));
+    expect((await foreignEditDenied).code).toBe("FORBIDDEN");
+
+    const ownMessageUpdated = waitForEvent(owner.socket, "message.updated");
+    member.socket.send(JSON.stringify({ type: "message.update", requestId: randomUUID(), messageId: memberMessage.message.id, content: "Исправлено автором" }));
+    const updated = await ownMessageUpdated;
+    expect(updated.type === "message.updated" && updated.message).toMatchObject({ id: memberMessage.message.id, content: "Исправлено автором" });
+    expect(updated.type === "message.updated" && updated.message.editedAt).toBeTruthy();
+
+    const foreignDeleteDenied = waitForEvent(member.socket, "error");
+    member.socket.send(JSON.stringify({ type: "message.delete", requestId: randomUUID(), messageId: ownerMessage.message.id }));
+    expect((await foreignDeleteDenied).code).toBe("FORBIDDEN");
+
     const promotedSnapshot = waitForEvent(member.socket, "server.snapshot");
     owner.socket.send(JSON.stringify({ type: "member.role.set", requestId: randomUUID(), userId: member.userId, role: "administrator" }));
     expect((await promotedSnapshot).server.currentUser.role).toBe("administrator");
+
+    const adminDeletedMessage = waitForEvent(owner.socket, "message.deleted");
+    member.socket.send(JSON.stringify({ type: "message.delete", requestId: randomUUID(), messageId: ownerMessage.message.id }));
+    expect(await adminDeletedMessage).toMatchObject({ messageId: ownerMessage.message.id, channelId: existingChannel.id });
 
     const channelSnapshot = waitForEvent(member.socket, "server.snapshot");
     member.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "новости", kind: "text", description: "Обновления" }));
@@ -109,7 +188,7 @@ async function connectToDeletedServer(url: string, displayName: string): Promise
   return deleted;
 }
 
-async function connectAndAuthenticate(url: string, displayName: string, keys = generateKeyPairSync("ed25519")): Promise<{ socket: WebSocket; snapshot: Extract<ServerEvent, { type: "server.snapshot" }>; userId: string }> {
+async function connectAndAuthenticate(url: string, displayName: string, keys = generateKeyPairSync("ed25519")): Promise<{ socket: WebSocket; snapshot: Extract<ServerEvent, { type: "server.snapshot" }>; userId: string; sessionToken: string }> {
   const socket = new WebSocket(url);
   const challengeEvent = await waitForEvent(socket, "auth.challenge");
   if (challengeEvent.type !== "auth.challenge") throw new Error("Challenge expected");
@@ -122,7 +201,7 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   const snapshotEvent = await snapshot;
   if (snapshotEvent.type !== "server.snapshot") throw new Error("Snapshot expected");
   if (authenticated.type !== "auth.ok") throw new Error("Auth ok expected");
-  return { socket, snapshot: snapshotEvent, userId: authenticated.userId };
+  return { socket, snapshot: snapshotEvent, userId: authenticated.userId, sessionToken: authenticated.sessionToken };
 }
 
 function exportPublicKey(publicKey: KeyObject): string {
