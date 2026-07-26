@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer } from "@/components/client-app";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
+import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
 function readyState(): PersistedClientState {
   const state: PersistedClientState = {
@@ -48,12 +49,21 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
-    const { rerender } = render(<LeaveServerDialog server={server} canUpdate canDeleteForAll open onOpenChange={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    rerender(<LeaveServerDialog server={server} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
+  });
+
+  it("allows the owner to remove a server avatar", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn(() => true);
+    render(<ServerAvatarDialog server={{ ...readyState().servers[0]!, avatar: "data:image/png;base64,AA==" }} open onOpenChange={vi.fn()} onSave={onSave} />);
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить аватар" }));
+    expect(onSave).toHaveBeenCalledWith(null);
   });
 
   it("derives a safe recovery preset for an outdated legacy server", () => {
@@ -67,19 +77,39 @@ describe("ClientApp", () => {
     const onDelete = vi.fn(() => true);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "До правки", createdAt: new Date().toISOString(), editedAt: null };
-    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    expect(screen.getByText("Лина")).not.toHaveAttribute("style");
 
     await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
     await user.click(screen.getByRole("menuitem", { name: "Редактировать" }));
     const editor = screen.getByRole("textbox", { name: "Редактирование сообщения" });
     await user.clear(editor);
     await user.type(editor, "После правки{Enter}");
-    expect(onEdit).toHaveBeenCalledWith(message, "После правки");
+    expect(onEdit).toHaveBeenCalledWith(message, "После правки", []);
 
     await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
     await user.click(screen.getByRole("menuitem", { name: "Удалить" }));
     expect(confirm).toHaveBeenCalledOnce();
     expect(onDelete).toHaveBeenCalledWith(message);
+  });
+
+  it("replaces attachments while editing and hides message actions", async () => {
+    const user = userEvent.setup();
+    const oldAttachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "старый.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) };
+    const newAttachment = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "новый.png", mimeType: "image/png", sizeBytes: 2048, sha256: "b".repeat(64) };
+    const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Текст", createdAt: new Date().toISOString(), editedAt: null, attachments: [oldAttachment] };
+    const onEdit = vi.fn(() => true);
+    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach uploading={false} onAttach={vi.fn(async () => newAttachment)} onEdit={onEdit} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Редактировать" }));
+    expect(screen.queryByRole("button", { name: /Действия с сообщением/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Удалить" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Открепить старый.png" }));
+    await user.click(screen.getByRole("button", { name: "Прикрепить файл к редактируемому сообщению" }));
+    expect(await screen.findByText("новый.png")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Редактирование сообщения" }), "{Enter}");
+    expect(onEdit).toHaveBeenCalledWith(message, "Текст", [newAttachment]);
   });
 
   it("switches channels and sends a local message", async () => {
@@ -217,17 +247,20 @@ describe("ClientApp", () => {
     const next = applyServerSnapshot(state, {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
+      avatar: "data:image/png;base64,AA==",
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал" }],
-      members: [{ id: "server-admin", displayName: "Анна", avatar: null, status: "online", role: "administrator" }],
+      members: [{ id: "server-admin", displayName: "Анна", avatar: "data:image/webp;base64,AA==", status: "online", role: "administrator" }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
     expect(next.servers[0]?.name).toBe("OpenCord Server");
+    expect(next.servers[0]?.avatar).toBe("data:image/png;base64,AA==");
     expect(next.servers[0]?.channels[0]?.serverId).toBe("test-server");
     expect(next.servers[0]?.members[0]).toMatchObject({
       displayName: "Анна",
       role: "Администратор",
       serverRole: "administrator",
+      avatar: "data:image/webp;base64,AA==",
     });
   });
 
@@ -238,6 +271,7 @@ describe("ClientApp", () => {
     const next = applyServerSnapshot(state, {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
+      avatar: null,
       channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description })),
       members: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },

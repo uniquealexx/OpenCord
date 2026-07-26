@@ -128,6 +128,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (session) session.expiresAt = Date.now() + 15 * 60_000;
     }
     if (event.type === "ping") return send(connection.socket, { type: "pong", requestId: event.requestId, serverTime: new Date().toISOString() });
+    if (event.type === "profile.update") {
+      if (!(await repository.updateUserProfile(connection.userId, event.profile))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Профиль пользователя не найден");
+      broadcast({ type: "member.updated", member: await repository.getMember(connection.userId, true) });
+      return;
+    }
+    if (event.type === "server.leave") {
+      const userId = connection.userId;
+      const role = await repository.leaveServer(userId);
+      if (!role) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник сервера не найден");
+      if (role === "owner") broadcast({ type: "member.updated", member: await repository.getMember(userId, false) });
+      else broadcast({ type: "member.removed", userId });
+      connection.userId = null;
+      connection.socket.close(1000, "Left server");
+      return;
+    }
     if (event.type === "history.request") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       const messages = await repository.getHistory(event.channelId, event.limit);
@@ -144,9 +159,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const existing = await repository.getMessageAccess(event.messageId);
       if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       if (existing.authorId !== connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Редактировать можно только собственные сообщения");
-      const message = await repository.updateMessage(event.messageId, connection.userId, event.content);
-      if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Сообщение должно содержать текст или вложение");
-      broadcast({ type: "message.updated", message });
+      const updated = await repository.updateMessage(event.messageId, connection.userId, event.content, event.attachmentIds);
+      if (!updated) return sendError(connection.socket, event.requestId, "CONFLICT", "Сообщение должно содержать текст или доступное вложение");
+      await Promise.all(updated.removedStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
+      broadcast({ type: "message.updated", message: updated.message });
       return;
     }
     if (event.type === "message.delete") {
@@ -184,6 +200,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (result === "not_found") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден");
       if (result === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Роль владельца нельзя изменить этой командой");
       await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "server.avatar.update") {
+      if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может изменить аватар сервера");
+      await repository.updateServerAvatar(event.avatar);
+      const server = await repository.getServer();
+      broadcast({ type: "server.avatar.updated", serverId: server.id, avatar: server.avatar });
       return;
     }
     if (event.type === "server.delete") {

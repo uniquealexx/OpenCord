@@ -88,9 +88,40 @@ describe("WebSocket chat flow", () => {
     expect(Buffer.from(await download.arrayBuffer())).toEqual(file);
     expect((await fetch(`${baseUrl}/api/attachments/${attachment.id}`)).status).toBe(401);
 
+    const updatedPromise = waitForEvent(client.socket, "message.updated");
+    client.socket.send(JSON.stringify({ type: "message.update", requestId: randomUUID(), messageId: created.message.id, content: "Файл откреплён", attachmentIds: [] }));
+    const updated = await updatedPromise;
+    expect(updated.type === "message.updated" && updated.message).toMatchObject({ content: "Файл откреплён", attachments: [] });
+    expect((await fetch(`${baseUrl}/api/attachments/${attachment.id}`, { headers: { authorization: `Bearer ${client.sessionToken}` } })).status).toBe(404);
+
     const closed = once(client.socket, "close");
     client.socket.close();
     await closed;
+  }, 15_000);
+
+  it("broadcasts profile replacement and removes a leaving member", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://") });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const observer = await connectAndAuthenticate(url, "Наблюдатель");
+    const memberJoined = waitForEvent(observer.socket, "member.updated");
+    const member = await connectAndAuthenticate(url, "Участник");
+    expect(await memberJoined).toMatchObject({ member: { id: member.userId, displayName: "Участник", avatar: null } });
+    const avatar = "data:image/webp;base64,AA==";
+
+    const profileUpdated = waitForEvent(observer.socket, "member.updated");
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { displayName: "Новое имя", avatar } }));
+    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, displayName: "Новое имя", avatar } });
+
+    const memberRemoved = waitForEvent(observer.socket, "member.removed");
+    const memberClosed = once(member.socket, "close");
+    member.socket.send(JSON.stringify({ type: "server.leave", requestId: randomUUID() }));
+    expect(await memberRemoved).toEqual({ type: "member.removed", userId: member.userId });
+    await memberClosed;
+    observer.socket.close();
   }, 15_000);
 
   it("bootstraps one owner, enforces permissions and promotes an administrator", async () => {
@@ -103,11 +134,14 @@ describe("WebSocket chat flow", () => {
     if (!address || typeof address === "string") throw new Error("Unexpected test address");
     const url = `ws://127.0.0.1:${address.port}/ws`;
 
-    const owner = await connectAndAuthenticate(url, "Владелец", ownerKeys);
+    const ownerAvatar = "data:image/webp;base64,AA==";
+    const owner = await connectAndAuthenticate(url, "Владелец", ownerKeys, ownerAvatar);
     const member = await connectAndAuthenticate(url, "Участник");
     expect(owner.snapshot.server.currentUser.role).toBe("owner");
     expect(owner.snapshot.server.currentUser.permissions).toContain("MANAGE_ROLES");
+    expect(owner.snapshot.server.currentUser.permissions).toContain("MANAGE_SERVER");
     expect(member.snapshot.server.currentUser.role).toBe("member");
+    expect(member.snapshot.server.members.find((item) => item.id === owner.userId)?.avatar).toBe(ownerAvatar);
 
     const forbidden = waitForEvent(member.socket, "error");
     member.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "закрытый", kind: "text", description: "" }));
@@ -118,6 +152,16 @@ describe("WebSocket chat flow", () => {
     const forbiddenDelete = waitForEvent(member.socket, "error");
     member.socket.send(JSON.stringify({ type: "channel.delete", requestId: randomUUID(), channelId: existingChannel.id }));
     expect((await forbiddenDelete).code).toBe("FORBIDDEN");
+
+    const forbiddenAvatar = waitForEvent(member.socket, "error");
+    member.socket.send(JSON.stringify({ type: "server.avatar.update", requestId: randomUUID(), avatar: "data:image/png;base64,AA==" }));
+    expect((await forbiddenAvatar).code).toBe("FORBIDDEN");
+
+    const ownerAvatarUpdated = waitForEvent(owner.socket, "server.avatar.updated");
+    const memberAvatarUpdated = waitForEvent(member.socket, "server.avatar.updated");
+    owner.socket.send(JSON.stringify({ type: "server.avatar.update", requestId: randomUUID(), avatar: "data:image/png;base64,AA==" }));
+    expect(await ownerAvatarUpdated).toMatchObject({ avatar: "data:image/png;base64,AA==" });
+    expect(await memberAvatarUpdated).toMatchObject({ avatar: "data:image/png;base64,AA==" });
 
     const ownerMessageCreated = waitForEvent(member.socket, "message.created");
     owner.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: existingChannel.id, content: "Сообщение владельца" }));
@@ -188,7 +232,7 @@ async function connectToDeletedServer(url: string, displayName: string): Promise
   return deleted;
 }
 
-async function connectAndAuthenticate(url: string, displayName: string, keys = generateKeyPairSync("ed25519")): Promise<{ socket: WebSocket; snapshot: Extract<ServerEvent, { type: "server.snapshot" }>; userId: string; sessionToken: string }> {
+async function connectAndAuthenticate(url: string, displayName: string, keys = generateKeyPairSync("ed25519"), avatar: string | null = null): Promise<{ socket: WebSocket; snapshot: Extract<ServerEvent, { type: "server.snapshot" }>; userId: string; sessionToken: string }> {
   const socket = new WebSocket(url);
   const challengeEvent = await waitForEvent(socket, "auth.challenge");
   if (challengeEvent.type !== "auth.challenge") throw new Error("Challenge expected");
@@ -196,7 +240,7 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   const signature = sign(null, Buffer.from(challengeEvent.challenge, "base64"), keys.privateKey).toString("base64");
   const authOk = waitForEvent(socket, "auth.ok");
   const snapshot = waitForEvent(socket, "server.snapshot");
-  socket.send(JSON.stringify({ type: "auth.respond", requestId: challengeEvent.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { displayName, avatar: null } }));
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challengeEvent.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { displayName, avatar } }));
   const authenticated = await authOk;
   const snapshotEvent = await snapshot;
   if (snapshotEvent.type !== "server.snapshot") throw new Error("Snapshot expected");

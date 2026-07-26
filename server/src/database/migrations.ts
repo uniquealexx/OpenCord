@@ -107,6 +107,10 @@ const migrations = [
     id: "007_message_editing",
     sql: `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at timestamptz;`,
   },
+  {
+    id: "008_server_avatar",
+    sql: `ALTER TABLE servers ADD COLUMN IF NOT EXISTS avatar text;`,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

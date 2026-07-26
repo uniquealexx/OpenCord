@@ -28,11 +28,13 @@ export const mockMemberSchema = z.object({
   serverRole: z.enum(["owner", "administrator", "member"]).optional(),
   status: z.enum(["online", "idle", "offline"]),
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
+  avatar: z.string().max(2_000_000).nullable().optional(),
 });
 
 export const mockServerSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1).max(48),
+  avatar: z.string().max(1_500_000).nullable().optional(),
   address: z.string().max(200).nullable(),
   accent: z.string().regex(/^#[0-9a-f]{6}$/i),
   channels: z.array(mockChannelSchema),
@@ -46,6 +48,7 @@ export const mockMessageSchema = z.object({
   authorId: z.string().min(1),
   authorName: z.string().min(1).max(32),
   authorColor: z.string().regex(/^#[0-9a-f]{6}$/i),
+  authorAvatar: z.string().max(2_000_000).nullable().optional(),
   content: z.string().trim().max(4_000),
   createdAt: z.string().datetime(),
   editedAt: z.string().datetime().nullable().optional(),

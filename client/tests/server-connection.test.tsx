@@ -61,7 +61,7 @@ describe("server connection", () => {
 
   it("stops reconnecting and requests an update for an outdated server", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
     const { result, rerender, unmount } = renderHook(({ reconnectToken }) => useServerConnection(server, profile, callbacks, reconnectToken), { initialProps: { reconnectToken: 0 } });
     const socket = FakeWebSocket.instances[0];
     act(() => socket?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "old", expiresAt: new Date().toISOString() }));
@@ -77,7 +77,7 @@ describe("server connection", () => {
 
   it("authenticates and reconnects after the socket closes", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
     const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const first = FakeWebSocket.instances[0];
     expect(first?.url).toBe("ws://127.0.0.1:3210/ws");
@@ -109,22 +109,34 @@ describe("server connection", () => {
     act(() => {
       expect(result.current.updateChannel(channelId, "анонсы", "Важные новости")).toBe(true);
       expect(result.current.deleteChannel(channelId)).toBe(true);
-      expect(result.current.updateMessage(channelId, "Исправлено")).toBe(true);
+      expect(result.current.updateMessage(channelId, "Исправлено", [channelId])).toBe(true);
       expect(result.current.deleteMessage(channelId)).toBe(true);
+      expect(result.current.updateProfile({ displayName: "Новое имя", avatar: "data:image/webp;base64,AA==" })).toBe(true);
+      expect(result.current.leaveServer()).toBe(true);
+      expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
     });
-    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string }) ?? [];
+    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[] }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
     expect(sentEvents.some((event) => event.type === "message.update")).toBe(true);
+    expect(sentEvents.find((event) => event.type === "message.update")?.attachmentIds).toEqual([channelId]);
     expect(sentEvents.some((event) => event.type === "message.delete")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "profile.update")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "server.leave")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "server.avatar.update")).toBe(true);
+
+    act(() => first?.receive({ type: "server.avatar.updated", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", avatar: "data:image/webp;base64,AA==" }));
+    expect(callbacks.onServerAvatarUpdated).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253", "data:image/webp;base64,AA==");
 
     const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [] };
     act(() => {
       first?.receive({ type: "message.updated", message });
       first?.receive({ type: "message.deleted", messageId: channelId, channelId });
+      first?.receive({ type: "member.removed", userId: "removed-user" });
     });
     expect(callbacks.onMessageUpdated).toHaveBeenCalledWith(message);
     expect(callbacks.onMessageDeleted).toHaveBeenCalledWith(channelId, channelId);
+    expect(callbacks.onMemberRemoved).toHaveBeenCalledWith("removed-user");
 
     act(() => first?.disconnect());
     expect(result.current.status).toBe("reconnecting");
@@ -136,7 +148,7 @@ describe("server connection", () => {
 
   it("stops reconnecting when the server is deleted", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
     const { unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const socket = FakeWebSocket.instances[0];
     act(() => socket?.receive({ type: "server.deleted", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253" }));
