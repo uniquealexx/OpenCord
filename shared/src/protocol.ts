@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 11 as const;
+export const PROTOCOL_VERSION = 12 as const;
 
 export const memberRoleSchema = z.enum(["owner", "administrator", "member"]);
-export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER"]);
+export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
 
 export const serverAvatarSchema = z.string().max(1_500_000).regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/u).nullable();
 
@@ -21,6 +21,18 @@ export const channelSchema = z.object({
   name: z.string().min(1).max(48),
   kind: z.enum(["text", "voice"]),
   description: z.string().max(120),
+});
+
+export const voiceCapabilitySchema = z.object({
+  status: z.enum(["available", "degraded", "disabled"]),
+  secureTransport: z.boolean(),
+  maxParticipants: z.number().int().min(1).max(100),
+  warning: z.string().max(240).nullable(),
+});
+
+export const voicePresenceSchema = z.object({
+  userId: z.string().min(1),
+  channelId: z.string().uuid(),
 });
 
 export const memberSchema = z.object({
@@ -77,6 +89,9 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
+  z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
+  z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
+  z.object({ type: z.literal("voice.member.disconnect"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("ping"), requestId: requestIdSchema }),
 ]).superRefine((event, context) => {
   if ((event.type === "chat.send" || event.type === "message.update") && !event.content && event.attachmentIds.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
@@ -85,7 +100,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
 export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("auth.challenge"), requestId: requestIdSchema, protocolVersion: z.literal(PROTOCOL_VERSION), challenge: z.string(), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("auth.ok"), requestId: requestIdSchema, userId: z.string(), serverId: z.string().uuid(), sessionToken: z.string().min(40).max(200), sessionExpiresAt: z.string().datetime() }),
-  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), name: z.string().min(2).max(48), avatar: serverAvatarSchema.default(null), channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }) }) }),
+  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), name: z.string().min(2).max(48), avatar: serverAvatarSchema.default(null), channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
   z.object({ type: z.literal("history.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema) }),
@@ -94,8 +109,12 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.deleted"), messageId: z.string().uuid(), channelId: z.string().uuid() }),
   z.object({ type: z.literal("member.updated"), member: memberSchema }),
   z.object({ type: z.literal("member.removed"), userId: z.string().min(1) }),
+  z.object({ type: z.literal("voice.join.authorized"), requestId: requestIdSchema, channelId: z.string().uuid(), endpoint: z.string().url(), token: z.string().min(20).max(4_000), expiresAt: z.string().datetime() }),
+  z.object({ type: z.literal("voice.participant.joined"), participant: voicePresenceSchema }),
+  z.object({ type: z.literal("voice.participant.left"), participant: voicePresenceSchema }),
+  z.object({ type: z.literal("voice.participant.disconnected"), userId: z.string().min(1), channelId: z.string().uuid(), reason: z.enum(["moderated", "replaced", "channel_deleted"]) }),
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),
-  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "INTERNAL_ERROR"]), message: z.string() }),
+  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string() }),
 ]);
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
@@ -103,6 +122,8 @@ export type Channel = z.infer<typeof channelSchema>;
 export type Member = z.infer<typeof memberSchema>;
 export type MemberRole = z.infer<typeof memberRoleSchema>;
 export type Permission = z.infer<typeof permissionSchema>;
+export type VoiceCapability = z.infer<typeof voiceCapabilitySchema>;
+export type VoicePresence = z.infer<typeof voicePresenceSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;

@@ -1,9 +1,13 @@
 import { PGliteDatabase, PostgresDatabase } from "./database/database";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
+import { DisabledVoiceService, LiveKitVoiceService } from "./voice";
 
 const config = loadConfig();
 const database = config.DATABASE_URL ? new PostgresDatabase(config.DATABASE_URL) : new PGliteDatabase(config.PGLITE_DATA_DIR);
+const voiceService = config.LIVEKIT_INTERNAL_URL && config.LIVEKIT_PUBLIC_URL && config.LIVEKIT_API_KEY && config.LIVEKIT_API_SECRET
+  ? new LiveKitVoiceService({ internalUrl: config.LIVEKIT_INTERNAL_URL, publicUrl: config.LIVEKIT_PUBLIC_URL, apiKey: config.LIVEKIT_API_KEY, apiSecret: config.LIVEKIT_API_SECRET, secureTransport: config.VOICE_SECURE_MODE, maxParticipants: config.VOICE_MAX_PARTICIPANTS })
+  : new DisabledVoiceService();
 const app = await buildApp({
   database,
   logger: { level: config.LOG_LEVEL },
@@ -12,6 +16,7 @@ const app = await buildApp({
   serverName: config.SERVER_NAME,
   deploymentId: config.DEPLOYMENT_ID,
   attachmentsDir: config.ATTACHMENTS_DIR,
+  voiceService,
 });
 
 try {

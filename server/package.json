@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "main": "dist/index.js",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "cross-env ALLOW_INSECURE_FIRST_USER_OWNER=true tsx watch src/index.ts",
     "start": "node dist/index.js",
@@ -19,6 +21,7 @@
     "@fastify/websocket": "latest",
     "@opencord/shared": "workspace:*",
     "fastify": "latest",
+    "livekit-server-sdk": "^2.17.0",
     "pg": "latest",
     "ws": "latest",
     "zod": "latest"
@@ -29,8 +32,8 @@
     "@types/ws": "latest",
     "cross-env": "latest",
     "eslint": "^9.39.0",
-    "tsx": "latest",
     "tsup": "latest",
+    "tsx": "latest",
     "typescript": "^6.0.0",
     "typescript-eslint": "latest",
     "vitest": "latest"

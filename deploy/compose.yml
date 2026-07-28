@@ -38,17 +38,27 @@ services:
       SERVER_NAME_FILE: /run/secrets/server_name
       DEPLOYMENT_ID_FILE: /run/secrets/deployment_id
       ATTACHMENTS_DIR: /var/lib/opencord/attachments
+      LIVEKIT_INTERNAL_URL: http://livekit:7880
+      LIVEKIT_PUBLIC_URL: wss://voice.${OPENCORD_DOMAIN}
+      LIVEKIT_API_KEY_FILE: /run/secrets/livekit_api_key
+      LIVEKIT_API_SECRET_FILE: /run/secrets/livekit_api_secret
+      VOICE_SECURE_MODE: "true"
+      VOICE_MAX_PARTICIPANTS: "25"
     secrets:
       - database_url
       - owner_public_key
       - server_name
       - deployment_id
+      - livekit_api_key
+      - livekit_api_secret
     depends_on:
       database:
         condition: service_healthy
         restart: true
       attachments-init:
         condition: service_completed_successfully
+      livekit:
+        condition: service_started
     expose:
       - "3210"
     healthcheck:
@@ -62,6 +72,35 @@ services:
       - /tmp:size=16m,mode=1777
     volumes:
       - attachments_data:/var/lib/opencord/attachments
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - edge
+
+  livekit:
+    image: livekit/livekit-server:v1.9.10
+    restart: unless-stopped
+    user: "10001:10001"
+    entrypoint: ["sh", "/usr/local/bin/opencord-livekit-entrypoint"]
+    environment:
+      LIVEKIT_WEBHOOK_URL: http://server:3210/internal/livekit/webhook
+    secrets:
+      - livekit_api_key
+      - livekit_api_secret
+    ports:
+      - "3478:3478/udp"
+      - "7881:7881"
+      - "50000-50200:50000-50200/udp"
+    expose:
+      - "7880"
+    volumes:
+      - ./deploy/livekit-entrypoint.sh:/usr/local/bin/opencord-livekit-entrypoint:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -107,6 +146,8 @@ services:
       server:
         condition: service_healthy
         restart: true
+      livekit:
+        condition: service_started
     security_opt:
       - no-new-privileges:true
     networks:
@@ -123,6 +164,10 @@ secrets:
     file: ./deploy/secrets/server_name
   deployment_id:
     file: ./deploy/secrets/deployment_id
+  livekit_api_key:
+    file: ./deploy/secrets/livekit_api_key
+  livekit_api_secret:
+    file: ./deploy/secrets/livekit_api_secret
 
 volumes:
   postgres_data:

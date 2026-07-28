@@ -39,7 +39,8 @@ describe("persisted client state", () => {
       activeChannelId: "welcome",
     };
     const migrated = parsePersistedState(legacy);
-    expect(migrated.version).toBe(2);
+    expect(migrated.version).toBe(3);
+    expect(migrated.preferences.voiceInputMode).toBe("voice");
     expect(migrated.servers.map((server) => server.id)).toEqual(["real-server"]);
     expect(migrated.messages.map((message) => message.id)).toEqual(["real-message"]);
     expect(migrated.activeServerId).toBe("real-server");

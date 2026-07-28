@@ -1,4 +1,10 @@
 services:
   server:
+    environment:
+      LIVEKIT_PUBLIC_URL: ws://${VOICE_PUBLIC_HOST:-localhost}:7880
+      VOICE_SECURE_MODE: "false"
     ports:
       - "3210:3210"
+  livekit:
+    ports:
+      - "7880:7880"

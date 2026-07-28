@@ -12,6 +12,7 @@ INSECURE_MODE="${2:-}"
 PUBLIC_ENDPOINT="${3:-}"
 OPENCORD_DOMAIN="${4:-}"
 ACME_EMAIL="${5:-}"
+VOICE_PUBLIC_HOST="${6:-}"
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MANAGEMENT_ROOT="/home/opencord"
 
@@ -69,6 +70,7 @@ ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl
   printf 'PUBLIC_ENDPOINT=%q\n' "${PUBLIC_ENDPOINT}"
   printf 'OPENCORD_DOMAIN=%q\n' "${OPENCORD_DOMAIN}"
   printf 'ACME_EMAIL=%q\n' "${ACME_EMAIL}"
+  printf 'VOICE_PUBLIC_HOST=%q\n' "${VOICE_PUBLIC_HOST}"
 } > "${MANAGEMENT_ROOT}/settings/server.env"
 chown root:opencord "${MANAGEMENT_ROOT}/settings/server.env"
 chmod 0640 "${MANAGEMENT_ROOT}/settings/server.env"
@@ -102,7 +104,7 @@ fi
 chown root:opencord "${MANAGEMENT_ROOT}/data/README.md"
 chmod 0640 "${MANAGEMENT_ROOT}/data/README.md"
 
-for command in status logs start stop restart settings backup clear-messages update uninstall; do
+for command in status doctor logs start stop restart settings backup clear-messages update uninstall; do
   ln -sfn -- ../opencordctl "${MANAGEMENT_ROOT}/scripts/${command}.sh"
 done
 rm -f -- "${MANAGEMENT_ROOT}/.uninstalled"

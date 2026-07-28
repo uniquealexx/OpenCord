@@ -47,6 +47,7 @@ describe("SSH deployment boundary", () => {
     expect(buildInstallCommand("/tmp/opencord-safe", { username: "root", domain: "chat.example.com", email: "admin@example.com", ownerPublicKey, serverName: "Команда", mode: "native" })).toContain("install-native-ubuntu.sh");
     const insecureCommand = buildInstallCommand("/tmp/opencord-safe", { username: "root", ownerPublicKey, serverName: "Команда", mode: "native" });
     expect(insecureCommand).toContain("--insecure");
+    expect(insecureCommand).toContain("--public-host 'localhost'");
     expect(insecureCommand).not.toContain("--domain");
     expect(insecureServerUrl("127.0.0.1")).toBe("http://127.0.0.1:3210");
     expect(insecureServerUrl("::1")).toBe("http://[::1]:3210");

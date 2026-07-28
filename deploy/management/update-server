@@ -121,7 +121,11 @@ printf 'Создание обязательной резервной копии 
 
 installer_arguments=(--owner-public-key "${owner_public_key}" --server-name "${server_name}")
 if [[ "${INSECURE_MODE:-false}" == "true" ]]; then
-  installer_arguments=(--insecure "${installer_arguments[@]}")
+  if [[ -z "${VOICE_PUBLIC_HOST:-}" ]]; then
+    printf 'Ð’ Ð½Ð°ÑÑ‚Ñ€Ð¾Ð¹ÐºÐ°Ñ… Ð¾Ñ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÐµÑ‚ Ð¿ÑƒÐ±Ð»Ð¸Ñ‡Ð½Ñ‹Ð¹ Ð°Ð´Ñ€ÐµÑ LiveKit; Ð²Ñ‹Ð¿Ð¾Ð»Ð½Ð¸Ñ‚Ðµ Ð¿ÐµÑ€ÐµÑ€Ð°Ð·Ð²Ñ‘Ñ€Ñ‚Ñ‹Ð²Ð°Ð½Ð¸Ðµ Ð¸Ð· OpenCord Client.\n' >&2
+    exit 1
+  fi
+  installer_arguments=(--insecure --public-host "${VOICE_PUBLIC_HOST}" "${installer_arguments[@]}")
 else
   if [[ -z "${OPENCORD_DOMAIN:-}" || -z "${ACME_EMAIL:-}" ]]; then
     printf 'В настройках отсутствуют домен или ACME email; сначала выполните одно переразвёртывание из клиента.\n' >&2

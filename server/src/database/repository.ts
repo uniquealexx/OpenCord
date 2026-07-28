@@ -45,6 +45,12 @@ export class ChatRepository {
     return rows[0]?.exists === true;
   }
 
+  async getChannel(channelId: string): Promise<Channel | null> {
+    const rows = await this.database.query<ChannelRow>("SELECT id, name, kind, description FROM channels WHERE id = $1 AND server_id = $2", [channelId, DEFAULT_SERVER_ID]);
+    const row = rows[0];
+    return row ? { id: row.id, name: row.name, kind: row.kind, description: row.description } : null;
+  }
+
   async createChannel(id: string, name: string, kind: Channel["kind"], description: string): Promise<Channel> {
     const rows = await this.database.query<ChannelRow>(
       `INSERT INTO channels (id, server_id, name, kind, description, position)
@@ -314,9 +320,9 @@ export class ChatRepository {
 }
 
 export function permissionsForRole(role: MemberRole): Permission[] {
-  if (role === "owner") return ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER"];
-  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES"];
-  return [];
+  if (role === "owner") return ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+  return ["VOICE_CONNECT", "VOICE_SPEAK"];
 }
 
 function mapMessage(row: MessageRow, attachments: Attachment[] = []): ChatMessage {

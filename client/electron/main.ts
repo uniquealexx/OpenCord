@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell, type OpenDialogOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { IPC } from "../src/shared/bridge";
@@ -16,6 +16,26 @@ let store: ClientStateStore;
 let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
 const selectedSshKeys = new Map<string, string>();
+
+function isTrustedRenderer(url: string): boolean {
+  if (developmentUrl) {
+    try { return new URL(url).origin === new URL(developmentUrl).origin; } catch { return false; }
+  }
+  return url.startsWith("file://");
+}
+
+function configureMediaPermissions(): void {
+  const appSession = session.defaultSession;
+  appSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => permission === "media"
+    && details.mediaType === "audio"
+    && isTrustedRenderer(webContents?.getURL() || requestingOrigin));
+  appSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const audioOnly = permission === "media" && "mediaTypes" in details && details.mediaTypes?.includes("audio") === true && details.mediaTypes.includes("video") === false;
+    callback(audioOnly && isTrustedRenderer(webContents.getURL()));
+  });
+  // Never grant a screen or system-audio capture source in this client.
+  appSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -125,6 +145,7 @@ if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {
 app.setAppUserModelId("org.opencord.desktop");
 
 void app.whenReady().then(() => {
+  configureMediaPermissions();
   store = new ClientStateStore(app.getPath("userData"));
   identityStore = new IdentityStore(app.getPath("userData"));
   const bundleRoot = app.isPackaged ? path.join(process.resourcesPath, "deployment-bundle") : path.resolve(app.getAppPath(), "..");

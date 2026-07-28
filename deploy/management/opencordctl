@@ -75,7 +75,7 @@ service_action() {
     case "${action}" in
       start) compose up --detach --remove-orphans ;;
       stop) compose stop ;;
-      restart) compose restart server ;;
+      restart) compose restart server livekit ;;
     esac
   else
     systemctl "${action}" opencord-server
@@ -96,6 +96,23 @@ show_status() {
       systemctl is-active caddy
     fi
   fi
+}
+
+doctor() {
+  if [[ "${INSTALL_MODE}" != "docker" ]]; then
+    printf 'Native voice service is not installed yet. Check OpenCord Server with: systemctl status opencord-server\n'
+    systemctl is-active --quiet opencord-server
+    return
+  fi
+  local server_id livekit_id
+  server_id="$(compose ps --status running --quiet server)"
+  livekit_id="$(compose ps --status running --quiet livekit)"
+  if [[ -z "${server_id}" || -z "${livekit_id}" ]]; then
+    printf 'OpenCord Server or LiveKit is not running. Run: sudo opencordctl status\n' >&2
+    return 1
+  fi
+  compose exec -T server node -e "fetch('http://127.0.0.1:3210/health').then(async r => { const health = await r.json(); if (!r.ok || health.voice?.status !== 'available') process.exit(1); }).catch(() => process.exit(1))"
+  printf 'OpenCord Server and LiveKit are available.\n'
 }
 
 show_logs() {
@@ -277,6 +294,7 @@ purge_installation() {
 require_root
 case "${command_name}" in
   status) show_status ;;
+  doctor) doctor ;;
   logs) show_logs "${1:-200}" ;;
   start|stop|restart) service_action "${command_name}" ;;
   settings) show_settings ;;

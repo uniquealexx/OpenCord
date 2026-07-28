@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import type { Attachment, MemberRole, Permission, ServerEvent } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Minimize2, MoreHorizontal, Paperclip, Pencil, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Smile, Trash2, UserCog, Users, Volume2, X } from "lucide-react";
+import type { Attachment, MemberRole, Permission, ServerEvent, VoiceCapability, VoicePresence } from "@opencord/shared";
+import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Smile, Trash2, UserCog, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { Onboarding } from "@/components/onboarding";
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
+import { useVoiceSession, type VoiceAuthorization } from "@/hooks/use-voice-session";
 import { ru } from "@/lib/i18n/ru";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
@@ -34,6 +35,9 @@ export function ClientApp(): React.ReactElement {
   const [notice, setNotice] = useState<string | null>(null);
   const [managedChannel, setManagedChannel] = useState<MockChannel | null>(null);
   const [accessByServer, setAccessByServer] = useState<Record<string, CurrentAccess>>({});
+  const [voiceCapabilityByServer, setVoiceCapabilityByServer] = useState<Record<string, VoiceCapability>>({});
+  const [voicePresenceByServer, setVoicePresenceByServer] = useState<Record<string, VoicePresence[]>>({});
+  const [voiceAuthorization, setVoiceAuthorization] = useState<VoiceAuthorization | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
@@ -41,6 +45,12 @@ export function ClientApp(): React.ReactElement {
     onSnapshot: (snapshot) => {
       if (!snapshot.channels.some((channel) => channel.id === state?.activeChannelId)) { setDraft(""); setPendingAttachments([]); }
       if (connectionServer) setAccessByServer((current) => ({ ...current, [connectionServer.id]: snapshot.currentUser }));
+      if (connectionServer) {
+        const capability = snapshot.voice;
+        const participants = snapshot.voiceParticipants;
+        if (capability) setVoiceCapabilityByServer((current) => ({ ...current, [connectionServer.id]: capability }));
+        if (participants) setVoicePresenceByServer((current) => ({ ...current, [connectionServer.id]: participants }));
+      }
       commit((current) => applyServerSnapshot(current, snapshot));
     },
     onServerAvatarUpdated: (_serverId, avatar) => {
@@ -59,8 +69,22 @@ export function ClientApp(): React.ReactElement {
       commit((current) => removeServers(current, (server) => server.id === connectionServer.id || sameServerAddress(server.address, deletedAddress)));
       setModal(null); setDraft(""); setNotice(ru.server.deleted);
     },
+    onVoiceAuthorization: (authorization) => setVoiceAuthorization({ channelId: authorization.channelId, endpoint: authorization.endpoint, token: authorization.token, expiresAt: authorization.expiresAt }),
+    onVoicePresence: (participant, connected) => {
+      if (!connectionServer) return;
+      setVoicePresenceByServer((current) => {
+        const existing = current[connectionServer.id] ?? [];
+        const next = connected ? [...existing.filter((item) => item.userId !== participant.userId), participant] : existing.filter((item) => item.userId !== participant.userId || item.channelId !== participant.channelId);
+        return { ...current, [connectionServer.id]: next };
+      });
+    },
+    onVoiceDisconnected: (userId, channelId) => {
+      if (connectionServer) setVoicePresenceByServer((current) => ({ ...current, [connectionServer.id]: (current[connectionServer.id] ?? []).filter((item) => item.userId !== userId || item.channelId !== channelId) }));
+      if (userId === currentAccess?.id) { setVoiceAuthorization(null); setNotice("Вы отключены от голосового канала"); }
+    },
     onError: setNotice,
   }, connectionRevision);
+  const voice = useVoiceSession(voiceAuthorization, state?.preferences ?? createDefaultState().preferences, setNotice);
 
   useEffect(() => {
     const bridge = window.openCord?.storage;
@@ -93,6 +117,8 @@ export function ClientApp(): React.ReactElement {
   const profile = state.profile;
   const activeServer = state.servers.find((server) => server.id === state.activeServerId);
   const currentAccess = activeServer ? accessByServer[activeServer.id] : undefined;
+  const voiceCapability = activeServer ? voiceCapabilityByServer[activeServer.id] : undefined;
+  const voiceParticipants = activeServer ? voicePresenceByServer[activeServer.id] ?? [] : [];
   const updatePreset = activeServer ? activeServer.deployment ?? deploymentPresetFromServer(activeServer) : undefined;
   const activeChannel = activeServer?.channels.find((channel) => channel.id === state.activeChannelId) ?? activeServer?.channels.find((channel) => channel.kind === "text");
   const messages = activeChannel ? state.messages.filter((message) => message.channelId === activeChannel.id) : [];
@@ -113,6 +139,18 @@ export function ClientApp(): React.ReactElement {
     commit((current) => ({ ...current, activeChannelId: channelId }));
     setDraft("");
     setPendingAttachments([]);
+  }
+
+  function joinVoiceChannel(channel: MockChannel): void {
+    if (!activeServer?.address) { setNotice("Голосовой чат доступен только на подключённом OpenCord Server"); return; }
+    if (voiceCapability?.status !== "available") { setNotice(voiceCapability?.warning ?? "Голосовой сервер недоступен. Обновите или проверьте сервер."); return; }
+    if (!connection.joinVoice(channel.id)) setNotice("Сервер ещё не готов подключить к голосовому каналу");
+  }
+
+  function leaveVoiceChannel(): void {
+    connection.leaveVoice();
+    void voice.leave();
+    setVoiceAuthorization(null);
   }
 
   function addServer(server: MockServer): boolean {
@@ -271,7 +309,7 @@ export function ClientApp(): React.ReactElement {
     <main className="relative flex min-h-0 flex-1 overflow-hidden bg-[#0c0f17] text-slate-200">
       <ServerRail servers={state.servers} activeId={activeServer?.id} onHome={openHome} onSelect={selectServer} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} />
       {activeServer ? <>
-        <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onVoiceNotice={() => setNotice(ru.channel.voiceUnavailable)} />
+        <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} />
         {activeChannel ? <section className="flex min-w-0 flex-1 flex-col bg-[#111520]">
           <ChatHeader channelName={activeChannel?.name ?? "канал"} description={activeChannel?.description ?? ""} connectionStatus={activeServer.address ? connection.status : "demo"} memberList={state.preferences.showMemberList} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} />
           <ProtocolNotice status={connection.status} />
@@ -327,7 +365,7 @@ function HomeScreen({ serverCount, onCreate, onConnect }: { serverCount: number;
   </section>;
 }
 
-export function ChannelSidebar({ server, activeChannelId, profile, canManageChannels, onCreateChannel, onEditChannel, onDeleteChannel, onSelectChannel, onServerMenu, onProfile, onSettings, onVoiceNotice }: { server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onVoiceNotice: () => void }): React.ReactElement {
+export function ChannelSidebar({ server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, deafened = false, activeSpeakerIds = [], currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onSelectChannel, onServerMenu, onProfile, onSettings, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onVoiceNotice }: { server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onVoiceNotice?: () => void }): React.ReactElement {
   const textChannels = server.channels.filter((channel) => channel.kind === "text");
   const voiceChannels = server.channels.filter((channel) => channel.kind === "voice");
   const [contextMenu, setContextMenu] = useState<{ channel: MockChannel; x: number; y: number } | null>(null);
@@ -357,13 +395,19 @@ export function ChannelSidebar({ server, activeChannelId, profile, canManageChan
   return <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-[#0e121b]">
     <button aria-label={`${ru.server.manage}: ${server.name}`} onClick={onServerMenu} className="flex h-14 items-center justify-between border-b border-white/[.055] px-4 text-left font-semibold text-slate-100 transition hover:bg-white/[.035]">{server.name}<ChevronDown className="size-4 text-slate-500" /></button>
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-4"><ChannelGroup title={ru.channel.text} canCreate={canManageChannels} onCreate={onCreateChannel}>{textChannels.map((channel) => <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}><Hash className="size-4 shrink-0" /><span className="truncate">{channel.name}</span></button>)}</ChannelGroup>
-    <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <button key={channel.id} onClick={onVoiceNotice} onContextMenu={(event) => openContextMenu(event, channel)} className="mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-600 transition hover:bg-white/[.035] hover:text-slate-400"><Volume2 className="size-4" />{channel.name}<span className="ml-auto rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase">скоро</span></button>)}</ChannelGroup></div>
+    <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <div key={channel.id} className="mb-1"><button onClick={() => { if (onJoinVoice) onJoinVoice(channel); else onVoiceNotice?.(); }} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}><Volume2 className="size-4" /><span className="truncate">{channel.name}</span>{voiceParticipants.some((participant) => participant.channelId === channel.id) && <span className="ml-auto text-[10px] text-slate-500">{voiceParticipants.filter((participant) => participant.channelId === channel.id).length}/{voiceCapability?.maxParticipants ?? 25}</span>}</button>{voiceParticipants.filter((participant) => participant.channelId === channel.id).map((participant) => { const member = server.members.find((item) => item.id === participant.userId); const isSpeaking = activeSpeakerIds.includes(participant.userId); return <div key={participant.userId} className={cn("ml-7 flex h-7 items-center gap-1.5 text-xs text-slate-500", isSpeaking && "text-emerald-300")}><span className={cn("size-1.5 rounded-full", isSpeaking ? "bg-emerald-400 shadow-[0_0_8px_#34d399]" : "bg-slate-600")} />{member?.displayName ?? "Участник"}{participant.userId === currentUserId && " (вы)"}</div>; })}</div>)}</ChannelGroup></div>
+    {voiceChannelId && onLeaveVoice && onMuted && onDeafened && <VoicePanel channel={voiceChannels.find((channel) => channel.id === voiceChannelId)} status={voiceStatus} muted={muted} deafened={deafened} onMuted={onMuted} onDeafened={onDeafened} onLeave={onLeaveVoice} />}
     <div className="flex h-14 items-center gap-2 border-t border-white/[.055] bg-[#0a0d14] px-2"><button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5"><Avatar name={profile.displayName} image={profile.avatar} size="sm" status="online" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span><span className="block text-[10px] text-emerald-400">{ru.common.online}</span></span></button><button title={ru.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200"><Settings className="size-4" /></button></div>
     {contextMenu && <div role="menu" aria-label={ru.channel.manageMenu(contextMenu.channel.name)} onPointerDown={(event) => event.stopPropagation()} className="fixed z-[80] w-48 rounded-xl border border-white/10 bg-[#171c28] p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.55)]" style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button role="menuitem" onClick={() => { const channel = contextMenu.channel; setContextMenu(null); onEditChannel(channel); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-300 hover:bg-white/[.06] hover:text-white"><Pencil className="size-3.5" />{ru.channel.edit}</button>
       <button role="menuitem" onClick={() => { const channel = contextMenu.channel; setContextMenu(null); onDeleteChannel(channel); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-red-300 hover:bg-red-400/10"><Trash2 className="size-3.5" />{ru.channel.delete}</button>
     </div>}
   </aside>;
+}
+
+function VoicePanel({ channel, status, muted, deafened, onMuted, onDeafened, onLeave }: { channel?: MockChannel; status: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted: boolean; deafened: boolean; onMuted: (value: boolean) => void; onDeafened: (value: boolean) => void; onLeave: () => void }): React.ReactElement {
+  const label = status === "reconnecting" ? "Переподключение…" : status === "connecting" ? "Подключение…" : status === "connected" ? "Подключено" : "Ошибка соединения";
+  return <div className="border-t border-violet-400/15 bg-violet-400/[.06] px-3 py-2"><div className="flex items-center gap-2 text-xs"><Headphones className="size-3.5 text-violet-300" /><span className="min-w-0 flex-1 truncate font-medium text-slate-200">{channel?.name ?? "Голосовой канал"}</span><span className="text-[10px] text-slate-500">{label}</span></div><div className="mt-2 flex gap-1"><button title={muted ? "Включить микрофон" : "Выключить микрофон"} onClick={() => onMuted(!muted)} className={cn("rounded-lg p-1.5 hover:bg-white/10", muted ? "text-red-300" : "text-slate-300")}>{muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}</button><button title={deafened ? "Включить звук" : "Отключить звук"} onClick={() => onDeafened(!deafened)} className={cn("rounded-lg p-1.5 hover:bg-white/10", deafened ? "text-red-300" : "text-slate-300")}><VolumeX className="size-4" /></button><button title="Выйти из голосового канала" onClick={onLeave} className="ml-auto rounded-lg p-1.5 text-red-300 hover:bg-red-400/10"><PhoneOff className="size-4" /></button></div></div>;
 }
 
 function ChannelDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenChange: (open: boolean) => void; onCreate: (name: string, kind: "text" | "voice", description: string) => void }): React.ReactElement {

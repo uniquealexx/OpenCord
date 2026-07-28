@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverEventSchema, userAvatarSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type PublicProfile, type ServerEvent } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverEventSchema, userAvatarSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type PublicProfile, type ServerEvent, type VoicePresence } from "@opencord/shared";
 import type { LocalProfile, MockServer } from "@/shared/state";
 
 export type ConnectionStatus = "demo" | "connecting" | "authenticating" | "connected" | "reconnecting" | "server-outdated" | "client-outdated" | "error";
@@ -18,13 +18,16 @@ interface ConnectionCallbacks {
   onMember(member: Member): void;
   onMemberRemoved(userId: string): void;
   onServerDeleted(serverId: string): void;
+  onVoiceAuthorization?(authorization: Extract<ServerEvent, { type: "voice.join.authorized" }>): void;
+  onVoicePresence?(participant: VoicePresence, connected: boolean): void;
+  onVoiceDisconnected?(userId: string, channelId: string, reason: "moderated" | "replaced" | "channel_deleted"): void;
   onError(message: string): void;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; disconnectVoiceMember(userId: string): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -137,6 +140,14 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           callbacksRef.current.onMember(event.member);
         } else if (event.type === "member.removed") {
           callbacksRef.current.onMemberRemoved(event.userId);
+        } else if (event.type === "voice.join.authorized") {
+          callbacksRef.current.onVoiceAuthorization?.(event);
+        } else if (event.type === "voice.participant.joined") {
+          callbacksRef.current.onVoicePresence?.(event.participant, true);
+        } else if (event.type === "voice.participant.left") {
+          callbacksRef.current.onVoicePresence?.(event.participant, false);
+        } else if (event.type === "voice.participant.disconnected") {
+          callbacksRef.current.onVoiceDisconnected?.(event.userId, event.channelId, event.reason);
         } else if (event.type === "server.deleted") {
           fatal = true;
           clearHeartbeat();
@@ -251,7 +262,28 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sessionToken, sendMessage, updateMessage, deleteMessage, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, setMemberRole, deleteServer };
+  const joinVoice = useCallback((channelId: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "voice.join", requestId: crypto.randomUUID(), channelId });
+    return true;
+  }, [status]);
+
+  const leaveVoice = useCallback((): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "voice.leave", requestId: crypto.randomUUID() });
+    return true;
+  }, [status]);
+
+  const disconnectVoiceMember = useCallback((userId: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "voice.member.disconnect", requestId: crypto.randomUUID(), userId });
+    return true;
+  }, [status]);
+
+  return { status, sessionToken, sendMessage, updateMessage, deleteMessage, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, setMemberRole, deleteServer, joinVoice, leaveVoice, disconnectVoiceMember };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {

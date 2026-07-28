@@ -51,7 +51,7 @@ describe("ClientStateStore", () => {
     };
     await writeFile(store.filePath, JSON.stringify(legacy), "utf8");
     const migrated = await store.load();
-    expect(migrated).toMatchObject({ version: 2, servers: [], activeServerId: null });
+    expect(migrated).toMatchObject({ version: 3, servers: [], activeServerId: null });
     expect(JSON.parse(await readFile(store.filePath, "utf8"))).toEqual(migrated);
     expect((await readdir(directory)).some((file) => file.startsWith("client-state.corrupt-"))).toBe(false);
   });

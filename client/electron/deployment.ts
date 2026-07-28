@@ -27,6 +27,7 @@ const BUNDLE_ENTRIES = [
   "deploy/compose.yml",
   "deploy/compose.insecure.yml",
   "deploy/Caddyfile",
+  "deploy/livekit-entrypoint.sh",
   "deploy/.env.example",
   "deploy/scripts/install-ubuntu.sh",
   "deploy/scripts/install-native-ubuntu.sh",
@@ -215,12 +216,12 @@ export function posixQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-export function buildInstallCommand(remoteRoot: string, request: Pick<DeploymentRequest, "username" | "domain" | "email" | "ownerPublicKey" | "serverName" | "sudoPassword" | "mode">): string {
+export function buildInstallCommand(remoteRoot: string, request: Pick<DeploymentRequest, "username" | "domain" | "email" | "ownerPublicKey" | "serverName" | "sudoPassword" | "mode"> & { host?: string }): string {
   const scriptName = request.mode === "native" ? "install-native-ubuntu.sh" : "install-ubuntu.sh";
   const installer = `${remoteRoot}/deploy/scripts/${scriptName}`;
   const argumentsLine = request.domain && request.email
     ? `--domain ${posixQuote(request.domain)} --email ${posixQuote(request.email)}`
-    : "--insecure";
+    : `--insecure --public-host ${posixQuote(request.host ?? "localhost")}`;
   const invocation = `bash ${posixQuote(installer)} ${argumentsLine} --owner-public-key ${posixQuote(request.ownerPublicKey)} --server-name ${posixQuote(request.serverName)}`;
   if (request.username === "root") return invocation;
   return request.sudoPassword ? `sudo -S -p '' -- ${invocation}` : `sudo -n -- ${invocation}`;

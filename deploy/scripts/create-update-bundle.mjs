@@ -20,6 +20,7 @@ const entries = [
   "deploy/compose.yml",
   "deploy/compose.insecure.yml",
   "deploy/Caddyfile",
+  "deploy/livekit-entrypoint.sh",
   "deploy/.env.example",
   "deploy/scripts/install-ubuntu.sh",
   "deploy/scripts/install-native-ubuntu.sh",

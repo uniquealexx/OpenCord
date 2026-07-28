@@ -3,6 +3,8 @@
 }
 
 {$OPENCORD_DOMAIN} {
+	@livekitWebhook path /internal/livekit/*
+	respond @livekitWebhook 404
 	encode zstd gzip
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -14,4 +16,14 @@
 		health_interval 30s
 		stream_close_delay 5m
 	}
+}
+
+voice.{$OPENCORD_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	reverse_proxy livekit:7880
 }

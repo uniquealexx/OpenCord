@@ -11,6 +11,7 @@ import { runMigrations } from "./database/migrations";
 import { ChatRepository, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, MAX_ATTACHMENT_BYTES, type AttachmentStorage } from "./attachments/storage";
+import { DisabledVoiceService, VoiceRoomFullError, VoiceUnavailableError, type VoiceService } from "./voice";
 
 interface ConnectionState {
   socket: WebSocket;
@@ -30,22 +31,37 @@ export interface BuildAppOptions {
   deploymentId?: string;
   attachmentsDir?: string;
   attachmentStorage?: AttachmentStorage;
+  voiceService?: VoiceService;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   await runMigrations(options.database);
   const repository = new ChatRepository(options.database);
   const attachmentStorage = options.attachmentStorage ?? new FileSystemAttachmentStorage(options.attachmentsDir ?? path.resolve(".data", "attachments"));
+  const voice = options.voiceService ?? new DisabledVoiceService();
   if (options.serverName && options.deploymentId) await repository.configureServer(options.serverName, options.deploymentId);
   const connections = new Set<ConnectionState>();
   const sessions = new Map<string, { userId: string; expiresAt: number }>();
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 2_100_000 });
+  const voiceReconcileTimer = setInterval(() => { void reconcileVoicePresence(); }, 30_000);
+  voiceReconcileTimer.unref();
 
   await app.register(cors, { origin: false });
   await app.register(websocket, { options: { maxPayload: 2_100_000 } });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+  app.addContentTypeParser("application/webhook+json", { parseAs: "string" }, (_request, body, done) => done(null, body));
 
-  app.get("/health", async () => ({ status: "ok", database: options.database.kind, protocolVersion: PROTOCOL_VERSION }));
+  app.get("/health", async () => ({ status: "ok", database: options.database.kind, protocolVersion: PROTOCOL_VERSION, voice: await voice.capability() }));
+
+  app.post("/internal/livekit/webhook", async (request, reply) => {
+    if (typeof request.body !== "string") return reply.code(400).send({ error: "INVALID_WEBHOOK" });
+    try {
+      const change = await voice.receiveWebhook(request.body, request.headers.authorization);
+      if (change?.joined) broadcast({ type: "voice.participant.joined", participant: change.joined });
+      if (change?.left) broadcast({ type: "voice.participant.left", participant: change.left });
+      return reply.code(204).send();
+    } catch { return reply.code(401).send({ error: "INVALID_WEBHOOK" }); }
+  });
 
   app.post("/api/attachments", { bodyLimit: MAX_ATTACHMENT_BYTES }, async (request, reply) => {
     const userId = authorizeHttp(request.headers.authorization);
@@ -106,6 +122,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   app.addHook("onClose", async () => {
+    clearInterval(voiceReconcileTimer);
     for (const connection of connections) connection.socket.close(1001, "Server shutdown");
     connections.clear();
     sessions.clear();
@@ -135,6 +152,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "server.leave") {
       const userId = connection.userId;
+      const voicePresence = await voice.leave(userId);
+      if (voicePresence) broadcast({ type: "voice.participant.left", participant: voicePresence });
       const role = await repository.leaveServer(userId);
       if (!role) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник сервера не найден");
       if (role === "owner") broadcast({ type: "member.updated", member: await repository.getMember(userId, false) });
@@ -190,7 +209,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "channel.delete") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для удаления каналов");
+      const channel = await repository.getChannel(event.channelId);
       if (!(await repository.deleteChannel(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (channel?.kind === "voice") {
+        const disconnected = await voice.removeChannel(channel.id);
+        for (const participant of disconnected) broadcast({ type: "voice.participant.disconnected", userId: participant.userId, channelId: participant.channelId, reason: "channel_deleted" });
+      }
       await broadcastSnapshots();
       return;
     }
@@ -207,6 +231,39 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await repository.updateServerAvatar(event.avatar);
       const server = await repository.getServer();
       broadcast({ type: "server.avatar.updated", serverId: server.id, avatar: server.avatar });
+      return;
+    }
+    if (event.type === "voice.join") {
+      if (!(await hasPermission(connection.userId, "VOICE_CONNECT")) || !(await hasPermission(connection.userId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для подключения к голосовому каналу");
+      const channel = await repository.getChannel(event.channelId);
+      if (!channel || channel.kind !== "voice") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Голосовой канал не найден");
+      try {
+        const server = await repository.getServer();
+        const authorization = await voice.issueJoin({ serverId: server.id, channelId: channel.id, userId: connection.userId });
+        if (authorization.replaced) broadcast({ type: "voice.participant.disconnected", userId: authorization.replaced.userId, channelId: authorization.replaced.channelId, reason: "replaced" });
+        send(connection.socket, { type: "voice.join.authorized", requestId: event.requestId, channelId: channel.id, endpoint: authorization.endpoint, token: authorization.token, expiresAt: authorization.expiresAt });
+      } catch (error) {
+        if (error instanceof VoiceUnavailableError) return sendError(connection.socket, event.requestId, "VOICE_UNAVAILABLE", error.message);
+        if (error instanceof VoiceRoomFullError) return sendError(connection.socket, event.requestId, "VOICE_ROOM_FULL", error.message);
+        app.log.error(error);
+        return sendError(connection.socket, event.requestId, "INTERNAL_ERROR", "Не удалось подготовить голосовое подключение");
+      }
+      return;
+    }
+    if (event.type === "voice.leave") {
+      const presence = await voice.leave(connection.userId);
+      if (presence) broadcast({ type: "voice.participant.left", participant: presence });
+      return;
+    }
+    if (event.type === "voice.member.disconnect") {
+      if (!(await hasPermission(connection.userId, "VOICE_MODERATE"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для управления голосовым каналом");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Выйдите из канала самостоятельно");
+      let targetRole: import("@opencord/shared").MemberRole;
+      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      const actorRole = await repository.getMemberRole(connection.userId);
+      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя отключить этого участника");
+      const presence = await voice.disconnect(event.userId, "moderated");
+      if (presence) broadcast({ type: "voice.participant.disconnected", userId: presence.userId, channelId: presence.channelId, reason: "moderated" });
       return;
     }
     if (event.type === "server.delete") {
@@ -254,12 +311,22 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const role = await repository.getMemberRole(connection.userId);
     send(connection.socket, {
       type: "server.snapshot",
-      server: { ...server, members: await repository.listMembers(onlineUserIds()), currentUser: { id: connection.userId, role, permissions: permissionsForRole(role) } },
+      server: { ...server, members: await repository.listMembers(onlineUserIds()), currentUser: { id: connection.userId, role, permissions: permissionsForRole(role) }, voice: await voice.capability(), voiceParticipants: voice.presence() },
     });
   }
 
   async function broadcastSnapshots(): Promise<void> {
     await Promise.all([...connections].map((connection) => sendSnapshot(connection)));
+  }
+
+  async function reconcileVoicePresence(): Promise<void> {
+    try {
+      const server = await repository.getServer();
+      const before = JSON.stringify({ presence: voice.presence(), capability: await voice.capability() });
+      await voice.reconcile(server.channels.filter((channel) => channel.kind === "voice").map((channel) => channel.id));
+      const after = JSON.stringify({ presence: voice.presence(), capability: await voice.capability() });
+      if (before !== after) await broadcastSnapshots();
+    } catch (error) { app.log.warn(error, "Voice presence reconciliation failed"); }
   }
 
   function onlineUserIds(): Set<string> {

@@ -9,11 +9,12 @@ OPENCORD_DOMAIN="${OPENCORD_DOMAIN:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 OWNER_PUBLIC_KEY=""
 SERVER_NAME=""
+VOICE_PUBLIC_HOST=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
 usage() {
-  printf 'Usage: sudo bash deploy/scripts/install-ubuntu.sh (--domain chat.example.com --email admin@example.com | --insecure) --owner-public-key BASE64_KEY --server-name NAME [--install-dir /opt/opencord] [--skip-docker-install]\n'
+  printf 'Usage: sudo bash deploy/scripts/install-ubuntu.sh (--domain chat.example.com --email admin@example.com | --insecure --public-host HOST) --owner-public-key BASE64_KEY --server-name NAME [--install-dir /opt/opencord] [--skip-docker-install]\n'
 }
 
 while (($#)); do
@@ -23,6 +24,7 @@ while (($#)); do
     --insecure) INSECURE_MODE="true"; shift ;;
     --owner-public-key) OWNER_PUBLIC_KEY="${2:-}"; shift 2 ;;
     --server-name) SERVER_NAME="${2:-}"; shift 2 ;;
+    --public-host) VOICE_PUBLIC_HOST="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_ROOT="${2:-}"; shift 2 ;;
     --skip-docker-install) INSTALL_DOCKER="false"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -68,7 +70,7 @@ if [[ "${ID:-}" != "ubuntu" || ! "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]]; then
   exit 1
 fi
 
-for required_file in .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
+for required_file in .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
   if [[ ! -f "${SOURCE_ROOT}/${required_file}" ]]; then
     printf 'Installation bundle is incomplete: %s is missing.\n' "${required_file}" >&2
     exit 1
@@ -127,7 +129,7 @@ install -d -m 0750 -o root -g opencord "${INSTALL_ROOT}" "${INSTALL_ROOT}/deploy
 tar --create --file - --directory "${SOURCE_ROOT}" \
   --exclude='node_modules' --exclude='dist' --exclude='.data' --exclude='coverage' \
   .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json \
-  server shared deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/.env.example deploy/management \
+  server shared deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/.env.example deploy/management \
   | tar --extract --file - --directory "${INSTALL_ROOT}"
 
 DEPLOY_DIR="${INSTALL_ROOT}/deploy"
@@ -138,6 +140,14 @@ if [[ ! -s "${SECRETS_DIR}/postgres_password" ]]; then
   openssl rand -hex 32 > "${SECRETS_DIR}/postgres_password"
 fi
 chmod 0600 "${SECRETS_DIR}/postgres_password"
+
+if [[ ! -s "${SECRETS_DIR}/livekit_api_key" ]]; then
+  printf 'OC%s\n' "$(openssl rand -hex 10)" > "${SECRETS_DIR}/livekit_api_key"
+fi
+if [[ ! -s "${SECRETS_DIR}/livekit_api_secret" ]]; then
+  openssl rand -base64 48 | tr -d '\r\n' > "${SECRETS_DIR}/livekit_api_secret"
+fi
+chmod 0600 "${SECRETS_DIR}/livekit_api_key" "${SECRETS_DIR}/livekit_api_secret"
 
 if [[ ! -s "${SECRETS_DIR}/owner_public_key" ]]; then
   printf '%s\n' "${OWNER_PUBLIC_KEY}" > "${SECRETS_DIR}/owner_public_key"
@@ -157,15 +167,30 @@ chown 10001:10001 \
   "${SECRETS_DIR}/owner_public_key" \
   "${SECRETS_DIR}/server_name" \
   "${SECRETS_DIR}/deployment_id" \
-  "${SECRETS_DIR}/database_url"
+  "${SECRETS_DIR}/database_url" \
+  "${SECRETS_DIR}/livekit_api_key" \
+  "${SECRETS_DIR}/livekit_api_secret"
 chmod 0400 \
   "${SECRETS_DIR}/owner_public_key" \
   "${SECRETS_DIR}/server_name" \
   "${SECRETS_DIR}/deployment_id" \
-  "${SECRETS_DIR}/database_url"
+  "${SECRETS_DIR}/database_url" \
+  "${SECRETS_DIR}/livekit_api_key" \
+  "${SECRETS_DIR}/livekit_api_secret"
 
 if [[ "${INSECURE_MODE}" == "true" ]]; then
-  printf 'OPENCORD_DOMAIN=localhost\nACME_EMAIL=unused@example.invalid\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n' > "${DEPLOY_DIR}/.env"
+  # Older clients do not provide this new argument during a redeployment.
+  # localhost is correct for the supported WSL test setup; current clients pass
+  # the requested SSH host for a remote IP deployment.
+  if [[ -z "${VOICE_PUBLIC_HOST}" ]]; then
+    VOICE_PUBLIC_HOST="localhost"
+    printf 'Voice public host was not supplied; using localhost for insecure mode.\n' >&2
+  fi
+  if [[ ! "${VOICE_PUBLIC_HOST}" =~ ^[-A-Za-z0-9._:]+$ ]]; then
+    printf 'Voice public host contains unsupported characters.\n' >&2
+    exit 1
+  fi
+  printf 'OPENCORD_DOMAIN=localhost\nACME_EMAIL=unused@example.invalid\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\nVOICE_PUBLIC_HOST=%s\n' "${VOICE_PUBLIC_HOST}" > "${DEPLOY_DIR}/.env"
 else
   printf 'OPENCORD_DOMAIN=%s\nACME_EMAIL=%s\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n' \
     "${OPENCORD_DOMAIN}" "${ACME_EMAIL}" > "${DEPLOY_DIR}/.env"
@@ -181,12 +206,12 @@ compose() {
 printf 'Validating the OpenCord Compose configuration...\n'
 compose config --quiet
 printf 'Pulling infrastructure images and building OpenCord Server...\n'
-if [[ "${INSECURE_MODE}" == "true" ]]; then compose pull database; else compose pull database caddy; fi
+if [[ "${INSECURE_MODE}" == "true" ]]; then compose pull database livekit; else compose pull database caddy livekit; fi
 compose build --pull server
 if [[ "${INSECURE_MODE}" == "true" ]]; then
   compose stop caddy >/dev/null 2>&1 || true
   compose rm --force caddy >/dev/null 2>&1 || true
-  compose up --detach --remove-orphans database server
+  compose up --detach --remove-orphans database livekit server
 else
   compose up --detach --remove-orphans
 fi
@@ -238,5 +263,5 @@ if [[ "${INSECURE_MODE}" == "true" ]]; then
 else
   management_endpoint="https://${OPENCORD_DOMAIN}"
 fi
-bash "${DEPLOY_DIR}/management/install-management-home" docker "${INSECURE_MODE}" "${management_endpoint}" "${OPENCORD_DOMAIN}" "${ACME_EMAIL}"
+bash "${DEPLOY_DIR}/management/install-management-home" docker "${INSECURE_MODE}" "${management_endpoint}" "${OPENCORD_DOMAIN}" "${ACME_EMAIL}" "${VOICE_PUBLIC_HOST:-${OPENCORD_DOMAIN}}"
 printf 'Re-running this installer updates the application without deleting the PostgreSQL volume.\n'

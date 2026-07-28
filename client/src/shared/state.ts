@@ -2,7 +2,7 @@ import { z } from "zod";
 import { attachmentSchema } from "@opencord/shared";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
-export const STATE_VERSION = 2 as const;
+export const STATE_VERSION = 3 as const;
 const LEGACY_TEMPLATE_SERVER_ID = "open-space";
 
 export const localProfileSchema = z.object({
@@ -61,7 +61,15 @@ export const clientPreferencesSchema = z.object({
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
   notifications: z.boolean(),
+  voiceInputMode: z.enum(["voice", "push-to-talk"]),
+  voiceInputDeviceId: z.string().max(500).nullable(),
+  voiceOutputDeviceId: z.string().max(500).nullable(),
+  pushToTalkKey: z.string().regex(/^Key[A-Z]$/).default("KeyV"),
+  echoCancellation: z.boolean(),
+  noiseSuppression: z.boolean(),
+  autoGainControl: z.boolean(),
 });
+const legacyClientPreferencesSchema = z.object({ compactMode: z.boolean(), showMemberList: z.boolean(), notifications: z.boolean() });
 
 const persistedStateFields = {
   onboardingComplete: z.boolean(),
@@ -84,7 +92,9 @@ function validateStateRelations(state: { servers: MockServer[]; activeServerId: 
 }
 
 export const persistedClientStateSchema = z.object({ version: z.literal(STATE_VERSION), ...persistedStateFields }).superRefine(validateStateRelations);
-const persistedClientStateV1Schema = z.object({ version: z.literal(1), ...persistedStateFields }).superRefine(validateStateRelations);
+const legacyPersistedStateFields = { ...persistedStateFields, preferences: legacyClientPreferencesSchema };
+const persistedClientStateV2Schema = z.object({ version: z.literal(2), ...legacyPersistedStateFields }).superRefine(validateStateRelations);
+const persistedClientStateV1Schema = z.object({ version: z.literal(1), ...legacyPersistedStateFields }).superRefine(validateStateRelations);
 
 export type LocalProfile = z.infer<typeof localProfileSchema>;
 export type MockChannel = z.infer<typeof mockChannelSchema>;
@@ -103,14 +113,15 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { compactMode: false, showMemberList: true, notifications: true },
+    preferences: { compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   };
 }
 
 export function parsePersistedState(input: unknown): PersistedClientState {
   const current = persistedClientStateSchema.safeParse(input);
   if (current.success) return current.data;
-  const legacy = persistedClientStateV1Schema.parse(input);
+  const legacyV2 = persistedClientStateV2Schema.safeParse(input);
+  const legacy = legacyV2.success ? legacyV2.data : persistedClientStateV1Schema.parse(input);
   const template = legacy.servers.find((server) => server.id === LEGACY_TEMPLATE_SERVER_ID);
   const removedChannelIds = new Set(template?.channels.map((channel) => channel.id) ?? []);
   const servers = legacy.servers.filter((server) => server.id !== LEGACY_TEMPLATE_SERVER_ID);
@@ -119,7 +130,7 @@ export function parsePersistedState(input: unknown): PersistedClientState {
   const activeChannelId = activeServerId === legacy.activeServerId && activeServer?.channels.some((channel) => channel.id === legacy.activeChannelId)
     ? legacy.activeChannelId
     : activeServer?.channels.find((channel) => channel.kind === "text")?.id ?? null;
-  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId });
+  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
 }
 
 export function safePersistedState(input: unknown): PersistedClientState {
