@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer } from "@/components/client-app";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
@@ -17,9 +17,9 @@ function readyState(): PersistedClientState {
     address: null,
     accent: "#7c5cff",
     channels: [
-      { id: "welcome", serverId: "test-server", name: "добро-пожаловать", kind: "text", description: "Начните знакомство" },
-      { id: "general", serverId: "test-server", name: "общий", kind: "text", description: "Разговоры обо всём" },
-      { id: "voice", serverId: "test-server", name: "Гостиная", kind: "voice", description: "Голосовой канал" },
+      { id: "welcome", serverId: "test-server", name: "добро-пожаловать", kind: "text", description: "Начните знакомство", participantLimit: null },
+      { id: "general", serverId: "test-server", name: "общий", kind: "text", description: "Разговоры обо всём", participantLimit: null },
+      { id: "voice", serverId: "test-server", name: "Гостиная", kind: "voice", description: "Голосовой канал", participantLimit: 25 },
     ],
     members: [],
   }];
@@ -222,7 +222,7 @@ describe("ClientApp", () => {
       name: "Следующий сервер",
       address: null,
       accent: "#36c5f0",
-      channels: [{ id: "next-general", serverId: "next-server", name: "общий", kind: "text", description: "Следующий канал" }],
+      channels: [{ id: "next-general", serverId: "next-server", name: "общий", kind: "text", description: "Следующий канал", participantLimit: null }],
       members: [],
     });
     vi.mocked(window.openCord!.storage.load).mockResolvedValue(state);
@@ -248,7 +248,7 @@ describe("ClientApp", () => {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
       avatar: "data:image/png;base64,AA==",
-      channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал" }],
+      channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
       members: [{ id: "server-admin", displayName: "Анна", avatar: "data:image/webp;base64,AA==", status: "online", role: "administrator" }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -272,7 +272,7 @@ describe("ClientApp", () => {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
       avatar: null,
-      channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description })),
+      channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit })),
       members: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -296,6 +296,18 @@ describe("ClientApp", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: channel.name }), { clientX: 120, clientY: 100 });
     await user.click(screen.getByRole("menuitem", { name: "Удалить канал" }));
     expect(onDeleteChannel).toHaveBeenCalledWith(channel);
+  });
+
+  it("offers finite and unlimited capacity for a voice channel", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<EditChannelDialog channel={readyState().servers[0]!.channels[2]!} open onOpenChange={vi.fn()} onSave={onSave} />);
+    const slider = screen.getByRole("slider", { name: "Лимит участников голосового канала" });
+    expect(slider).toHaveValue("25");
+    fireEvent.change(slider, { target: { value: "26" } });
+    expect(screen.getAllByText("∞", { selector: "span" })).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Сохранить изменения" }));
+    expect(onSave).toHaveBeenCalledWith("Гостиная", "Голосовой канал", 0);
   });
 
   it("opens the home screen and starts the connect flow", async () => {

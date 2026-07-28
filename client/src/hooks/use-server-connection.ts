@@ -27,7 +27,7 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; disconnectVoiceMember(userId: string): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; disconnectVoiceMember(userId: string): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -227,10 +227,10 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  const updateChannel = useCallback((channelId: string, name: string, description: string): boolean => {
+  const updateChannel = useCallback((channelId: string, name: string, description: string, participantLimit: number | null): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
-    sendEvent(socket, { type: "channel.update", requestId: crypto.randomUUID(), channelId, name, description });
+    sendEvent(socket, { type: "channel.update", requestId: crypto.randomUUID(), channelId, name, description, participantLimit });
     return true;
   }, [status]);
 

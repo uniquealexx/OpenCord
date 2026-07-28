@@ -202,7 +202,7 @@ describe("WebSocket chat flow", () => {
     expect(createdChannel).toBeDefined();
 
     const updatedSnapshot = waitForEvent(member.socket, "server.snapshot");
-    member.socket.send(JSON.stringify({ type: "channel.update", requestId: randomUUID(), channelId: createdChannel!.id, name: "анонсы", description: "Важные обновления" }));
+    member.socket.send(JSON.stringify({ type: "channel.update", requestId: randomUUID(), channelId: createdChannel!.id, name: "анонсы", description: "Важные обновления", participantLimit: null }));
     expect((await updatedSnapshot).server.channels.find((channel) => channel.id === createdChannel!.id)).toMatchObject({ name: "анонсы", description: "Важные обновления", kind: "text" });
 
     const deletedSnapshot = waitForEvent(member.socket, "server.snapshot");

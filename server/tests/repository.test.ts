@@ -51,12 +51,27 @@ describe("ChatRepository", () => {
 
   it("updates channels and deletes their message history", async () => {
     const created = await repository.createChannel(randomUUID(), "черновик", "text", "Старое описание");
-    expect(await repository.updateChannel(created.id, "анонсы", "Новое описание")).toMatchObject({ name: "анонсы", description: "Новое описание", kind: "text" });
+    expect(await repository.updateChannel(created.id, "анонсы", "Новое описание", null)).toMatchObject({ name: "анонсы", description: "Новое описание", kind: "text", participantLimit: null });
     await repository.upsertUser("user-1", "public-key", { displayName: "Лина", avatar: null });
     await repository.createMessage(randomUUID(), created.id, "user-1", "Будет удалено вместе с каналом");
     expect(await repository.deleteChannel(created.id)).toBe(true);
     expect(await repository.deleteChannel(created.id)).toBe(false);
     expect(await repository.getHistory(created.id, 50)).toEqual([]);
+  });
+
+  it("persists finite and unlimited voice channel capacity", async () => {
+    const created = await repository.createChannel(randomUUID(), "Гостиная", "voice", "Голосовой канал");
+    expect(created.participantLimit).toBe(25);
+    expect(await repository.updateChannel(created.id, created.name, created.description, 7)).toMatchObject({ participantLimit: 7 });
+    expect(await repository.updateChannel(created.id, created.name, created.description, 0)).toMatchObject({ participantLimit: 0 });
+    expect((await repository.getServer()).channels.find((channel) => channel.id === created.id)).toMatchObject({ participantLimit: 0 });
+  });
+
+  it("recovers when the voice limit migration was applied without its migration record", async () => {
+    await database.query("DELETE FROM schema_migrations WHERE id = $1", ["009_voice_channel_participant_limit"]);
+    await runMigrations(database);
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["009_voice_channel_participant_limit"])).toHaveLength(1);
+    expect((await repository.getServer()).channels.find((channel) => channel.kind === "voice")?.participantLimit).toBe(25);
   });
 
   it("creates one configured owner and persists administrative roles", async () => {

@@ -25,7 +25,10 @@ describe("OpenCord protocol", () => {
   it("validates role administration and channel management events", () => {
     expect(clientEventSchema.parse({ type: "channel.create", requestId: crypto.randomUUID(), name: "новости", kind: "text", description: "Обновления" })).toMatchObject({ type: "channel.create" });
     const channelId = crypto.randomUUID();
-    expect(clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "анонсы", description: "Важное" })).toMatchObject({ type: "channel.update", channelId });
+    expect(clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "анонсы", description: "Важное", participantLimit: null })).toMatchObject({ type: "channel.update", channelId });
+    expect(clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "Гостиная", description: "", participantLimit: 25 })).toMatchObject({ participantLimit: 25 });
+    expect(clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "Гостиная", description: "", participantLimit: 0 })).toMatchObject({ participantLimit: 0 });
+    expect(() => clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "Гостиная", description: "", participantLimit: 26 })).toThrow();
     expect(clientEventSchema.parse({ type: "channel.delete", requestId: crypto.randomUUID(), channelId })).toMatchObject({ type: "channel.delete", channelId });
     expect(clientEventSchema.parse({ type: "member.role.set", requestId: crypto.randomUUID(), userId: "member-1", role: "administrator" })).toMatchObject({ role: "administrator" });
     expect(() => clientEventSchema.parse({ type: "member.role.set", requestId: crypto.randomUUID(), userId: "member-1", role: "owner" })).toThrow();

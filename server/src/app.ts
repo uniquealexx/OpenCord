@@ -203,7 +203,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "channel.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения каналов");
-      if (!(await repository.updateChannel(event.channelId, event.name, event.description))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      const existingChannel = await repository.getChannel(event.channelId);
+      if (!existingChannel) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (existingChannel.kind === "voice" && event.participantLimit === null) return sendError(connection.socket, event.requestId, "INVALID_EVENT", "Для голосового канала необходим лимит участников");
+      if (!(await repository.updateChannel(event.channelId, event.name, event.description, event.participantLimit))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       await broadcastSnapshots();
       return;
     }
@@ -239,7 +242,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (!channel || channel.kind !== "voice") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Голосовой канал не найден");
       try {
         const server = await repository.getServer();
-        const authorization = await voice.issueJoin({ serverId: server.id, channelId: channel.id, userId: connection.userId });
+        const authorization = await voice.issueJoin({ serverId: server.id, channelId: channel.id, userId: connection.userId, participantLimit: channel.participantLimit ?? 25 });
         if (authorization.replaced) broadcast({ type: "voice.participant.disconnected", userId: authorization.replaced.userId, channelId: authorization.replaced.channelId, reason: "replaced" });
         send(connection.socket, { type: "voice.join.authorized", requestId: event.requestId, channelId: channel.id, endpoint: authorization.endpoint, token: authorization.token, expiresAt: authorization.expiresAt });
       } catch (error) {

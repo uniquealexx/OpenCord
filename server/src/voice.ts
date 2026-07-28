@@ -5,6 +5,7 @@ export interface VoiceJoinRequest {
   serverId: string;
   channelId: string;
   userId: string;
+  participantLimit: number;
 }
 
 export interface VoiceJoinAuthorization {
@@ -84,13 +85,15 @@ export class LiveKitVoiceService implements VoiceService {
     const room = roomName(request.serverId, request.channelId);
     this.roomsByChannel.set(request.channelId, room);
     try {
-      await this.client.createRoom({ name: room, maxParticipants: this.options.maxParticipants, emptyTimeout: 60, departureTimeout: 30 });
+      // Room capacity is enforced by OpenCord so it can be changed while a room
+      // exists. LiveKit's zero value keeps the underlying room unrestricted.
+      await this.client.createRoom({ name: room, maxParticipants: 0, emptyTimeout: 60, departureTimeout: 30 });
     } catch {
       // The room is commonly created concurrently by the first two participants.
       // LiveKit's token join remains safe when it already exists.
     }
     const participants = await this.client.listParticipants(room);
-    if (participants.filter((participant) => participant.identity !== request.userId).length >= this.options.maxParticipants) throw new VoiceRoomFullError();
+    if (request.participantLimit > 0 && participants.filter((participant) => participant.identity !== request.userId).length >= request.participantLimit) throw new VoiceRoomFullError();
     const token = new AccessToken(this.options.apiKey, this.options.apiSecret, { identity: request.userId, ttl: 300 });
     token.addGrant({ roomJoin: true, room, canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canSubscribe: true, canPublishData: false, canUpdateOwnMetadata: false });
     return { endpoint: this.options.publicUrl, token: await token.toJwt(), expiresAt: new Date(Date.now() + 300_000).toISOString(), replaced };

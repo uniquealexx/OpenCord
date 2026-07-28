@@ -111,6 +111,27 @@ const migrations = [
     id: "008_server_avatar",
     sql: `ALTER TABLE servers ADD COLUMN IF NOT EXISTS avatar text;`,
   },
+  {
+    id: "009_voice_channel_participant_limit",
+    sql: `
+      ALTER TABLE channels ADD COLUMN IF NOT EXISTS participant_limit integer;
+      UPDATE channels SET participant_limit = 25 WHERE kind = 'voice' AND participant_limit IS NULL;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'channels_participant_limit_check'
+            AND conrelid = 'channels'::regclass
+        ) THEN
+          ALTER TABLE channels ADD CONSTRAINT channels_participant_limit_check CHECK (
+            (kind = 'text' AND participant_limit IS NULL)
+            OR (kind = 'voice' AND participant_limit BETWEEN 0 AND 25)
+          );
+        END IF;
+      END
+      $$;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

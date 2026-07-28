@@ -3,7 +3,7 @@ import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null }
-interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string }
+interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
 interface UserRow extends QueryRow { id: string; display_name: string; avatar: string | null; role: MemberRole }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null }
 interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
@@ -32,8 +32,8 @@ export class ChatRepository {
   async getServer(): Promise<{ id: string; name: string; avatar: string | null; channels: Channel[] }> {
     const [server] = await this.database.query<ServerRow>("SELECT id, name, avatar FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
     if (!server) throw new Error("Default server is missing");
-    const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
-    return { id: server.id, name: server.name, avatar: server.avatar, channels };
+    const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
+    return { id: server.id, name: server.name, avatar: server.avatar, channels: channels.map(mapChannel) };
   }
 
   async updateServerAvatar(avatar: string | null): Promise<void> {
@@ -46,29 +46,30 @@ export class ChatRepository {
   }
 
   async getChannel(channelId: string): Promise<Channel | null> {
-    const rows = await this.database.query<ChannelRow>("SELECT id, name, kind, description FROM channels WHERE id = $1 AND server_id = $2", [channelId, DEFAULT_SERVER_ID]);
+    const rows = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE id = $1 AND server_id = $2", [channelId, DEFAULT_SERVER_ID]);
     const row = rows[0];
-    return row ? { id: row.id, name: row.name, kind: row.kind, description: row.description } : null;
+    return row ? mapChannel(row) : null;
   }
 
   async createChannel(id: string, name: string, kind: Channel["kind"], description: string): Promise<Channel> {
     const rows = await this.database.query<ChannelRow>(
-      `INSERT INTO channels (id, server_id, name, kind, description, position)
-       VALUES ($1, $2, $3, $4, $5, COALESCE((SELECT MAX(position) + 1 FROM channels WHERE server_id = $2), 0))
-       RETURNING id, name, kind, description`,
+      `INSERT INTO channels (id, server_id, name, kind, description, participant_limit, position)
+       VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'voice' THEN 25 ELSE NULL END, COALESCE((SELECT MAX(position) + 1 FROM channels WHERE server_id = $2), 0))
+       RETURNING id, name, kind, description, participant_limit`,
       [id, DEFAULT_SERVER_ID, name, kind, description],
     );
-    return required(rows[0], "Created channel is missing");
+    return mapChannel(required(rows[0], "Created channel is missing"));
   }
 
-  async updateChannel(channelId: string, name: string, description: string): Promise<Channel | null> {
+  async updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): Promise<Channel | null> {
     const rows = await this.database.query<ChannelRow>(
-      `UPDATE channels SET name = $3, description = $4
+      `UPDATE channels SET name = $3, description = $4,
+       participant_limit = CASE WHEN kind = 'voice' THEN $5::integer ELSE NULL END
        WHERE id = $1 AND server_id = $2
-       RETURNING id, name, kind, description`,
-      [channelId, DEFAULT_SERVER_ID, name, description],
+       RETURNING id, name, kind, description, participant_limit`,
+      [channelId, DEFAULT_SERVER_ID, name, description, participantLimit],
     );
-    return rows[0] ?? null;
+    return rows[0] ? mapChannel(rows[0]) : null;
   }
 
   async deleteChannel(channelId: string): Promise<boolean> {
@@ -331,6 +332,10 @@ function mapMessage(row: MessageRow, attachments: Attachment[] = []): ChatMessag
 
 function mapAttachment(row: AttachmentRow): Attachment {
   return { id: row.id, fileName: row.original_name, mimeType: row.mime_type, sizeBytes: Number(row.size_bytes), sha256: row.sha256 };
+}
+
+function mapChannel(row: ChannelRow): Channel {
+  return { id: row.id, name: row.name, kind: row.kind, description: row.description, participantLimit: row.kind === "voice" ? Number(row.participant_limit ?? 25) : null };
 }
 
 function required<T>(value: T | undefined, message: string): T {

@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 12 as const;
+export const PROTOCOL_VERSION = 13 as const;
+
+export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
+export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
+export const voiceParticipantLimitSchema = z.number().int().min(VOICE_PARTICIPANT_LIMIT_UNLIMITED).max(VOICE_PARTICIPANT_LIMIT_MAX);
 
 export const memberRoleSchema = z.enum(["owner", "administrator", "member"]);
 export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
@@ -21,6 +25,7 @@ export const channelSchema = z.object({
   name: z.string().min(1).max(48),
   kind: z.enum(["text", "voice"]),
   description: z.string().max(120),
+  participantLimit: voiceParticipantLimitSchema.nullable(),
 });
 
 export const voiceCapabilitySchema = z.object({
@@ -84,7 +89,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
   z.object({ type: z.literal("channel.create"), requestId: requestIdSchema, name: z.string().trim().min(1).max(48), kind: z.enum(["text", "voice"]), description: z.string().trim().max(120).default("") }),
-  z.object({ type: z.literal("channel.update"), requestId: requestIdSchema, channelId: z.string().uuid(), name: z.string().trim().min(1).max(48), description: z.string().trim().max(120).default("") }),
+  z.object({ type: z.literal("channel.update"), requestId: requestIdSchema, channelId: z.string().uuid(), name: z.string().trim().min(1).max(48), description: z.string().trim().max(120).default(""), participantLimit: voiceParticipantLimitSchema.nullable() }),
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),

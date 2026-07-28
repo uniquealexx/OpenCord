@@ -32,8 +32,8 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
       address: normalizedAddress,
       accent: "#36c5f0",
       channels: [
-        { id: `${id}-general`, serverId: id, name: "общий", kind: "text", description: "Основной канал" },
-        { id: `${id}-voice`, serverId: id, name: "Гостиная", kind: "voice", description: "Голос появится позже" },
+        { id: `${id}-general`, serverId: id, name: "общий", kind: "text", description: "Основной канал", participantLimit: null },
+        { id: `${id}-voice`, serverId: id, name: "Гостиная", kind: "voice", description: "Голос появится позже", participantLimit: 25 },
       ],
       members: [],
     });

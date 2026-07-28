@@ -19,6 +19,7 @@ export const mockChannelSchema = z.object({
   name: z.string().min(1).max(48),
   kind: z.enum(["text", "voice"]),
   description: z.string().max(120),
+  participantLimit: z.number().int().min(0).max(25).nullable().default(null),
 });
 
 export const mockMemberSchema = z.object({

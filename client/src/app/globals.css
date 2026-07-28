@@ -81,4 +81,30 @@ button { cursor: pointer; }
 }
 
 .scrollbar-thin::-webkit-scrollbar-corner { background: transparent; }
+
+.voice-limit-slider::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #111520;
+  border-radius: 999px;
+  background: #c4b5fd;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, .65), 0 3px 12px rgba(0, 0, 0, .45);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.voice-limit-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 3px solid #111520;
+  border-radius: 999px;
+  background: #c4b5fd;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, .65), 0 3px 12px rgba(0, 0, 0, .45);
+}
+
+.voice-limit-slider:focus-visible {
+  outline: 2px solid rgba(167, 139, 250, .75);
+  outline-offset: 4px;
+}
+
 ::selection { background: rgba(124, 92, 255, .35); color: white; }
