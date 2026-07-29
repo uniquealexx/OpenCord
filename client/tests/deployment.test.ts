@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildInstallCommand, expandBundleFiles, formatSshConnectionError, insecureServerUrl, parseDeploymentEnvironment, posixQuote, readSshKeyAlgorithm, redact, sshFingerprint } from "../electron/deployment";
+import { buildExtractBundleCommand, buildInstallCommand, formatSshConnectionError, insecureServerUrl, parseDeploymentEnvironment, parsePublicHealthPayload, posixQuote, readSshKeyAlgorithm, redact, sshFingerprint } from "../electron/deployment";
 import { deploymentRequestSchema, sshTargetSchema } from "@/shared/deployment";
 
 describe("SSH deployment boundary", () => {
@@ -60,21 +59,26 @@ describe("SSH deployment boundary", () => {
     });
   });
 
+  it("accepts only the typed OpenCord health contract", () => {
+    const health = {
+      status: "ok", service: "opencord-server", version: "0.1.0", releaseChannel: "development", buildCommit: null,
+      protocolVersion: 13, database: "postgres", voice: { status: "degraded", secureTransport: false, maxParticipants: 25, warning: "LiveKit unavailable" },
+    };
+    expect(parsePublicHealthPayload(health)).toEqual(health);
+    expect(() => parsePublicHealthPayload({ status: "ok" })).toThrow();
+    expect(() => parsePublicHealthPayload({ ...health, service: "other-server" })).toThrow();
+  });
+
   it("redacts passwords and database URLs from remote output", () => {
     expect(redact("password hunter2 postgresql://user:secret@db/name", ["hunter2"])).toBe("password [скрыто] postgresql://[скрыто]");
   });
 
-  it("packages only the explicit deployment manifest", async () => {
-    const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-    const files = await expandBundleFiles(repositoryRoot);
-    expect(files).toContain("deploy/scripts/install-ubuntu.sh");
-    expect(files).toContain("deploy/scripts/install-native-ubuntu.sh");
-    expect(files).toContain("deploy/management/opencordctl");
-    expect(files).toContain("deploy/management/install-management-home");
-    expect(files).toContain("deploy/compose.insecure.yml");
-    expect(files).toContain("server/src/index.ts");
-    expect(files).not.toContain("deploy/.env");
-    expect(files.some((file) => file.includes("secrets"))).toBe(false);
-    expect(files.some((file) => file.startsWith("client"))).toBe(false);
+  it("verifies and safely extracts one uploaded bundle", () => {
+    const command = buildExtractBundleCommand("/tmp/server.tar.gz", "/tmp/opencord-safe", "a".repeat(64));
+    expect(command).toContain("sha256sum");
+    expect(command).toContain("tar --list");
+    expect(command).toContain("--no-same-owner");
+    expect(command).not.toContain("server/src");
+    expect(() => buildExtractBundleCommand("/tmp/server.tar.gz", "/tmp/opencord-safe", "bad")).toThrow();
   });
 });

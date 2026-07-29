@@ -1,0 +1,119 @@
+name: Publish OpenCord Server image
+
+on:
+  push:
+    tags:
+      - "v*-beta.*"
+
+concurrency:
+  group: publish-server-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/opencord-server
+  NODE_VERSION: 24.18.0
+  PNPM_VERSION: 11.9.0
+
+jobs:
+  publish:
+    name: Build and publish linux/amd64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Validate beta release metadata
+        id: release
+        shell: bash
+        run: |
+          version="$(node --print "require('./package.json').version")"
+          expected_tag="v${version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Git tag ${GITHUB_REF_NAME} does not match package version ${version}." >&2
+            exit 1
+          fi
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "Beta images require a version such as 0.1.0-beta.1." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${GITHUB_SHA:0:12}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate packages and contracts
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Sign in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.release.outputs.version }}
+            type=raw,value=beta
+            type=raw,value=latest
+            type=raw,value=sha-${{ steps.release.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.title=OpenCord Server
+            org.opencontainers.image.description=Self-hosted OpenCord text, file, identity, and voice coordination server
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and publish image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/Dockerfile.bundle
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OPENCORD_VERSION=${{ steps.release.outputs.version }}
+            OPENCORD_RELEASE_CHANNEL=beta
+            OPENCORD_BUILD_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Record published digest
+        shell: bash
+        run: |
+          echo "Published ${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Tags: ${{ steps.release.outputs.version }}, beta, latest, sha-${{ steps.release.outputs.short_sha }}" >> "${GITHUB_STEP_SUMMARY}"

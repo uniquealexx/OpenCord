@@ -82,6 +82,33 @@ service_action() {
   fi
 }
 
+inspect_health() {
+  local require_voice="${1:-false}"
+  local script
+  read -r -d '' script <<'NODE' || true
+const requireVoice = process.argv[1] === "true";
+fetch("http://127.0.0.1:3210/health").then(async (response) => {
+  const health = await response.json();
+  const validCommit = health.buildCommit === null || /^[a-f0-9]{12}$/.test(health.buildCommit);
+  const validVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(health.version);
+  const valid = response.ok && health.status === "ok" && health.service === "opencord-server"
+    && validVersion && ["development", "beta", "stable"].includes(health.releaseChannel)
+    && Number.isInteger(health.protocolVersion) && validCommit
+    && ["postgres", "pglite"].includes(health.database) && ["available", "degraded", "disabled"].includes(health.voice?.status)
+    && (health.releaseChannel === "development" || health.buildCommit !== null);
+  if (!valid) throw new Error("OpenCord Server returned an invalid health response");
+  process.stdout.write(`OpenCord Server: ${health.version} (${health.releaseChannel}, ${health.buildCommit ?? "local"})\nProtocol: ${health.protocolVersion}\n`);
+  process.stdout.write(`Voice: ${health.voice?.status ?? "unknown"}${health.voice?.warning ? ` — ${health.voice.warning}` : ""}\n`);
+  if (requireVoice && health.voice?.status !== "available") process.exitCode = 2;
+}).catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
+NODE
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose exec -T server node -e "${script}" "${require_voice}"
+  else
+    node -e "${script}" "${require_voice}"
+  fi
+}
+
 show_status() {
   printf 'Режим установки: %s\n' "${INSTALL_MODE}"
   printf 'Адрес сервера: %s\n' "${PUBLIC_ENDPOINT:-не задан}"
@@ -96,23 +123,28 @@ show_status() {
       systemctl is-active caddy
     fi
   fi
+  printf '\nHealth:\n'
+  inspect_health false
 }
 
 doctor() {
-  if [[ "${INSTALL_MODE}" != "docker" ]]; then
-    printf 'Native voice service is not installed yet. Check OpenCord Server with: systemctl status opencord-server\n'
-    systemctl is-active --quiet opencord-server
-    return
-  fi
-  local server_id livekit_id
-  server_id="$(compose ps --status running --quiet server)"
-  livekit_id="$(compose ps --status running --quiet livekit)"
-  if [[ -z "${server_id}" || -z "${livekit_id}" ]]; then
-    printf 'OpenCord Server or LiveKit is not running. Run: sudo opencordctl status\n' >&2
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    local server_id livekit_id
+    server_id="$(compose ps --status running --quiet server)"
+    livekit_id="$(compose ps --status running --quiet livekit)"
+    if [[ -z "${server_id}" || -z "${livekit_id}" ]]; then
+      printf 'OpenCord Server or LiveKit is not running. Run: sudo opencordctl status\n' >&2
+      return 1
+    fi
+  elif ! systemctl is-active --quiet opencord-server; then
+    printf 'OpenCord Server is not running. Run: sudo opencordctl status\n' >&2
     return 1
   fi
-  compose exec -T server node -e "fetch('http://127.0.0.1:3210/health').then(async r => { const health = await r.json(); if (!r.ok || health.voice?.status !== 'available') process.exit(1); }).catch(() => process.exit(1))"
-  printf 'OpenCord Server and LiveKit are available.\n'
+  if ! inspect_health true; then
+    printf 'The text server is unavailable or the voice subsystem is degraded.\n' >&2
+    return 1
+  fi
+  printf 'OpenCord Server and voice subsystem are available.\n'
 }
 
 show_logs() {

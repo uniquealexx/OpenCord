@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC, type OpenCordBridge } from "../src/shared/bridge";
 import { parsePersistedState } from "../src/shared/state";
-import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
+import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedServerBundleSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
 import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
 
 const bridge: OpenCordBridge = {
@@ -27,6 +27,10 @@ const bridge: OpenCordBridge = {
     reset: () => ipcRenderer.invoke(IPC.identityReset) as Promise<{ publicKey: string; fingerprint: string }>,
   },
   deployment: {
+    selectServerBundle: async () => {
+      const result: unknown = await ipcRenderer.invoke(IPC.deploymentSelectBundle);
+      return result === null ? null : selectedServerBundleSchema.parse(result);
+    },
     selectPrivateKey: async () => {
       const result: unknown = await ipcRenderer.invoke(IPC.deploymentSelectKey);
       return result === null ? null : selectedSshKeySchema.parse(result);

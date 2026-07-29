@@ -25,6 +25,7 @@ describe("DeploymentDialog", () => {
       storage: { load: vi.fn(), save: vi.fn(), reset: vi.fn() },
       identity: { getOrCreate: vi.fn(async () => ({ publicKey: "A".repeat(64), fingerprint: "owner" })), signChallenge: vi.fn(), reset: vi.fn() },
       deployment: {
+        selectServerBundle: vi.fn(async () => null),
         selectPrivateKey: vi.fn(async () => ({ credentialId: "123e4567-e89b-42d3-a456-426614174000", label: "id_ed25519" })),
         releasePrivateKey: vi.fn(),
         inspectHost: vi.fn(async () => ({ host: "203.0.113.10", port: 22, algorithm: "ssh-ed25519", fingerprint: `SHA256:${"A".repeat(43)}` })),
@@ -54,7 +55,7 @@ describe("DeploymentDialog", () => {
     await user.click(await screen.findByRole("button", { name: /Использовать существующий Docker/ }));
 
     await screen.findByText("Ожидание запуска операции…");
-    expect(window.openCord.deployment.start).toHaveBeenCalledWith(expect.objectContaining({ mode: "docker", serverName: "Команда OpenCord" }));
+    expect(window.openCord!.deployment.start).toHaveBeenCalledWith(expect.objectContaining({ mode: "docker", serverName: "Команда OpenCord" }));
     await act(async () => progressListener?.({
       operationId: "123e4567-e89b-42d3-a456-426614174001",
       phase: "failed",
@@ -87,6 +88,7 @@ describe("DeploymentDialog", () => {
       storage: { load: vi.fn(), save: vi.fn(), reset: vi.fn() },
       identity: { getOrCreate: vi.fn(async () => ({ publicKey: "A".repeat(64), fingerprint: "owner" })), signChallenge: vi.fn(), reset: vi.fn() },
       deployment: {
+        selectServerBundle: vi.fn(async () => null),
         selectPrivateKey: vi.fn(async () => ({ credentialId: "123e4567-e89b-42d3-a456-426614174000", label: "id_ed25519" })),
         releasePrivateKey: vi.fn(),
         inspectHost: vi.fn(async () => ({ host: "localhost", port: 2222, algorithm: "ssh-ed25519", fingerprint: `SHA256:${"A".repeat(43)}` })),

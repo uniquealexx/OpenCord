@@ -1,4 +1,6 @@
-# OpenCord Protocol v11
+# OpenCord Protocol v13
+
+Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
 
 ## Транспорт
 

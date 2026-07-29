@@ -11,6 +11,7 @@ import { PGliteDatabase } from "../src/database/database";
 
 const openApps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const temporaryDirectories: string[] = [];
+const testBuildInfo = { version: "0.1.0", releaseChannel: "development", commit: null } as const;
 
 afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
@@ -19,7 +20,7 @@ afterEach(async () => {
 
 describe("WebSocket chat flow", () => {
   it("authenticates two identities, broadcasts and persists a message", async () => {
-    const app = await buildApp({ database: new PGliteDatabase("memory://") });
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
     openApps.push(app);
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();
@@ -50,7 +51,7 @@ describe("WebSocket chat flow", () => {
   it("uploads, attaches and downloads a file through an authenticated session", async () => {
     const attachmentsDir = await mkdtemp(path.join(tmpdir(), "opencord-attachments-"));
     temporaryDirectories.push(attachmentsDir);
-    const app = await buildApp({ database: new PGliteDatabase("memory://"), attachmentsDir });
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, attachmentsDir });
     openApps.push(app);
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();
@@ -100,7 +101,7 @@ describe("WebSocket chat flow", () => {
   }, 15_000);
 
   it("broadcasts profile replacement and removes a leaving member", async () => {
-    const app = await buildApp({ database: new PGliteDatabase("memory://") });
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
     openApps.push(app);
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();
@@ -127,7 +128,7 @@ describe("WebSocket chat flow", () => {
   it("bootstraps one owner, enforces permissions and promotes an administrator", async () => {
     const ownerKeys = generateKeyPairSync("ed25519");
     const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
-    const app = await buildApp({ database: new PGliteDatabase("memory://"), bootstrapOwnerPublicKey: ownerPublicKey });
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey });
     openApps.push(app);
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();

@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { PROTOCOL_VERSION, clientEventSchema, type ClientEvent, type Permission, type ServerEvent } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ClientEvent, type Permission, type ServerEvent } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
@@ -12,6 +12,7 @@ import { ChatRepository, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, MAX_ATTACHMENT_BYTES, type AttachmentStorage } from "./attachments/storage";
 import { DisabledVoiceService, VoiceRoomFullError, VoiceUnavailableError, type VoiceService } from "./voice";
+import type { ServerBuildInfo } from "./build-info";
 
 interface ConnectionState {
   socket: WebSocket;
@@ -24,6 +25,7 @@ interface ConnectionState {
 
 export interface BuildAppOptions {
   database: Database;
+  buildInfo: ServerBuildInfo;
   logger?: boolean | object;
   bootstrapOwnerPublicKey?: string;
   allowInsecureFirstUserOwner?: boolean;
@@ -51,7 +53,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   app.addContentTypeParser("application/webhook+json", { parseAs: "string" }, (_request, body, done) => done(null, body));
 
-  app.get("/health", async () => ({ status: "ok", database: options.database.kind, protocolVersion: PROTOCOL_VERSION, voice: await voice.capability() }));
+  app.get("/health", async () => serverHealthSchema.parse({
+    status: "ok",
+    service: "opencord-server",
+    version: options.buildInfo.version,
+    releaseChannel: options.buildInfo.releaseChannel,
+    buildCommit: options.buildInfo.commit?.slice(0, 12) ?? null,
+    database: options.database.kind,
+    protocolVersion: PROTOCOL_VERSION,
+    voice: await voice.capability(),
+  }));
 
   app.post("/internal/livekit/webhook", async (request, reply) => {
     if (typeof request.body !== "string") return reply.code(400).send({ error: "INVALID_WEBHOOK" });

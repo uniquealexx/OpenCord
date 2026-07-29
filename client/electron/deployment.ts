@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2";
+import { serverHealthSchema, type ServerHealth } from "@opencord/shared";
 import {
   deploymentConnectionSchema,
   deploymentEnvironmentSchema,
@@ -16,29 +16,7 @@ import {
   type SshHostIdentity,
   type SshTarget,
 } from "../src/shared/deployment";
-
-const BUNDLE_ENTRIES = [
-  ".dockerignore",
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "tsconfig.base.json",
-  "deploy/Dockerfile",
-  "deploy/compose.yml",
-  "deploy/compose.insecure.yml",
-  "deploy/Caddyfile",
-  "deploy/livekit-entrypoint.sh",
-  "deploy/.env.example",
-  "deploy/scripts/install-ubuntu.sh",
-  "deploy/scripts/install-native-ubuntu.sh",
-  "deploy/management",
-  "server/package.json",
-  "server/tsconfig.json",
-  "server/src",
-  "shared/package.json",
-  "shared/tsconfig.json",
-  "shared/src",
-] as const;
+import type { LocalServerBundleProvider } from "./server-bundle";
 
 type ProgressListener = (progress: DeploymentProgress) => void;
 type CredentialResolver = (credentialId: string) => string | undefined;
@@ -52,7 +30,7 @@ export class DeploymentManager {
   private readonly active = new Map<string, ActiveDeployment>();
 
   constructor(
-    private readonly bundleRoot: string,
+    private readonly bundleProvider: LocalServerBundleProvider,
     private readonly resolveCredential: CredentialResolver,
     private readonly onProgress: ProgressListener,
   ) {}
@@ -100,7 +78,11 @@ export class DeploymentManager {
 
   private async run(operationId: string, active: ActiveDeployment, request: DeploymentRequest): Promise<void> {
     const secrets = collectSecrets(request);
+    const remoteRoot = `/tmp/opencord-install-${operationId}`;
+    const remoteArchive = `${remoteRoot}.tar.gz`;
     try {
+      const bundle = await this.bundleProvider.resolve();
+      this.assertActive(active);
       this.emit(operationId, "connecting", "info", `Подключение к ${request.host}:${request.port}`);
       const configuration = await this.createConnectionConfiguration(request);
       await connect(active.client, configuration);
@@ -110,12 +92,15 @@ export class DeploymentManager {
       if (installation.exitCode !== 0) throw new Error("Не удалось проверить существующую установку OpenCord через sudo");
       const redeployment = installation.stdout.includes("OPENCORD_INSTALLED=true");
 
-      const remoteRoot = `/tmp/opencord-install-${operationId}`;
       this.emit(operationId, "uploading", "info", redeployment ? "Загрузка проверенного комплекта для переразвёртывания OpenCord" : "Загрузка проверенного комплекта OpenCord на VPS");
       const sftp = await openSftp(active.client);
-      await uploadBundle(sftp, this.bundleRoot, remoteRoot);
+      await fastPut(sftp, bundle.filePath, remoteArchive);
       sftp.end();
       this.assertActive(active);
+
+      this.emit(operationId, "uploading", "info", `OpenCord Server ${bundle.info.version} (${bundle.info.releaseChannel}), Linux x64`);
+      const extraction = await executeCapture(active.client, buildExtractBundleCommand(remoteArchive, remoteRoot, bundle.sha256), 120_000);
+      if (extraction.exitCode !== 0) throw new Error(extraction.stderr.trim() || "Не удалось проверить и распаковать server bundle на VPS");
 
       this.emit(operationId, "installing", "info", redeployment ? "Запуск безопасного переразвёртывания с сохранением данных" : "Запуск идемпотентного установщика Ubuntu");
       const command = buildInstallCommand(remoteRoot, request);
@@ -128,11 +113,13 @@ export class DeploymentManager {
 
       const serverUrl = request.domain ? `https://${request.domain}` : insecureServerUrl(request.host);
       this.emit(operationId, "verifying", "info", `Проверка ${serverUrl}/health`);
-      await waitForPublicHealth(`${serverUrl}/health`);
+      const health = await waitForPublicHealth(`${serverUrl}/health`);
+      this.emit(operationId, "verifying", "info", `OpenCord Server ${health.version} (${health.releaseChannel}, ${health.buildCommit ?? "local"}), протокол ${health.protocolVersion}`);
       this.emit(operationId, "completed", "success", redeployment ? "OpenCord Server переразвёрнут; база и вложения сохранены" : "OpenCord Server установлен и доступен", serverUrl);
     } catch (error) {
       if (!active.cancelled) this.emit(operationId, "failed", "error", redact(toMessage(error), secrets));
     } finally {
+      if (!active.cancelled) await executeCapture(active.client, `rm -rf -- ${posixQuote(remoteRoot)} ${posixQuote(remoteArchive)}`, 10_000).catch(() => undefined);
       active.client.end();
       this.active.delete(operationId);
     }
@@ -232,6 +219,17 @@ export function insecureServerUrl(host: string): string {
   return `http://${normalizedHost}:3210`;
 }
 
+export function buildExtractBundleCommand(remoteArchive: string, remoteRoot: string, expectedSha256: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(expectedSha256)) throw new Error("Некорректная SHA-256 server bundle");
+  const archive = posixQuote(remoteArchive);
+  const root = posixQuote(remoteRoot);
+  return `set -eu; test "$(sha256sum -- ${archive} | awk '{print $1}')" = '${expectedSha256}'; `
+    + `tar --list --gzip --file ${archive} >/dev/null; `
+    + `if tar --list --gzip --file ${archive} | grep -Eq '(^/|(^|/)\\.\\.(/|$))'; then echo 'Unsafe bundle path' >&2; exit 1; fi; `
+    + `tar --list --verbose --gzip --file ${archive} | awk '{t=substr($1,1,1); if(t!="-" && t!="d"){exit 1}}' || { echo 'Unsupported bundle entry' >&2; exit 1; }; `
+    + `mkdir -m 700 -- ${root}; tar --extract --gzip --file ${archive} --directory ${root} --no-same-owner --no-same-permissions`;
+}
+
 const PREFLIGHT_COMMAND = `LC_ALL=C sh -c '
 os_id=unknown
 os_version=unknown
@@ -264,7 +262,7 @@ export function parseDeploymentEnvironment(output: string): DeploymentEnvironmen
     dockerUsable: values.get("DOCKER_USABLE") === "true",
     occupiedPorts,
     openCordInstalled: values.get("OPENCORD_INSTALLED") === "true",
-    supported: osId === "ubuntu" && /^(22\.04|24\.04)$/u.test(osVersion) && /^(x86_64|aarch64|arm64)$/u.test(values.get("ARCH") ?? "") && values.get("SYSTEMD") === "true",
+    supported: osId === "ubuntu" && /^(22\.04|24\.04)$/u.test(osVersion) && values.get("ARCH") === "x86_64" && values.get("SYSTEMD") === "true",
   });
 }
 
@@ -317,48 +315,6 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => client.sftp((error, sftp) => error ? reject(error) : resolve(sftp)));
 }
 
-async function uploadBundle(sftp: SFTPWrapper, bundleRoot: string, remoteRoot: string): Promise<void> {
-  const files = await expandBundleFiles(bundleRoot);
-  await mkdirRemote(sftp, remoteRoot);
-  const directories = [...new Set(files.map((file) => path.posix.dirname(file.replaceAll("\\", "/"))))]
-    .filter((directory) => directory !== ".")
-    .sort((left, right) => left.split("/").length - right.split("/").length);
-  for (const directory of directories) await mkdirRemote(sftp, `${remoteRoot}/${directory}`);
-  for (const relativeFile of files) {
-    const localFile = path.join(bundleRoot, relativeFile);
-    const remoteFile = `${remoteRoot}/${relativeFile.replaceAll("\\", "/")}`;
-    await fastPut(sftp, localFile, remoteFile);
-  }
-}
-
-export async function expandBundleFiles(bundleRoot: string): Promise<string[]> {
-  const files: string[] = [];
-  for (const entry of BUNDLE_ENTRIES) {
-    const absolute = path.join(bundleRoot, entry);
-    const metadata = await stat(absolute).catch(() => null);
-    if (!metadata) throw new Error(`Комплект установки повреждён: отсутствует ${entry}`);
-    if (metadata.isFile()) files.push(entry);
-    else await walk(absolute, entry, files);
-  }
-  return files.sort();
-}
-
-async function walk(directory: string, relativeDirectory: string, files: string[]): Promise<void> {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const absolute = path.join(directory, entry.name);
-    const relative = path.posix.join(relativeDirectory.replaceAll("\\", "/"), entry.name);
-    if (entry.isDirectory()) await walk(absolute, relative, files);
-    else if (entry.isFile()) files.push(relative);
-  }
-}
-
-function mkdirRemote(sftp: SFTPWrapper, remotePath: string): Promise<void> {
-  return new Promise((resolve, reject) => sftp.mkdir(remotePath, (error) => {
-    if (!error) resolve();
-    else sftp.stat(remotePath, (statError, metadata) => statError || !metadata.isDirectory() ? reject(error) : resolve());
-  }));
-}
-
 function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Promise<void> {
   return new Promise((resolve, reject) => sftp.fastPut(localPath, remotePath, (error) => error ? reject(error) : resolve()));
 }
@@ -406,18 +362,25 @@ function pipeLines(stream: NodeJS.ReadableStream, isError: boolean, onLine: (lin
   stream.on("end", () => { if (pending.trim()) onLine(pending, isError); });
 }
 
-async function waitForPublicHealth(url: string): Promise<void> {
+export async function waitForPublicHealth(url: string): Promise<ServerHealth> {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (response.ok) return;
+      if (response.ok) {
+        const parsed = serverHealthSchema.safeParse(await response.json());
+        if (parsed.success) return parsed.data;
+      }
     } catch {
       // DNS and TLS can take a little time after Caddy starts.
     }
     await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
   throw new Error("Сервер установлен, но endpoint /health недоступен. Проверьте адрес и требуемые входящие порты");
+}
+
+export function parsePublicHealthPayload(input: unknown): ServerHealth {
+  return serverHealthSchema.parse(input);
 }
 
 function toMessage(error: unknown): string {

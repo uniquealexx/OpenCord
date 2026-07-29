@@ -2,7 +2,14 @@ name: opencord-local
 
 services:
   server:
+    build:
+      dockerfile: deploy/Dockerfile.bundle
+      target: runtime
     environment:
       ALLOW_INSECURE_FIRST_USER_OWNER: "true"
     ports:
       - "127.0.0.1:3210:3210"
+  attachments-init:
+    build:
+      dockerfile: deploy/Dockerfile.bundle
+      target: runtime

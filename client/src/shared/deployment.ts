@@ -96,6 +96,11 @@ export const deploymentProgressSchema = z.object({
 }).strict();
 
 export const deploymentStartResultSchema = z.object({ operationId: z.string().uuid() }).strict();
+export const selectedServerBundleSchema = z.object({
+  fileName: z.string().min(1).max(260),
+  version: z.string().min(1).max(64),
+  releaseChannel: z.enum(["development", "beta", "stable"]),
+}).strict();
 
 export type SshTarget = z.infer<typeof sshTargetSchema>;
 export type SshHostIdentity = z.infer<typeof sshHostIdentitySchema>;
@@ -107,3 +112,4 @@ export type SavedDeploymentConfiguration = z.infer<typeof savedDeploymentConfigu
 export type DeploymentEnvironment = z.infer<typeof deploymentEnvironmentSchema>;
 export type DeploymentProgress = z.infer<typeof deploymentProgressSchema>;
 export type DeploymentStartResult = z.infer<typeof deploymentStartResultSchema>;
+export type SelectedServerBundle = z.infer<typeof selectedServerBundleSchema>;

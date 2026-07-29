@@ -1,6 +1,6 @@
 {
   "name": "opencord",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {
@@ -8,17 +8,19 @@
     "pnpm": ">=11.0.0"
   },
   "scripts": {
+    "check:versions": "node scripts/check-versions.mjs",
     "dev": "pnpm --filter @opencord/shared build && pnpm --parallel --filter @opencord/server --filter @opencord/client dev",
     "dev:client": "pnpm --filter @opencord/client dev",
     "dev:server": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server dev",
     "docker:up": "node deploy/scripts/local-compose.mjs up",
     "docker:down": "node deploy/scripts/local-compose.mjs down",
     "docker:logs": "node deploy/scripts/local-compose.mjs logs",
-    "bundle:server": "node deploy/scripts/create-update-bundle.mjs",
-    "build": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm --filter @opencord/client build",
-    "package:win": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
+    "bundle:server": "pnpm check:versions && pnpm --filter @opencord/shared build && node deploy/scripts/create-update-bundle.mjs",
+    "manifest:validate": "pnpm --filter @opencord/shared build && node scripts/release-manifest.mjs --validate",
+    "build": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm --filter @opencord/client build",
+    "package:win": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
     "lint": "pnpm -r --if-present lint",
-    "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm --filter @opencord/shared build && pnpm -r --workspace-concurrency=1 --if-present test"
+    "typecheck": "pnpm check:versions && pnpm -r --if-present typecheck",
+    "test": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm -r --workspace-concurrency=1 --if-present test"
   }
 }

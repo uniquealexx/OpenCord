@@ -1,5 +1,5 @@
 import type { PersistedClientState } from "./state";
-import type { DeploymentConnection, DeploymentEnvironment, DeploymentProgress, DeploymentRequest, DeploymentStartResult, SelectedSshKey, SshHostIdentity, SshTarget } from "./deployment";
+import type { DeploymentConnection, DeploymentEnvironment, DeploymentProgress, DeploymentRequest, DeploymentStartResult, SelectedServerBundle, SelectedSshKey, SshHostIdentity, SshTarget } from "./deployment";
 import type { Attachment } from "@opencord/shared";
 import type { AttachmentDownloadRequest, AttachmentTransferContext } from "./attachments";
 
@@ -16,6 +16,7 @@ export const IPC = {
   identitySignChallenge: "identity:sign-challenge",
   identityReset: "identity:reset",
   deploymentSelectKey: "deployment:select-key",
+  deploymentSelectBundle: "deployment:select-bundle",
   deploymentReleaseKey: "deployment:release-key",
   deploymentInspectHost: "deployment:inspect-host",
   deploymentInspectEnvironment: "deployment:inspect-environment",
@@ -52,6 +53,7 @@ export interface OpenCordBridge {
   };
   deployment: {
     selectPrivateKey(): Promise<SelectedSshKey | null>;
+    selectServerBundle(): Promise<SelectedServerBundle | null>;
     releasePrivateKey(credentialId: string): Promise<void>;
     inspectHost(target: SshTarget): Promise<SshHostIdentity>;
     inspectEnvironment(connection: DeploymentConnection): Promise<DeploymentEnvironment>;

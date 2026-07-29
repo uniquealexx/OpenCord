@@ -7,6 +7,7 @@ import { parsePersistedState } from "../src/shared/state";
 import { ClientStateStore } from "./storage";
 import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
+import { LocalServerBundleProvider } from "./server-bundle";
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
 import { downloadAttachment, previewAttachment, uploadAttachment } from "./attachments";
 
@@ -15,6 +16,7 @@ let mainWindow: BrowserWindow | null = null;
 let store: ClientStateStore;
 let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
+let serverBundleProvider: LocalServerBundleProvider;
 const selectedSshKeys = new Map<string, string>();
 
 function isTrustedRenderer(url: string): boolean {
@@ -96,6 +98,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.identityGetOrCreate, () => identityStore.getOrCreate());
   ipcMain.handle(IPC.identitySignChallenge, (_event, challenge: unknown) => identityStore.signChallenge(challenge));
   ipcMain.handle(IPC.identityReset, () => identityStore.reset());
+  ipcMain.handle(IPC.deploymentSelectBundle, () => serverBundleProvider.select());
   ipcMain.handle(IPC.deploymentSelectKey, async () => {
     const options: OpenDialogOptions = {
       title: "Выберите приватный SSH-ключ",
@@ -148,8 +151,17 @@ void app.whenReady().then(() => {
   configureMediaPermissions();
   store = new ClientStateStore(app.getPath("userData"));
   identityStore = new IdentityStore(app.getPath("userData"));
-  const bundleRoot = app.isPackaged ? path.join(process.resourcesPath, "deployment-bundle") : path.resolve(app.getAppPath(), "..");
-  deploymentManager = new DeploymentManager(bundleRoot, (credentialId) => {
+  const releaseDirectory = app.isPackaged ? path.join(process.resourcesPath, "server-bundles") : path.resolve(app.getAppPath(), "..", "release");
+  serverBundleProvider = new LocalServerBundleProvider(releaseDirectory, app.getVersion(), async () => {
+    const options: OpenDialogOptions = {
+      title: "Выберите OpenCord Server bundle",
+      properties: ["openFile"],
+      filters: [{ name: "OpenCord Server bundle", extensions: ["gz"] }],
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  deploymentManager = new DeploymentManager(serverBundleProvider, (credentialId) => {
     const keyPath = selectedSshKeys.get(credentialId);
     return keyPath;
   }, (progress) => {

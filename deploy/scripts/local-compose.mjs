@@ -15,6 +15,8 @@ const databaseUrlFile = path.join(secretsDirectory, "database_url");
 const ownerPublicKeyFile = path.join(secretsDirectory, "owner_public_key");
 const serverNameFile = path.join(secretsDirectory, "server_name");
 const deploymentIdFile = path.join(secretsDirectory, "deployment_id");
+const rootPackage = JSON.parse(readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
+if (typeof rootPackage.version !== "string") throw new Error("The root package does not contain an OpenCord version");
 
 if (!new Set(["up", "down", "logs"]).has(action)) {
   throw new Error(`Unknown local Docker action: ${action}`);
@@ -52,7 +54,7 @@ function ensureLocalSecrets() {
   if (!existsSync(ownerPublicKeyFile)) writeFileSync(ownerPublicKeyFile, "local-development-owner-is-claimed-by-first-user-0000\n", { encoding: "utf8", mode: 0o600 });
   if (!existsSync(serverNameFile)) writeFileSync(serverNameFile, "OpenCord Local Docker\n", { encoding: "utf8", mode: 0o600 });
   if (!existsSync(deploymentIdFile)) writeFileSync(deploymentIdFile, `${randomUUID()}\n`, { encoding: "utf8", mode: 0o600 });
-  writeFileSync(environmentFile, "OPENCORD_DOMAIN=localhost\nACME_EMAIL=local@example.invalid\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(environmentFile, `OPENCORD_DOMAIN=localhost\nACME_EMAIL=local@example.invalid\nOPENCORD_VERSION=${rootPackage.version}\nOPENCORD_RELEASE_CHANNEL=development\nOPENCORD_BUILD_COMMIT=\nSERVER_LOG_LEVEL=info\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 async function waitForHealth(url) {

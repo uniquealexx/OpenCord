@@ -11,9 +11,13 @@ OPENCORD_DOMAIN="${OPENCORD_DOMAIN:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 OWNER_PUBLIC_KEY=""
 SERVER_NAME=""
+VOICE_PUBLIC_HOST=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 TEMP_DIR=""
+
+# shellcheck source=bundle-runtime.sh
+source "${SCRIPT_DIR}/bundle-runtime.sh"
 
 cleanup() {
   if [[ -n "${TEMP_DIR}" && -d "${TEMP_DIR}" ]]; then
@@ -33,6 +37,7 @@ while (($#)); do
     --insecure) INSECURE_MODE="true"; shift ;;
     --owner-public-key) OWNER_PUBLIC_KEY="${2:-}"; shift 2 ;;
     --server-name) SERVER_NAME="${2:-}"; shift 2 ;;
+    --public-host) VOICE_PUBLIC_HOST="${2:-}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -76,18 +81,20 @@ if [[ "$(ps -p 1 -o comm= | tr -d ' ')" != "systemd" ]]; then
   printf 'Native installation requires systemd as PID 1.\n' >&2
   exit 1
 fi
-for required_file in package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
+for required_file in bundle-info.json server-runtime-linux-x64.tar.gz package.json deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
   if [[ ! -f "${SOURCE_ROOT}/${required_file}" ]]; then
     printf 'Installation bundle is incomplete: %s is missing.\n' "${required_file}" >&2
     exit 1
   fi
 done
 
-case "$(uname -m)" in
-  x86_64) node_arch="x64" ;;
-  aarch64|arm64) node_arch="arm64" ;;
-  *) printf 'Unsupported architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
-esac
+if [[ "$(uname -m)" != "x86_64" ]]; then
+  printf 'This OpenCord bundle supports Ubuntu Linux x64 only. Found: %s\n' "$(uname -m)" >&2
+  exit 1
+fi
+node_arch="x64"
+read_bundle_info "${SOURCE_ROOT}"
+verify_runtime_archive "${BUNDLE_RUNTIME_PATH}" "${BUNDLE_RUNTIME_SHA256}" "${BUNDLE_RUNTIME_SIZE}"
 
 check_initial_ports() {
   if [[ -f "${INSTALL_ROOT}/.native-installed" ]] || ! command -v ss >/dev/null 2>&1; then
@@ -145,7 +152,6 @@ install_caddy() {
 
 install_node
 if [[ "${INSECURE_MODE}" != "true" ]]; then install_caddy; fi
-corepack enable --install-directory /usr/local/bin
 
 if ! getent group opencord >/dev/null; then
   groupadd --system opencord
@@ -188,14 +194,11 @@ unset database_password
 chown root:opencord "${database_password_file}" "${CONFIG_ROOT}/database_url"
 chmod 0640 "${database_password_file}" "${CONFIG_ROOT}/database_url"
 
-printf 'Building a versioned OpenCord Server release...\n'
-cd "${SOURCE_ROOT}"
-pnpm install --frozen-lockfile --filter @opencord/shared... --filter @opencord/server...
-pnpm --filter @opencord/shared build
-pnpm --filter @opencord/server build
+printf 'Installing the verified OpenCord Server runtime...\n'
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 release_dir="${INSTALL_ROOT}/releases/${release_id}"
-pnpm --filter @opencord/server --prod deploy --legacy "${release_dir}"
+install -d -m 0750 -o root -g opencord "${release_dir}"
+tar --extract --gzip --file "${BUNDLE_RUNTIME_PATH}" --directory "${release_dir}" --no-same-owner --no-same-permissions
 chown -R root:opencord "${release_dir}"
 chmod -R u=rwX,g=rX,o= "${release_dir}"
 

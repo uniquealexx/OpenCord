@@ -1,6 +1,6 @@
 {
   "name": "@opencord/client",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "description": "OpenCord desktop client prototype",
   "main": "dist-electron/main.js",
@@ -29,6 +29,7 @@
     "react": "latest",
     "react-dom": "latest",
     "ssh2": "1.17.0",
+    "tar": "7.5.20",
     "tailwind-merge": "latest",
     "zod": "latest"
   },
@@ -65,34 +66,7 @@
       "out/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "..",
-        "to": "deployment-bundle",
-        "filter": [
-          ".dockerignore",
-          "package.json",
-          "pnpm-lock.yaml",
-          "pnpm-workspace.yaml",
-          "tsconfig.base.json",
-          "deploy/Dockerfile",
-          "deploy/compose.yml",
-          "deploy/compose.insecure.yml",
-          "deploy/Caddyfile",
-          "deploy/livekit-entrypoint.sh",
-          "deploy/.env.example",
-          "deploy/scripts/install-ubuntu.sh",
-          "deploy/scripts/install-native-ubuntu.sh",
-          "deploy/management/**/*",
-          "server/package.json",
-          "server/tsconfig.json",
-          "server/src/**/*",
-          "shared/package.json",
-          "shared/tsconfig.json",
-          "shared/src/**/*"
-        ]
-      }
-    ],
+    "extraResources": [],
     "win": {
       "target": [
         {

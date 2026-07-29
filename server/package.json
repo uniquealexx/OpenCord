@@ -1,6 +1,6 @@
 {
   "name": "@opencord/server",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "cross-env ALLOW_INSECURE_FIRST_USER_OWNER=true tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsup src/index.ts --format esm --clean",
+    "build": "tsup",
     "lint": "eslint src tests",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

@@ -93,6 +93,10 @@ if tar --list --gzip --file "${archive_path}" | grep -Eq '(^/|(^|/)\.\.(/|$))'; 
   printf 'Bundle содержит небезопасные пути.\n' >&2
   exit 1
 fi
+if ! tar --list --verbose --gzip --file "${archive_path}" | awk '{type=substr($1,1,1); if(type!="-" && type!="d") exit 1}'; then
+  printf 'Bundle содержит неподдерживаемые ссылки или специальные файловые записи.\n' >&2
+  exit 1
+fi
 
 install -d -m 0700 "${source_root}"
 tar --extract --gzip --file "${archive_path}" --directory "${source_root}" --no-same-owner --no-same-permissions

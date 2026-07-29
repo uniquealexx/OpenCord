@@ -13,6 +13,9 @@ VOICE_PUBLIC_HOST=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
+# shellcheck source=bundle-runtime.sh
+source "${SCRIPT_DIR}/bundle-runtime.sh"
+
 usage() {
   printf 'Usage: sudo bash deploy/scripts/install-ubuntu.sh (--domain chat.example.com --email admin@example.com | --insecure --public-host HOST) --owner-public-key BASE64_KEY --server-name NAME [--install-dir /opt/opencord] [--skip-docker-install]\n'
 }
@@ -69,13 +72,22 @@ if [[ "${ID:-}" != "ubuntu" || ! "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]]; then
   printf 'Supported systems: Ubuntu 22.04 LTS and Ubuntu 24.04 LTS. Found: %s %s\n' "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
   exit 1
 fi
+if [[ "$(uname -m)" != "x86_64" ]]; then
+  printf 'This OpenCord bundle supports Ubuntu Linux x64 only. Found: %s\n' "$(uname -m)" >&2
+  exit 1
+fi
 
-for required_file in .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
+for required_file in bundle-info.json server-runtime-linux-x64.tar.gz .dockerignore package.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
   if [[ ! -f "${SOURCE_ROOT}/${required_file}" ]]; then
     printf 'Installation bundle is incomplete: %s is missing.\n' "${required_file}" >&2
     exit 1
   fi
 done
+read_bundle_info "${SOURCE_ROOT}"
+verify_runtime_archive "${BUNDLE_RUNTIME_PATH}" "${BUNDLE_RUNTIME_SHA256}" "${BUNDLE_RUNTIME_SIZE}"
+OPENCORD_VERSION="${BUNDLE_VERSION}"
+OPENCORD_RELEASE_CHANNEL="${BUNDLE_RELEASE_CHANNEL}"
+OPENCORD_BUILD_COMMIT="${BUNDLE_COMMIT}"
 
 install_docker_engine() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -127,10 +139,19 @@ fi
 install -d -m 0750 -o root -g opencord "${INSTALL_ROOT}" "${INSTALL_ROOT}/deploy"
 
 tar --create --file - --directory "${SOURCE_ROOT}" \
-  --exclude='node_modules' --exclude='dist' --exclude='.data' --exclude='coverage' \
-  .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json \
-  server shared deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/.env.example deploy/management \
+  .dockerignore package.json bundle-info.json server-runtime-linux-x64.tar.gz server shared \
+  deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/.env.example deploy/management deploy/scripts/bundle-runtime.sh \
   | tar --extract --file - --directory "${INSTALL_ROOT}"
+
+# Remove build inputs left by deployments made before the source-free bundle
+# format. Only explicit paths below the validated installation root are touched.
+if [[ "${INSTALL_ROOT}" != /* || "${INSTALL_ROOT}" == "/" ]]; then
+  printf 'Refusing to clean build inputs below an unsafe installation root.\n' >&2
+  exit 1
+fi
+rm -rf -- "${INSTALL_ROOT}/server/src" "${INSTALL_ROOT}/shared/src"
+rm -f -- "${INSTALL_ROOT}/pnpm-lock.yaml" "${INSTALL_ROOT}/pnpm-workspace.yaml" "${INSTALL_ROOT}/tsconfig.base.json" \
+  "${INSTALL_ROOT}/server/tsconfig.json" "${INSTALL_ROOT}/server/tsup.config.ts" "${INSTALL_ROOT}/shared/tsconfig.json"
 
 DEPLOY_DIR="${INSTALL_ROOT}/deploy"
 SECRETS_DIR="${DEPLOY_DIR}/secrets"
@@ -190,10 +211,11 @@ if [[ "${INSECURE_MODE}" == "true" ]]; then
     printf 'Voice public host contains unsupported characters.\n' >&2
     exit 1
   fi
-  printf 'OPENCORD_DOMAIN=localhost\nACME_EMAIL=unused@example.invalid\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\nVOICE_PUBLIC_HOST=%s\n' "${VOICE_PUBLIC_HOST}" > "${DEPLOY_DIR}/.env"
+  printf 'OPENCORD_DOMAIN=localhost\nACME_EMAIL=unused@example.invalid\nOPENCORD_VERSION=%s\nOPENCORD_RELEASE_CHANNEL=%s\nOPENCORD_BUILD_COMMIT=%s\nSERVER_LOG_LEVEL=info\nVOICE_PUBLIC_HOST=%s\n' \
+    "${OPENCORD_VERSION}" "${OPENCORD_RELEASE_CHANNEL}" "${OPENCORD_BUILD_COMMIT}" "${VOICE_PUBLIC_HOST}" > "${DEPLOY_DIR}/.env"
 else
-  printf 'OPENCORD_DOMAIN=%s\nACME_EMAIL=%s\nOPENCORD_VERSION=local\nSERVER_LOG_LEVEL=info\n' \
-    "${OPENCORD_DOMAIN}" "${ACME_EMAIL}" > "${DEPLOY_DIR}/.env"
+  printf 'OPENCORD_DOMAIN=%s\nACME_EMAIL=%s\nOPENCORD_VERSION=%s\nOPENCORD_RELEASE_CHANNEL=%s\nOPENCORD_BUILD_COMMIT=%s\nSERVER_LOG_LEVEL=info\n' \
+    "${OPENCORD_DOMAIN}" "${ACME_EMAIL}" "${OPENCORD_VERSION}" "${OPENCORD_RELEASE_CHANNEL}" "${OPENCORD_BUILD_COMMIT}" > "${DEPLOY_DIR}/.env"
 fi
 chmod 0600 "${DEPLOY_DIR}/.env"
 
@@ -205,9 +227,12 @@ compose() {
 
 printf 'Validating the OpenCord Compose configuration...\n'
 compose config --quiet
-printf 'Pulling infrastructure images and building OpenCord Server...\n'
-if [[ "${INSECURE_MODE}" == "true" ]]; then compose pull database livekit; else compose pull database caddy livekit; fi
-compose build --pull server
+printf 'Pulling pinned infrastructure and OpenCord Server images...\n'
+if [[ "${INSECURE_MODE}" == "true" ]]; then
+  compose pull database livekit server attachments-init
+else
+  compose pull database caddy livekit server attachments-init
+fi
 if [[ "${INSECURE_MODE}" == "true" ]]; then
   compose stop caddy >/dev/null 2>&1 || true
   compose rm --force caddy >/dev/null 2>&1 || true
