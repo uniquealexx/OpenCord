@@ -7,20 +7,30 @@ SETTINGS_FILE="${MANAGEMENT_ROOT}/settings/server.env"
 BUNDLE_URL=""
 BUNDLE_FILE=""
 EXPECTED_SHA256=""
+EXPECTED_SIZE_BYTES=""
+CHANNEL=""
+CHECK_ONLY="false"
+GITHUB_API_URL="https://api.github.com/repos/uniquealexx/OpenCord/releases/latest"
 
 usage() {
   cat <<'USAGE'
 Использование:
+  sudo opencordctl check-update
+  sudo opencordctl check-update --channel stable
+  sudo opencordctl update --channel stable
   sudo opencordctl update --bundle-url https://example.com/opencord-server.tar.gz --sha256 HEX
   sudo opencordctl update --bundle-file /absolute/path/opencord-server.tar.gz --sha256 HEX
 
-Архив должен быть официальным OpenCord Server bundle, а SHA-256 необходимо
-получить из отдельного доверенного источника релиза.
+Канал stable использует опубликованный GitHub Release и проверяет release-manifest,
+версию протокола, размер и SHA-256 архива. Ручные источники предназначены для
+аварийного восстановления; SHA-256 для них получают отдельно.
 USAGE
 }
 
 while (($#)); do
   case "$1" in
+    --check-only) CHECK_ONLY="true"; shift ;;
+    --channel) CHANNEL="${2:-}"; shift 2 ;;
     --bundle-url) BUNDLE_URL="${2:-}"; shift 2 ;;
     --bundle-file) BUNDLE_FILE="${2:-}"; shift 2 ;;
     --sha256) EXPECTED_SHA256="${2:-}"; shift 2 ;;
@@ -37,17 +47,35 @@ if [[ ! -r "${SETTINGS_FILE}" ]]; then
   printf 'Не найдены настройки установленного OpenCord Server.\n' >&2
   exit 1
 fi
-if [[ -n "${BUNDLE_URL}" && -n "${BUNDLE_FILE}" ]] || [[ -z "${BUNDLE_URL}" && -z "${BUNDLE_FILE}" ]]; then
-  printf 'Укажите ровно один источник: --bundle-url или --bundle-file.\n' >&2
+if [[ "${CHECK_ONLY}" == "true" && -z "${CHANNEL}" ]]; then CHANNEL="stable"; fi
+source_count=0
+[[ -n "${CHANNEL}" ]] && source_count=$((source_count + 1))
+[[ -n "${BUNDLE_URL}" ]] && source_count=$((source_count + 1))
+[[ -n "${BUNDLE_FILE}" ]] && source_count=$((source_count + 1))
+if [[ "${source_count}" -ne 1 ]]; then
+  printf 'Укажите ровно один источник: --channel, --bundle-url или --bundle-file.\n' >&2
   exit 2
 fi
-EXPECTED_SHA256="${EXPECTED_SHA256,,}"
-if [[ ! "${EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
-  printf 'Для обновления требуется ожидаемая SHA-256 сумма из 64 hex-символов.\n' >&2
+if [[ "${CHECK_ONLY}" == "true" && -z "${CHANNEL}" ]]; then
+  printf 'Проверка обновлений доступна только через --channel stable.\n' >&2
   exit 2
 fi
-if [[ -n "${BUNDLE_URL}" && ! "${BUNDLE_URL}" =~ ^https://[^[:space:]]+$ ]]; then
-  printf 'Удалённый bundle разрешено загружать только по HTTPS.\n' >&2
+if [[ -n "${CHANNEL}" && "${CHANNEL}" != "stable" ]]; then
+  printf 'Пока поддерживается только канал stable.\n' >&2
+  exit 2
+fi
+if [[ -z "${CHANNEL}" ]]; then
+  EXPECTED_SHA256="${EXPECTED_SHA256,,}"
+  if [[ ! "${EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'Для ручного обновления требуется ожидаемая SHA-256 сумма из 64 hex-символов.\n' >&2
+    exit 2
+  fi
+  if [[ -n "${BUNDLE_URL}" && ! "${BUNDLE_URL}" =~ ^https://[^[:space:]]+$ ]]; then
+    printf 'Удалённый bundle разрешено загружать только по HTTPS.\n' >&2
+    exit 2
+  fi
+elif [[ -n "${EXPECTED_SHA256}" ]]; then
+  printf 'При обновлении по каналу SHA-256 берётся только из проверенного release manifest.\n' >&2
   exit 2
 fi
 
@@ -57,6 +85,30 @@ if [[ "${INSTALL_ROOT:-}" != "/opt/opencord" || ("${INSTALL_MODE:-}" != "docker"
   printf 'Настройки OpenCord содержат неожиданные пути или режим установки.\n' >&2
   exit 1
 fi
+
+compose() {
+  local files=(--file "${INSTALL_ROOT}/deploy/compose.yml")
+  if [[ "${INSECURE_MODE:-false}" == "true" ]]; then
+    files+=(--file "${INSTALL_ROOT}/deploy/compose.insecure.yml")
+  fi
+  docker compose --project-directory "${INSTALL_ROOT}" --env-file "${INSTALL_ROOT}/deploy/.env" "${files[@]}" "$@"
+}
+
+run_node_script() {
+  local script="$1"
+  shift
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose exec -T server node -e "${script}" "$@"
+  else
+    node -e "${script}" "$@"
+  fi
+}
+
+run_release_helper() {
+  local helper_source
+  helper_source="$(cat -- "${MANAGEMENT_ROOT}/libexec/release-channel.mjs")"
+  run_node_script "${helper_source}" "$@"
+}
 
 temporary_root="$(mktemp -d /tmp/opencord-update.XXXXXXXX)"
 cleanup() {
@@ -68,9 +120,75 @@ trap cleanup EXIT
 archive_path="${temporary_root}/server-bundle.tar.gz"
 source_root="${temporary_root}/bundle"
 
+if [[ -n "${CHANNEL}" ]]; then
+  health_script='fetch("http://127.0.0.1:3210/health").then(async(response)=>{const h=await response.json();if(!response.ok||h.status!=="ok"||h.service!=="opencord-server"||typeof h.version!=="string"||!["development","beta","stable"].includes(h.releaseChannel)||!Number.isInteger(h.protocolVersion))throw new Error("OpenCord Server returned an invalid health response");process.stdout.write(`${h.version}\t${h.releaseChannel}\t${h.protocolVersion}\n`)}).catch((error)=>{process.stderr.write(`${error.message}\n`);process.exitCode=1})'
+  if ! health_metadata="$(run_node_script "${health_script}")"; then
+    printf 'Не удалось определить установленную версию. Убедитесь, что OpenCord Server запущен.\n' >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r installed_version installed_channel installed_protocol extra_health <<< "${health_metadata}"
+  if [[ -z "${installed_version}" || -z "${installed_channel}" || -z "${installed_protocol}" || -n "${extra_health:-}" ]]; then
+    printf 'Установленный сервер вернул неоднозначные метаданные версии.\n' >&2
+    exit 1
+  fi
+
+  github_response="${temporary_root}/github-release.json"
+  manifest_path="${temporary_root}/release-manifest.json"
+  printf 'Проверка последнего stable-релиза OpenCord...\n'
+  if ! curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 20 --max-time 60 --max-filesize 1048576 \
+    --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28' --user-agent 'OpenCord-Updater/1' \
+    "${GITHUB_API_URL}" --output "${github_response}"; then
+    printf 'Не удалось получить последний stable-релиз GitHub. Убедитесь, что stable-релиз опубликован и VPS имеет доступ к github.com.\n' >&2
+    exit 1
+  fi
+  if ! release_result="$(run_release_helper resolve-release "${CHANNEL}" < "${github_response}")"; then
+    printf 'Ответ GitHub Releases не прошёл проверку.\n' >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r release_version manifest_url extra_release <<< "${release_result}"
+  if [[ -z "${release_version}" || -z "${manifest_url}" || -n "${extra_release:-}" ]]; then
+    printf 'Не удалось однозначно определить release manifest.\n' >&2
+    exit 1
+  fi
+  if ! curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 20 --max-time 60 --max-filesize 1048576 \
+    --user-agent 'OpenCord-Updater/1' "${manifest_url}" --output "${manifest_path}"; then
+    printf 'Не удалось скачать release-manifest.json.\n' >&2
+    exit 1
+  fi
+  if ! manifest_result="$(run_release_helper resolve-manifest "${CHANNEL}" "${release_version}" "${installed_version}" "${installed_channel}" "${installed_protocol}" < "${manifest_path}")"; then
+    printf 'Release manifest не прошёл проверку. Обновление остановлено.\n' >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r update_status resolved_version BUNDLE_URL EXPECTED_SHA256 EXPECTED_SIZE_BYTES release_commit extra_manifest <<< "${manifest_result}"
+  if [[ -z "${update_status}" || -z "${resolved_version}" || -n "${extra_manifest:-}" ]]; then
+    printf 'Проверенный manifest вернул неоднозначные данные.\n' >&2
+    exit 1
+  fi
+  case "${update_status}" in
+    current)
+      printf 'OpenCord Server %s уже является актуальной версией канала %s.\n' "${installed_version}" "${CHANNEL}"
+      exit 0
+      ;;
+    newer)
+      printf 'Установленная версия OpenCord Server %s новее опубликованной %s (%s). Обновление не требуется.\n' "${installed_version}" "${resolved_version}" "${CHANNEL}"
+      exit 0
+      ;;
+    update)
+      printf 'Доступно обновление OpenCord Server: %s -> %s (%s, commit %s).\n' "${installed_version}" "${resolved_version}" "${CHANNEL}" "${release_commit}"
+      if [[ "${CHECK_ONLY}" == "true" ]]; then exit 0; fi
+      ;;
+    *)
+      printf 'Manifest вернул неизвестный статус обновления.\n' >&2
+      exit 1
+      ;;
+  esac
+fi
+
 if [[ -n "${BUNDLE_URL}" ]]; then
   printf 'Загрузка OpenCord Server bundle по HTTPS...\n'
-  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 600 "${BUNDLE_URL}" --output "${archive_path}"
+  curl_arguments=(--fail --location --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 20 --max-time 600 --user-agent 'OpenCord-Updater/1')
+  if [[ -n "${EXPECTED_SIZE_BYTES}" ]]; then curl_arguments+=(--max-filesize "${EXPECTED_SIZE_BYTES}"); fi
+  curl "${curl_arguments[@]}" "${BUNDLE_URL}" --output "${archive_path}"
 else
   resolved_bundle="$(readlink -f -- "${BUNDLE_FILE}")"
   if [[ ! -f "${resolved_bundle}" ]]; then
@@ -78,6 +196,14 @@ else
     exit 1
   fi
   install -m 0600 -- "${resolved_bundle}" "${archive_path}"
+fi
+
+if [[ -n "${EXPECTED_SIZE_BYTES}" ]]; then
+  actual_size_bytes="$(stat --format='%s' -- "${archive_path}")"
+  if [[ "${actual_size_bytes}" != "${EXPECTED_SIZE_BYTES}" ]]; then
+    printf 'Размер bundle не совпадает с release manifest. Ожидалось %s, получено %s байт.\n' "${EXPECTED_SIZE_BYTES}" "${actual_size_bytes}" >&2
+    exit 1
+  fi
 fi
 
 actual_sha256="$(sha256sum -- "${archive_path}" | awk '{print $1}')"

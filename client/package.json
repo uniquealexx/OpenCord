@@ -23,14 +23,15 @@
     "@radix-ui/react-tooltip": "latest",
     "class-variance-authority": "latest",
     "clsx": "latest",
+    "electron-updater": "^6.8.9",
     "livekit-client": "^2.21.0",
     "lucide-react": "latest",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
     "ssh2": "1.17.0",
-    "tar": "7.5.20",
     "tailwind-merge": "latest",
+    "tar": "7.5.20",
     "zod": "latest"
   },
   "devDependencies": {
@@ -58,6 +59,14 @@
     "appId": "org.opencord.desktop",
     "productName": "OpenCord",
     "asar": true,
+    "generateUpdatesFilesForAllChannels": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "uniquealexx",
+        "repo": "OpenCord"
+      }
+    ],
     "directories": {
       "output": "release"
     },

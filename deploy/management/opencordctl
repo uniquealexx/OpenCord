@@ -45,6 +45,10 @@ usage() {
   backup                 резервная копия PostgreSQL и вложений
   clear-messages DELETE-ALL-MESSAGES
                          удалить всю историю сообщений после создания backup
+  check-update [--channel stable]
+                         проверить наличие нового стабильного релиза
+  update --channel stable
+                         скачать проверенный stable bundle, создать backup и обновить сервер
   update --bundle-url URL --sha256 HEX
   update --bundle-file PATH --sha256 HEX
                          проверить bundle, создать backup и обновить сервер
@@ -332,6 +336,7 @@ case "${command_name}" in
   settings) show_settings ;;
   backup) create_backup ;;
   clear-messages) clear_messages "$@" ;;
+  check-update) "${MANAGEMENT_ROOT}/libexec/update-server" --check-only "$@" ;;
   update) "${MANAGEMENT_ROOT}/libexec/update-server" "$@" ;;
   uninstall)
     if [[ "${1:-}" == "--purge-data" ]]; then

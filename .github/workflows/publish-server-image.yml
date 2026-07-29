@@ -1,16 +1,16 @@
-name: Publish OpenCord Server image
+name: Publish OpenCord release
 
 on:
   push:
     tags:
-      - "v*-beta.*"
+      - "v*"
 
 concurrency:
-  group: publish-server-image-${{ github.ref }}
+  group: publish-opencord-release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -21,8 +21,11 @@ env:
 
 jobs:
   publish:
-    name: Build and publish linux/amd64
+    name: Build and publish server release
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      channel: ${{ steps.release.outputs.channel }}
 
     steps:
       - name: Check out tagged source
@@ -39,7 +42,7 @@ jobs:
           corepack enable
           corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
-      - name: Validate beta release metadata
+      - name: Validate release metadata
         id: release
         shell: bash
         run: |
@@ -49,11 +52,16 @@ jobs:
             echo "Git tag ${GITHUB_REF_NAME} does not match package version ${version}." >&2
             exit 1
           fi
-          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
-            echo "Beta images require a version such as 0.1.0-beta.1." >&2
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            channel="beta"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel="stable"
+          else
+            echo "Supported releases are X.Y.Z or X.Y.Z-beta.N." >&2
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
           echo "short_sha=${GITHUB_SHA:0:12}" >> "${GITHUB_OUTPUT}"
 
       - name: Install dependencies
@@ -82,7 +90,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ steps.release.outputs.version }}
-            type=raw,value=beta
+            type=raw,value=beta,enable=${{ steps.release.outputs.channel == 'beta' }}
+            type=raw,value=stable,enable=${{ steps.release.outputs.channel == 'stable' }}
             type=raw,value=latest
             type=raw,value=sha-${{ steps.release.outputs.short_sha }}
           labels: |
@@ -105,7 +114,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             OPENCORD_VERSION=${{ steps.release.outputs.version }}
-            OPENCORD_RELEASE_CHANNEL=beta
+            OPENCORD_RELEASE_CHANNEL=${{ steps.release.outputs.channel }}
             OPENCORD_BUILD_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -116,4 +125,111 @@ jobs:
         shell: bash
         run: |
           echo "Published ${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "Tags: ${{ steps.release.outputs.version }}, beta, latest, sha-${{ steps.release.outputs.short_sha }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Channel: ${{ steps.release.outputs.channel }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Tags: ${{ steps.release.outputs.version }}, ${{ steps.release.outputs.channel }}, latest, sha-${{ steps.release.outputs.short_sha }}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Build source-free server release bundle
+        shell: bash
+        run: |
+          pnpm bundle:server -- \
+            --channel "${{ steps.release.outputs.channel }}" \
+            --server-image-reference "${REGISTRY}/${IMAGE_NAME}:${{ steps.release.outputs.version }}" \
+            --server-image-digest "${{ steps.push.outputs.digest }}"
+
+      - name: Upload server assets to a draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.release.outputs.version }}"
+          bundle="release/opencord-server-${version}.tar.gz"
+          assets=("${bundle}" "${bundle}.sha256" "release/release-manifest.json")
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            title="OpenCord ${version}"
+            if [[ "${{ steps.release.outputs.channel }}" == "beta" ]]; then title="${title} Beta"; fi
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --draft --generate-notes --title "${title}"
+          fi
+
+  publish-client:
+    name: Build and publish Windows client
+    needs: publish
+    runs-on: windows-2025
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${env:PNPM_VERSION}" --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows NSIS update artifacts
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          pnpm package:win
+          $version = "${{ needs.publish.outputs.version }}"
+          $channel = "${{ needs.publish.outputs.channel }}"
+          if ($channel -eq "beta") { Copy-Item -LiteralPath "client/release/latest.yml" -Destination "client/release/beta.yml" -Force }
+          $metadata = if ($channel -eq "beta") { "beta.yml" } else { "latest.yml" }
+          $required = @(
+            "client/release/OpenCord-Setup-$version-x64.exe",
+            "client/release/OpenCord-Setup-$version-x64.exe.blockmap",
+            "client/release/$metadata"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing Windows release artifact: $file" }
+          }
+
+      - name: Attach Windows artifacts to release manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ needs.publish.outputs.version }}"
+          $channel = "${{ needs.publish.outputs.channel }}"
+          $metadata = if ($channel -eq "beta") { "beta.yml" } else { "latest.yml" }
+          gh release download "${env:GITHUB_REF_NAME}" --pattern "release-manifest.json" --dir "release-input" --clobber
+          node scripts/release-manifest.mjs --attach-windows-client `
+            --manifest "release-input/release-manifest.json" `
+            --installer "client/release/OpenCord-Setup-$version-x64.exe" `
+            --update-metadata "client/release/$metadata" `
+            --blockmap "client/release/OpenCord-Setup-$version-x64.exe.blockmap"
+          pnpm manifest:validate -- "release-input/release-manifest.json"
+
+      - name: Publish Windows assets and finalize release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ needs.publish.outputs.version }}"
+          $channel = "${{ needs.publish.outputs.channel }}"
+          $metadata = if ($channel -eq "beta") { "beta.yml" } else { "latest.yml" }
+          $wasDraft = gh release view "${env:GITHUB_REF_NAME}" --json isDraft --jq '.isDraft'
+          gh release upload "${env:GITHUB_REF_NAME}" `
+            "client/release/OpenCord-Setup-$version-x64.exe" `
+            "client/release/OpenCord-Setup-$version-x64.exe.blockmap" `
+            "client/release/$metadata" `
+            "release-input/release-manifest.json" --clobber
+          if ($wasDraft -eq "true") {
+            if ($channel -eq "beta") {
+              gh release edit "${env:GITHUB_REF_NAME}" --draft=false --prerelease
+            } else {
+              gh release edit "${env:GITHUB_REF_NAME}" --draft=false --latest
+            }
+          }

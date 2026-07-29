@@ -17,7 +17,7 @@ export function validateReleaseContext(releaseChannel, now = new Date()) {
   return { version, releaseMetadata };
 }
 
-export async function createReleaseManifest({ serverBundlePath, outputPath = path.join(repositoryRoot, "release", "release-manifest.json"), releaseChannel = "development", now = new Date() }) {
+export async function createReleaseManifest({ serverBundlePath, outputPath = path.join(repositoryRoot, "release", "release-manifest.json"), releaseChannel = "development", serverImage = null, now = new Date() }) {
   const { version, releaseMetadata } = validateReleaseContext(releaseChannel, now);
   const bundlePath = path.resolve(serverBundlePath);
   const bundle = statSync(bundlePath);
@@ -43,7 +43,7 @@ export async function createReleaseManifest({ serverBundlePath, outputPath = pat
         target: { os: "linux", arch: "x64" },
         installModes: ["docker", "native"],
       },
-      serverImage: null,
+      serverImage,
       windowsClient: null,
     },
   });
@@ -51,6 +51,52 @@ export async function createReleaseManifest({ serverBundlePath, outputPath = pat
   assertCompatibleExistingManifest(outputPath, manifest);
   writeJsonAtomically(outputPath, manifest);
   return manifest;
+}
+
+export async function attachWindowsClientArtifacts({ manifestPath, installerPath, updateMetadataPath, blockmapPath = null }) {
+  const resolvedManifestPath = path.resolve(manifestPath);
+  const manifest = validateReleaseManifestFile(resolvedManifestPath);
+  const version = synchronizedVersion();
+  if (manifest.releaseChannel === "development" || manifest.version !== version) throw new Error("Windows artifacts require a matching published release manifest");
+  if (manifest.commit !== runGit(["rev-parse", "HEAD"])) throw new Error("Release manifest commit does not match the current checkout");
+  if (!runGit(["tag", "--points-at", "HEAD"]).split(/\r?\n/u).includes(`v${version}`)) throw new Error(`Release tag v${version} is not attached to HEAD`);
+
+  const installer = await downloadableArtifact(installerPath, version);
+  const updateMetadata = await downloadableArtifact(updateMetadataPath, version);
+  const blockmap = blockmapPath ? await downloadableArtifact(blockmapPath, version) : null;
+  const expectedInstaller = `OpenCord-Setup-${version}-x64.exe`;
+  const expectedMetadata = manifest.releaseChannel === "beta" ? "beta.yml" : "latest.yml";
+  if (installer.fileName !== expectedInstaller) throw new Error(`Expected Windows installer ${expectedInstaller}`);
+  if (updateMetadata.fileName !== expectedMetadata) throw new Error(`Expected update metadata ${expectedMetadata}`);
+  if (blockmap && blockmap.fileName !== `${expectedInstaller}.blockmap`) throw new Error(`Expected blockmap ${expectedInstaller}.blockmap`);
+
+  const nextManifest = releaseManifestSchema.parse({
+    ...manifest,
+    artifacts: {
+      ...manifest.artifacts,
+      windowsClient: {
+        installer,
+        updateMetadata,
+        blockmap,
+        target: { os: "windows", arch: "x64" },
+      },
+    },
+  });
+  writeJsonAtomically(resolvedManifestPath, nextManifest);
+  return nextManifest;
+}
+
+async function downloadableArtifact(filePath, version) {
+  const resolved = path.resolve(filePath);
+  const file = statSync(resolved);
+  if (!file.isFile() || file.size < 1) throw new Error(`Release artifact is empty or missing: ${resolved}`);
+  const fileName = path.basename(resolved);
+  return {
+    fileName,
+    downloadUrl: `${canonicalRepositoryUrl}/releases/download/v${version}/${encodeURIComponent(fileName)}`,
+    sha256: await sha256File(resolved),
+    sizeBytes: file.size,
+  };
 }
 
 export function validateReleaseManifestFile(filePath) {
@@ -137,6 +183,22 @@ function parseArguments(arguments_) {
     if (!args[1] || args.length !== 2) throw new Error("Usage: release-manifest.mjs --validate PATH");
     return { mode: "validate", filePath: args[1] };
   }
+  if (args[0] === "--attach-windows-client") {
+    let manifestPath = "";
+    let installerPath = "";
+    let updateMetadataPath = "";
+    let blockmapPath = null;
+    for (let index = 1; index < args.length; index += 1) {
+      const argument = args[index];
+      if (argument === "--manifest") manifestPath = args[++index] ?? "";
+      else if (argument === "--installer") installerPath = args[++index] ?? "";
+      else if (argument === "--update-metadata") updateMetadataPath = args[++index] ?? "";
+      else if (argument === "--blockmap") blockmapPath = args[++index] ?? "";
+      else throw new Error(`Unknown Windows artifact argument: ${argument}`);
+    }
+    if (!manifestPath || !installerPath || !updateMetadataPath) throw new Error("Usage: --attach-windows-client --manifest PATH --installer PATH --update-metadata PATH [--blockmap PATH]");
+    return { mode: "attach-windows", manifestPath, installerPath, updateMetadataPath, blockmapPath };
+  }
   let releaseChannel = "development";
   let serverBundlePath = "";
   let outputPath;
@@ -166,6 +228,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (command.mode === "validate") {
       const manifest = validateReleaseManifestFile(command.filePath);
       process.stdout.write(`Valid OpenCord ${manifest.releaseChannel} manifest ${manifest.version}.\n`);
+    } else if (command.mode === "attach-windows") {
+      const manifest = await attachWindowsClientArtifacts(command);
+      process.stdout.write(`Windows client attached to OpenCord ${manifest.version} manifest.\n`);
     } else {
       const manifest = await createReleaseManifest(command);
       process.stdout.write(`Manifest: ${path.resolve(command.outputPath ?? path.join(repositoryRoot, "release", "release-manifest.json"))}\nVersion: ${manifest.version}\n`);

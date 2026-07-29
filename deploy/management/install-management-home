@@ -35,7 +35,7 @@ if [[ "${INSECURE_MODE}" == "false" ]]; then
     exit 1
   fi
 fi
-if [[ ! -f "${SOURCE_DIR}/opencordctl" || ! -f "${SOURCE_DIR}/update-server" || ! -f "${SOURCE_DIR}/README.md" ]]; then
+if [[ ! -f "${SOURCE_DIR}/opencordctl" || ! -f "${SOURCE_DIR}/update-server" || ! -f "${SOURCE_DIR}/release-channel.mjs" || ! -f "${SOURCE_DIR}/README.md" ]]; then
   printf 'OpenCord management assets are incomplete.\n' >&2
   exit 1
 fi
@@ -56,6 +56,7 @@ install -d -m 0750 -o root -g opencord \
   "${MANAGEMENT_ROOT}/settings"
 install -m 0750 -o root -g opencord "${SOURCE_DIR}/opencordctl" "${MANAGEMENT_ROOT}/opencordctl"
 install -m 0750 -o root -g opencord "${SOURCE_DIR}/update-server" "${MANAGEMENT_ROOT}/libexec/update-server"
+install -m 0640 -o root -g opencord "${SOURCE_DIR}/release-channel.mjs" "${MANAGEMENT_ROOT}/libexec/release-channel.mjs"
 install -m 0640 -o root -g opencord "${SOURCE_DIR}/README.md" "${MANAGEMENT_ROOT}/README.md"
 if [[ (-e /usr/local/bin/opencordctl || -L /usr/local/bin/opencordctl) && "$(readlink /usr/local/bin/opencordctl 2>/dev/null || true)" != "${MANAGEMENT_ROOT}/opencordctl" ]]; then
   printf 'Refusing to replace an unrelated /usr/local/bin/opencordctl.\n' >&2
@@ -104,7 +105,7 @@ fi
 chown root:opencord "${MANAGEMENT_ROOT}/data/README.md"
 chmod 0640 "${MANAGEMENT_ROOT}/data/README.md"
 
-for command in status doctor logs start stop restart settings backup clear-messages update uninstall; do
+for command in status doctor logs start stop restart settings backup clear-messages check-update update uninstall; do
   ln -sfn -- ../opencordctl "${MANAGEMENT_ROOT}/scripts/${command}.sh"
 done
 rm -f -- "${MANAGEMENT_ROOT}/.uninstalled"

@@ -3,6 +3,7 @@ import { IPC, type OpenCordBridge } from "../src/shared/bridge";
 import { parsePersistedState } from "../src/shared/state";
 import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedServerBundleSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
 import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
+import { clientUpdateStateSchema } from "../src/shared/updater";
 
 const bridge: OpenCordBridge = {
   window: {
@@ -50,6 +51,17 @@ const bridge: OpenCordBridge = {
     selectAndUpload: async (context) => attachmentUploadResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentSelectAndUpload, attachmentTransferContextSchema.parse(context))),
     download: async (request) => (await ipcRenderer.invoke(IPC.attachmentDownload, attachmentDownloadRequestSchema.parse(request))) === true,
     preview: async (request) => attachmentPreviewResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentPreview, attachmentDownloadRequestSchema.parse(request))),
+  },
+  updates: {
+    getState: async () => clientUpdateStateSchema.parse(await ipcRenderer.invoke(IPC.updateGetState)),
+    check: async () => clientUpdateStateSchema.parse(await ipcRenderer.invoke(IPC.updateCheck)),
+    download: async () => clientUpdateStateSchema.parse(await ipcRenderer.invoke(IPC.updateDownload)),
+    install: () => ipcRenderer.invoke(IPC.updateInstall) as Promise<void>,
+    onStateChange: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(clientUpdateStateSchema.parse(value));
+      ipcRenderer.on(IPC.updateStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC.updateStateChanged, handler);
+    },
   },
 };
 

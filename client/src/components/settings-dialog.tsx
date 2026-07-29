@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Headphones, KeyRound, LoaderCircle, Mic, RotateCcw, Square } from "lucide-react";
+import { Download, Headphones, KeyRound, LoaderCircle, Mic, RefreshCw, RotateCcw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { ru } from "@/lib/i18n/ru";
 import type { ClientPreferences } from "@/shared/state";
+import type { ClientUpdateState } from "@/shared/updater";
 
 export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, onPreferences, onRequestReset, onCancelReset, onReset }: { preferences: ClientPreferences; open: boolean; confirmReset: boolean; onOpenChange: (open: boolean) => void; onPreferences: (preferences: ClientPreferences) => void; onRequestReset: () => void; onCancelReset: () => void; onReset: () => void }): React.ReactElement {
   const [fingerprint, setFingerprint] = useState("загрузка…");
@@ -14,6 +15,7 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [microphoneTestStatus, setMicrophoneTestStatus] = useState<"idle" | "starting" | "listening" | "error">("idle");
   const [microphoneTestError, setMicrophoneTestError] = useState<string | null>(null);
+  const [updateState, setUpdateState] = useState<ClientUpdateState | null>(null);
   const microphoneTestStreamRef = useRef<MediaStream | null>(null);
   const microphoneTestAudioRef = useRef<HTMLAudioElement | null>(null);
   const microphoneTestGenerationRef = useRef(0);
@@ -38,6 +40,13 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
   useEffect(() => {
     if (!open) return;
     void window.openCord?.identity.getOrCreate().then((identity) => setFingerprint(identity.fingerprint)).catch(() => setFingerprint("недоступен"));
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !window.openCord?.updates) return;
+    const updates = window.openCord.updates;
+    void updates.getState().then(setUpdateState);
+    return updates.onStateChange(setUpdateState);
   }, [open]);
 
   useEffect(() => releaseMicrophoneTest, [releaseMicrophoneTest]);
@@ -106,6 +115,7 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
       <DialogContent className="max-w-xl">
         <DialogHeader><DialogTitle>{ru.settings.title}</DialogTitle></DialogHeader>
         {!confirmReset ? <div className="space-y-6">
+          <ClientUpdateSection state={updateState} />
           <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{ru.settings.appearance}</h3><div className="divide-y divide-white/6 rounded-2xl border border-white/7 bg-white/[.025]">
             <SettingRow title={ru.settings.compact} hint={ru.settings.compactHint}><Switch checked={preferences.compactMode} onCheckedChange={(value) => onPreferences({ ...preferences, compactMode: value })} /></SettingRow>
             <SettingRow title={ru.settings.members}><Switch checked={preferences.showMemberList} onCheckedChange={(value) => onPreferences({ ...preferences, showMemberList: value })} /></SettingRow>
@@ -118,6 +128,24 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
       </DialogContent>
     </Dialog>
   );
+}
+
+function ClientUpdateSection({ state }: { state: ClientUpdateState | null }): React.ReactElement {
+  const updates = window.openCord?.updates;
+  if (!state) return <></>;
+  const checking = state?.status === "checking";
+  const downloading = state?.status === "downloading";
+  let message = "Получение информации о версии…";
+  if (state?.status === "disabled") message = state.reason;
+  else if (state?.status === "checking") message = ru.settings.updateChecking;
+  else if (state?.status === "up-to-date") message = ru.settings.updateCurrent;
+  else if (state?.status === "available") message = `${ru.settings.updateAvailable(state.version)} · ${(state.sizeBytes / 1024 / 1024).toFixed(1)} МБ`;
+  else if (state?.status === "downloading") message = ru.settings.updateDownloading(state.percent);
+  else if (state?.status === "downloaded") message = ru.settings.updateDownloaded;
+  else if (state?.status === "error") message = state.message;
+  else if (state) message = ru.settings.updateChannel(state.currentVersion, state.channel);
+
+  return <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{ru.settings.updates}</h3><div className="rounded-2xl border border-cyan-400/10 bg-cyan-400/[.035] p-4"><div className="flex items-center justify-between gap-4"><div className="min-w-0"><p role={state?.status === "error" ? "alert" : "status"} className={state?.status === "error" ? "text-sm text-red-300" : "text-sm text-slate-300"}>{message}</p>{state && state.status !== "disabled" && <p className="mt-1 text-xs text-slate-500">{ru.settings.updateChannel(state.currentVersion, state.channel)}</p>}</div><div className="shrink-0">{state?.status === "available" ? <Button size="sm" onClick={() => void updates?.download()}><Download className="size-4" />{ru.settings.updateDownload}</Button> : state?.status === "downloaded" ? <Button size="sm" onClick={() => void updates?.install()}>{ru.settings.updateInstall}</Button> : <Button variant="secondary" size="sm" disabled={!updates || checking || downloading || state?.status === "disabled"} onClick={() => void updates?.check()}>{checking ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}{checking ? ru.settings.updateChecking : downloading ? ru.settings.updateDownloading(state.percent) : ru.settings.updateCheck}</Button>}</div></div>{downloading && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/7"><div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-[width]" style={{ width: `${state.percent}%` }} /></div>}</div></section>;
 }
 
 function DeviceSelect({ label, devices, value, onChange }: { label: string; devices: MediaDeviceInfo[]; value: string | null; onChange: (value: string | null) => void }): React.ReactElement {

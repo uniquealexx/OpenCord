@@ -18,10 +18,16 @@ describe("release manifest v1", () => {
   });
 
   it("accepts a complete stable manifest and future protocol versions", () => {
+    const windowsClient = {
+      installer: { fileName: "OpenCord-Setup-1.2.3-x64.exe", downloadUrl: "https://github.com/uniquealexx/OpenCord/releases/download/v1.2.3/OpenCord-Setup-1.2.3-x64.exe", sha256: "d".repeat(64), sizeBytes: 2048 },
+      updateMetadata: { fileName: "latest.yml", downloadUrl: "https://github.com/uniquealexx/OpenCord/releases/download/v1.2.3/latest.yml", sha256: "e".repeat(64), sizeBytes: 512 },
+      blockmap: { fileName: "OpenCord-Setup-1.2.3-x64.exe.blockmap", downloadUrl: "https://github.com/uniquealexx/OpenCord/releases/download/v1.2.3/OpenCord-Setup-1.2.3-x64.exe.blockmap", sha256: "f".repeat(64), sizeBytes: 256 },
+      target: { os: "windows", arch: "x64" },
+    } as const;
     const manifest = {
       schemaVersion: 1, product: "opencord", releaseChannel: "stable", version: "1.2.3", protocolVersion: PROTOCOL_VERSION + 1,
       commit: "b".repeat(40), publishedAt: "2026-07-29T12:00:00.000Z", releaseUrl: "https://github.com/uniquealexx/OpenCord/releases/tag/v1.2.3",
-      artifacts: { serverBundle: { ...serverBundle, downloadUrl: "https://github.com/uniquealexx/OpenCord/releases/download/v1.2.3/opencord-server-1.2.3.tar.gz" }, serverImage: { reference: "ghcr.io/uniquealexx/opencord-server:1.2.3", digest: `sha256:${"c".repeat(64)}`, platforms: [{ os: "linux", arch: "amd64" }] }, windowsClient: null },
+      artifacts: { serverBundle: { ...serverBundle, downloadUrl: "https://github.com/uniquealexx/OpenCord/releases/download/v1.2.3/opencord-server-1.2.3.tar.gz" }, serverImage: { reference: "ghcr.io/uniquealexx/opencord-server:1.2.3", digest: `sha256:${"c".repeat(64)}`, platforms: [{ os: "linux", arch: "amd64" }] }, windowsClient },
     };
     expect(releaseManifestSchema.parse(manifest)).toEqual(manifest);
   });

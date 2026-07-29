@@ -10,9 +10,11 @@ import { createReleaseManifest, validateReleaseContext } from "../../scripts/rel
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const releaseDirectory = path.join(repositoryRoot, "release");
 const runtimeName = "server-runtime-linux-x64.tar.gz";
-const channelArgumentIndex = process.argv.indexOf("--channel");
-const releaseChannel = channelArgumentIndex >= 0 ? process.argv[channelArgumentIndex + 1] : "development";
+const releaseChannel = argumentValue("--channel") ?? "development";
 if (!["development", "beta", "stable"].includes(releaseChannel)) throw new Error("--channel must be development, beta, or stable");
+const serverImageReference = argumentValue("--server-image-reference");
+const serverImageDigest = argumentValue("--server-image-digest");
+if (Boolean(serverImageReference) !== Boolean(serverImageDigest)) throw new Error("--server-image-reference and --server-image-digest must be provided together");
 
 const { version, releaseMetadata } = validateReleaseContext(releaseChannel);
 const archiveName = `opencord-server-${version}.tar.gz`;
@@ -61,7 +63,10 @@ try {
   mkdirSync(releaseDirectory, { recursive: true });
   run("tar", ["--create", "--gzip", "--file", archivePath, "."], "Could not create the OpenCord server bundle", stagingRoot);
   assertArchiveExcludesSources(archivePath, "bundle");
-  const manifest = await createReleaseManifest({ serverBundlePath: archivePath, releaseChannel });
+  const serverImage = serverImageReference && serverImageDigest
+    ? { reference: serverImageReference, digest: serverImageDigest, platforms: [{ os: "linux", arch: "amd64" }] }
+    : null;
+  const manifest = await createReleaseManifest({ serverBundlePath: archivePath, releaseChannel, serverImage });
   writeFileSync(`${archivePath}.sha256`, `${manifest.artifacts.serverBundle.sha256}  ${archiveName}\n`, { encoding: "utf8", mode: 0o600 });
   process.stdout.write(`Bundle: ${archivePath}\nRuntime: linux/x64 ${runtimeSha256}\nSHA-256: ${manifest.artifacts.serverBundle.sha256}\n`);
   process.stdout.write(`Manifest: ${path.join(releaseDirectory, "release-manifest.json")} (${manifest.releaseChannel})\n`);
@@ -110,4 +115,12 @@ function sha256File(filePath) {
     stream.once("error", reject);
     stream.once("end", () => resolve(hash.digest("hex")));
   });
+}
+
+function argumentValue(name) {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
+  return value;
 }

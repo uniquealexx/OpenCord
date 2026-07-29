@@ -16,13 +16,14 @@ import {
   type SshHostIdentity,
   type SshTarget,
 } from "../src/shared/deployment";
-import type { LocalServerBundleProvider } from "./server-bundle";
+import type { ServerBundleProvider } from "./server-bundle";
 
 type ProgressListener = (progress: DeploymentProgress) => void;
 type CredentialResolver = (credentialId: string) => string | undefined;
 
 interface ActiveDeployment {
   client: Client;
+  abortController: AbortController;
   cancelled: boolean;
 }
 
@@ -30,7 +31,7 @@ export class DeploymentManager {
   private readonly active = new Map<string, ActiveDeployment>();
 
   constructor(
-    private readonly bundleProvider: LocalServerBundleProvider,
+    private readonly bundleProvider: ServerBundleProvider,
     private readonly resolveCredential: CredentialResolver,
     private readonly onProgress: ProgressListener,
   ) {}
@@ -59,7 +60,7 @@ export class DeploymentManager {
   start(input: unknown): { operationId: string } {
     const request = deploymentRequestSchema.parse(input);
     const operationId = randomUUID();
-    const active: ActiveDeployment = { client: new Client(), cancelled: false };
+    const active: ActiveDeployment = { client: new Client(), abortController: new AbortController(), cancelled: false };
     active.client.on("error", () => undefined);
     this.active.set(operationId, active);
     setTimeout(() => { void this.run(operationId, active, request); }, 50);
@@ -71,6 +72,7 @@ export class DeploymentManager {
     const active = this.active.get(operationId);
     if (!active) return;
     active.cancelled = true;
+    active.abortController.abort();
     active.client.end();
     this.emit(operationId, "cancelled", "info", "Развёртывание отменено");
     this.active.delete(operationId);
@@ -81,7 +83,8 @@ export class DeploymentManager {
     const remoteRoot = `/tmp/opencord-install-${operationId}`;
     const remoteArchive = `${remoteRoot}.tar.gz`;
     try {
-      const bundle = await this.bundleProvider.resolve();
+      this.emit(operationId, "uploading", "info", "Скачивание и проверка релизного OpenCord Server bundle");
+      const bundle = await this.bundleProvider.resolve(active.abortController.signal);
       this.assertActive(active);
       this.emit(operationId, "connecting", "info", `Подключение к ${request.host}:${request.port}`);
       const configuration = await this.createConnectionConfiguration(request);

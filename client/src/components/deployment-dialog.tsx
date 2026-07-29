@@ -200,12 +200,12 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed, preset, updat
           <Field label={ru.deployment.passphrase}><Input value={keyPassphrase} onChange={(event) => setKeyPassphrase(event.target.value)} type="password" autoComplete="off" /></Field>
         </div> : <Field label={ru.deployment.password}><Input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="off" required /></Field>}
         {username !== "root" && <Field label={ru.deployment.sudoPassword}><Input value={sudoPassword} onChange={(event) => setSudoPassword(event.target.value)} type="password" autoComplete="off" /></Field>}
-        <Field label="Локальный Server bundle">
+        <Field label="OpenCord Server bundle">
           <span className="grid gap-1.5">
             <Button type="button" variant="secondary" onClick={() => void chooseBundle()} className="w-full">
-              <FileArchive className="size-4" />{selectedBundle ? `${selectedBundle.fileName} · ${selectedBundle.version}` : "Выбрать вручную (необязательно)"}
+              <FileArchive className="size-4" />{selectedBundle ? `${selectedBundle.fileName} · ${selectedBundle.version}` : "Использовать локальный файл вместо релиза"}
             </Button>
-            <span className="text-[11px] font-normal text-slate-500">Рядом с архивом должен находиться файл `.sha256`. В dev актуальный bundle из `release/` выбирается автоматически.</span>
+            <span className="text-[11px] font-normal text-slate-500">По умолчанию клиент скачает bundle своей версии из GitHub Releases и проверит manifest, размер, SHA-256 и внутренний runtime. Для ручного файла рядом должен находиться `.sha256`.</span>
           </span>
         </Field>
         <p className="rounded-xl border border-cyan-400/10 bg-cyan-400/5 p-3 text-xs leading-5 text-cyan-100/70">{ru.deployment.secrets}</p>

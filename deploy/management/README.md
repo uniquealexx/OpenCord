@@ -16,9 +16,19 @@ sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
+sudo opencordctl check-update
+sudo opencordctl update --channel stable
 sudo opencordctl update --bundle-url https://releases.example/opencord-server.tar.gz --sha256 '<SHA256>'
 sudo opencordctl uninstall
 ```
+
+`check-update` и `update --channel stable` используют последний публичный stable GitHub Release
+`uniquealexx/OpenCord`. Перед обновлением проверяются release manifest, версия протокола,
+канонический HTTPS URL, размер и SHA-256 server bundle. Если новая версия найдена, `update`
+создаёт обязательную резервную копию и запускает существующий безопасный установщик.
+
+Ручные `--bundle-url` и `--bundle-file` сохранены для аварийного восстановления. Для них
+SHA-256 нужно получить из отдельного доверенного источника.
 
 Аналогичные короткие сценарии находятся в `scripts/`. Команда `backup` создаёт в `backups/` пару файлов: PostgreSQL в custom-формате `pg_dump` и архив `.attachments.tar` с вложениями. Оба файла нужны для полного восстановления.
 

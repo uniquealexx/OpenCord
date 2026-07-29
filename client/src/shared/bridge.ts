@@ -2,6 +2,7 @@ import type { PersistedClientState } from "./state";
 import type { DeploymentConnection, DeploymentEnvironment, DeploymentProgress, DeploymentRequest, DeploymentStartResult, SelectedServerBundle, SelectedSshKey, SshHostIdentity, SshTarget } from "./deployment";
 import type { Attachment } from "@opencord/shared";
 import type { AttachmentDownloadRequest, AttachmentTransferContext } from "./attachments";
+import type { ClientUpdateState } from "./updater";
 
 export const IPC = {
   windowMinimize: "window:minimize",
@@ -26,6 +27,11 @@ export const IPC = {
   attachmentSelectAndUpload: "attachment:select-and-upload",
   attachmentDownload: "attachment:download",
   attachmentPreview: "attachment:preview",
+  updateGetState: "update:get-state",
+  updateCheck: "update:check",
+  updateDownload: "update:download",
+  updateInstall: "update:install",
+  updateStateChanged: "update:state-changed",
 } as const;
 
 export interface PublicIdentity {
@@ -65,5 +71,12 @@ export interface OpenCordBridge {
     selectAndUpload(context: AttachmentTransferContext): Promise<Attachment | null>;
     download(request: AttachmentDownloadRequest): Promise<boolean>;
     preview(request: AttachmentDownloadRequest): Promise<string>;
+  };
+  updates?: {
+    getState(): Promise<ClientUpdateState>;
+    check(): Promise<ClientUpdateState>;
+    download(): Promise<ClientUpdateState>;
+    install(): Promise<void>;
+    onStateChange(listener: (state: ClientUpdateState) => void): () => void;
   };
 }

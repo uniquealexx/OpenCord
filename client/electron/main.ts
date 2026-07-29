@@ -7,16 +7,21 @@ import { parsePersistedState } from "../src/shared/state";
 import { ClientStateStore } from "./storage";
 import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
-import { LocalServerBundleProvider } from "./server-bundle";
+import { GitHubReleaseBundleProvider, githubReleaseManifestUrl, LocalServerBundleProvider, ReleaseAwareServerBundleProvider } from "./server-bundle";
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
 import { downloadAttachment, previewAttachment, uploadAttachment } from "./attachments";
+import { autoUpdater } from "electron-updater";
+import { ClientUpdateManager } from "./client-updater";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
 let store: ClientStateStore;
 let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
-let serverBundleProvider: LocalServerBundleProvider;
+let serverBundleProvider: ReleaseAwareServerBundleProvider;
+let clientUpdateManager: ClientUpdateManager;
+let bundleCleanupStarted = false;
+let clientUpdateInstalling = false;
 const selectedSshKeys = new Map<string, string>();
 
 function isTrustedRenderer(url: string): boolean {
@@ -139,6 +144,22 @@ function registerIpc(): void {
     const request = attachmentDownloadRequestSchema.parse(input);
     return previewAttachment(request.serverAddress, request.sessionToken, request.attachment);
   });
+  ipcMain.handle(IPC.updateGetState, () => clientUpdateManager.getState());
+  ipcMain.handle(IPC.updateCheck, () => clientUpdateManager.check());
+  ipcMain.handle(IPC.updateDownload, () => clientUpdateManager.download());
+  ipcMain.handle(IPC.updateInstall, async () => {
+    if (!bundleCleanupStarted) {
+      bundleCleanupStarted = true;
+      await serverBundleProvider.dispose();
+    }
+    clientUpdateInstalling = true;
+    try {
+      clientUpdateManager.install();
+    } catch (error) {
+      clientUpdateInstalling = false;
+      throw error;
+    }
+  });
 }
 
 if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {
@@ -152,7 +173,7 @@ void app.whenReady().then(() => {
   store = new ClientStateStore(app.getPath("userData"));
   identityStore = new IdentityStore(app.getPath("userData"));
   const releaseDirectory = app.isPackaged ? path.join(process.resourcesPath, "server-bundles") : path.resolve(app.getAppPath(), "..", "release");
-  serverBundleProvider = new LocalServerBundleProvider(releaseDirectory, app.getVersion(), async () => {
+  const localBundleProvider = new LocalServerBundleProvider(releaseDirectory, app.getVersion(), async () => {
     const options: OpenDialogOptions = {
       title: "Выберите OpenCord Server bundle",
       properties: ["openFile"],
@@ -161,6 +182,20 @@ void app.whenReady().then(() => {
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+  const releaseBundleProvider = new GitHubReleaseBundleProvider(
+    githubReleaseManifestUrl(app.getVersion()),
+    app.getVersion(),
+    app.getPath("temp"),
+  );
+  serverBundleProvider = new ReleaseAwareServerBundleProvider(localBundleProvider, releaseBundleProvider);
+  clientUpdateManager = new ClientUpdateManager(
+    autoUpdater,
+    app.getVersion(),
+    app.isPackaged && process.platform === "win32",
+    (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.updateStateChanged, state);
+    },
+  );
   deploymentManager = new DeploymentManager(serverBundleProvider, (credentialId) => {
     const keyPath = selectedSshKeys.get(credentialId);
     return keyPath;
@@ -169,9 +204,21 @@ void app.whenReady().then(() => {
   });
   registerIpc();
   createWindow();
+  if (app.isPackaged && process.platform === "win32") {
+    const automaticCheck = setTimeout(() => { void clientUpdateManager.check(); }, 10_000);
+    automaticCheck.unref();
+  }
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (clientUpdateInstalling) return;
+  if (!serverBundleProvider || bundleCleanupStarted) return;
+  event.preventDefault();
+  bundleCleanupStarted = true;
+  void serverBundleProvider.dispose().finally(() => app.quit());
 });

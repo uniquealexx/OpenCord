@@ -81,7 +81,7 @@ if [[ "$(ps -p 1 -o comm= | tr -d ' ')" != "systemd" ]]; then
   printf 'Native installation requires systemd as PID 1.\n' >&2
   exit 1
 fi
-for required_file in bundle-info.json server-runtime-linux-x64.tar.gz package.json deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
+for required_file in bundle-info.json server-runtime-linux-x64.tar.gz package.json deploy/management/opencordctl deploy/management/update-server deploy/management/release-channel.mjs deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
   if [[ ! -f "${SOURCE_ROOT}/${required_file}" ]]; then
     printf 'Installation bundle is incomplete: %s is missing.\n' "${required_file}" >&2
     exit 1

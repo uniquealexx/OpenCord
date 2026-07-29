@@ -37,16 +37,27 @@ describe("production deployment", () => {
     expect(dockerfile).not.toContain("pnpm install");
   });
 
-  it("publishes beta server images to GHCR from an exact Git tag", async () => {
+  it("publishes beta and stable server images to GHCR from exact Git tags", async () => {
     const workflow = await readFile(path.join(repositoryRoot, ".github", "workflows", "publish-server-image.yml"), "utf8");
-    expect(workflow).toContain('tags:\n      - "v*-beta.*"');
+    expect(workflow).toContain('tags:\n      - "v*"');
     expect(workflow).toContain("packages: write");
+    expect(workflow).toContain("contents: write");
     expect(workflow).toContain("ghcr.io");
     expect(workflow).toContain("target: runtime");
     expect(workflow).toContain("platforms: linux/amd64");
     expect(workflow).toContain("type=raw,value=beta");
+    expect(workflow).toContain("type=raw,value=stable");
     expect(workflow).toContain("type=raw,value=latest");
-    expect(workflow).toContain("OPENCORD_RELEASE_CHANNEL=beta");
+    expect(workflow).toContain("OPENCORD_RELEASE_CHANNEL=${{ steps.release.outputs.channel }}");
+    expect(workflow).toContain('channel="stable"');
+    expect(workflow).toContain("Build source-free server release bundle");
+    expect(workflow).toContain("Build Windows NSIS update artifacts");
+    expect(workflow).toContain("--attach-windows-client");
+    expect(workflow).toContain("OpenCord-Setup-$version-x64.exe.blockmap");
+    expect(workflow).toContain("release-input/release-manifest.json");
+    expect(workflow).toContain("--draft=false");
+    expect(workflow).toContain("release/release-manifest.json");
+    expect(workflow).toContain("gh release create");
     expect(workflow).not.toMatch(/uses:\s+[^\s]+@(main|master|v\d+)\s*$/mu);
   });
 
@@ -110,6 +121,7 @@ describe("production deployment", () => {
     const controller = await readFile(path.join(repositoryRoot, "deploy", "management", "opencordctl"), "utf8");
     const installer = await readFile(path.join(repositoryRoot, "deploy", "management", "install-management-home"), "utf8");
     const updater = await readFile(path.join(repositoryRoot, "deploy", "management", "update-server"), "utf8");
+    const releaseResolver = await readFile(path.join(repositoryRoot, "deploy", "management", "release-channel.mjs"), "utf8");
     const bundler = await readFile(path.join(repositoryRoot, "deploy", "scripts", "create-update-bundle.mjs"), "utf8");
     const manifestGenerator = await readFile(path.join(repositoryRoot, "scripts", "release-manifest.mjs"), "utf8");
     expect(controller).toContain('MANAGEMENT_ROOT="/home/opencord"');
@@ -124,18 +136,31 @@ describe("production deployment", () => {
     expect(controller).toContain("История не удалена: не удалось создать обязательную резервную копию");
     expect(installer).toContain('chmod 0640 "${MANAGEMENT_ROOT}/settings/server.env"');
     expect(installer).toContain('ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl');
-    expect(installer).toContain("backup clear-messages update");
+    expect(installer).toContain("backup clear-messages check-update update");
     expect(installer).toContain("OpenCord management assets are incomplete");
     expect(installer).toContain('"${SOURCE_DIR}/update-server"');
+    expect(installer).toContain('"${SOURCE_DIR}/release-channel.mjs"');
+    expect(controller).toContain("check-update)");
+    expect(controller).toContain("update --channel stable");
     expect(updater).toContain("EXPECTED_SHA256");
+    expect(updater).toContain("GITHUB_API_URL");
+    expect(updater).toContain("resolve-manifest");
+    expect(updater).toContain("EXPECTED_SIZE_BYTES");
     expect(updater).toContain("--proto '=https'");
     expect(updater).toContain('"${MANAGEMENT_ROOT}/opencordctl" backup');
     expect(updater).toContain("--no-same-owner --no-same-permissions");
+    expect(releaseResolver).toContain('channel !== "stable"');
+    expect(releaseResolver).toContain("compareSemver");
+    expect(releaseResolver).toContain("manifest.protocolVersion !== installedProtocol");
+    expect(releaseResolver).toContain("expectedDownloadUrl");
     expect(bundler).toContain('"deploy/management"');
     expect(bundler).toContain("Dockerfile.bundle");
     expect(bundler).not.toContain('"server/src"');
     expect(bundler).not.toContain('"shared/src"');
     expect(bundler).toContain("createReleaseManifest");
+    expect(bundler).toContain("--server-image-digest");
+    expect(manifestGenerator).toContain("serverImage = null");
+    expect(manifestGenerator).toContain("attachWindowsClientArtifacts");
     expect(manifestGenerator).toContain('createHash("sha256")');
     expect(manifestGenerator).toContain("createReadStream");
     expect(installer).not.toContain("usermod");

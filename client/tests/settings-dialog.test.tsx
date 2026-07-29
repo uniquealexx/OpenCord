@@ -56,4 +56,20 @@ describe("SettingsDialog microphone test", () => {
     await waitFor(() => expect(stopTrack).toHaveBeenCalledOnce());
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
+
+  it("shows an available client update and starts download explicitly", async () => {
+    const user = userEvent.setup();
+    const download = vi.fn(async () => ({ status: "downloading", currentVersion: "0.1.0-beta.1", channel: "beta", version: "0.2.0-beta.1", percent: 0 }) as const);
+    window.openCord!.updates = {
+      getState: vi.fn(async () => ({ status: "available", currentVersion: "0.1.0-beta.1", channel: "beta", version: "0.2.0-beta.1", releaseUrl: "https://github.com/uniquealexx/OpenCord/releases/tag/v0.2.0-beta.1", sizeBytes: 10485760 }) as const),
+      check: vi.fn(),
+      download,
+      install: vi.fn(),
+      onStateChange: vi.fn(() => () => undefined),
+    };
+    render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Скачать обновление" }));
+    expect(download).toHaveBeenCalledOnce();
+    expect(screen.getByText(/0\.2\.0-beta\.1/u)).toBeInTheDocument();
+  });
 });

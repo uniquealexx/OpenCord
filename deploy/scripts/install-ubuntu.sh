@@ -77,7 +77,7 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
   exit 1
 fi
 
-for required_file in bundle-info.json server-runtime-linux-x64.tar.gz .dockerignore package.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/management/opencordctl deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
+for required_file in bundle-info.json server-runtime-linux-x64.tar.gz .dockerignore package.json deploy/Dockerfile deploy/compose.yml deploy/compose.insecure.yml deploy/Caddyfile deploy/livekit-entrypoint.sh deploy/management/opencordctl deploy/management/update-server deploy/management/release-channel.mjs deploy/management/install-management-home deploy/management/README.md server/package.json shared/package.json; do
   if [[ ! -f "${SOURCE_ROOT}/${required_file}" ]]; then
     printf 'Installation bundle is incomplete: %s is missing.\n' "${required_file}" >&2
     exit 1
