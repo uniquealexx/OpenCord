@@ -1,6 +1,6 @@
 {
   "name": "@opencord/client",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "private": true,
   "description": "OpenCord desktop client prototype",
   "main": "dist-electron/main.js",
@@ -9,7 +9,7 @@
     "build:electron": "tsup",
     "build:renderer": "next build",
     "build": "pnpm build:renderer && pnpm build:electron",
-    "package:win": "pnpm build && electron-builder --win nsis --x64",
+    "package:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
