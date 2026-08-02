@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PROTOCOL_VERSION } from "@opencord/shared";
 import { describe, expect, it } from "vitest";
 import { buildExtractBundleCommand, buildInstallCommand, formatSshConnectionError, insecureServerUrl, parseDeploymentEnvironment, parsePublicHealthPayload, posixQuote, readSshKeyAlgorithm, redact, sshFingerprint } from "../electron/deployment";
 import { deploymentRequestSchema, sshTargetSchema } from "@/shared/deployment";
@@ -62,7 +63,7 @@ describe("SSH deployment boundary", () => {
   it("accepts only the typed OpenCord health contract", () => {
     const health = {
       status: "ok", service: "opencord-server", version: "0.1.0", releaseChannel: "development", buildCommit: null,
-      protocolVersion: 13, database: "postgres", voice: { status: "degraded", secureTransport: false, maxParticipants: 25, warning: "LiveKit unavailable" },
+      protocolVersion: PROTOCOL_VERSION, database: "postgres", voice: { status: "degraded", secureTransport: false, maxParticipants: 25, warning: "LiveKit unavailable" },
     };
     expect(parsePublicHealthPayload(health)).toEqual(health);
     expect(() => parsePublicHealthPayload({ status: "ok" })).toThrow();

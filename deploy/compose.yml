@@ -98,6 +98,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=8m,mode=1777
+      # Docker Desktop cannot bind a Compose secret below a missing parent
+      # directory in the minimal LiveKit image. The tmpfs creates that parent
+      # without persisting either credential in the container layer.
+      - /run/secrets:size=64k,mode=0500,uid=10001,gid=10001
     security_opt:
       - no-new-privileges:true
     cap_drop:

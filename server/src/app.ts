@@ -269,6 +269,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (presence) broadcast({ type: "voice.participant.left", participant: presence });
       return;
     }
+    if (event.type === "voice.state.update") {
+      const presence = voice.updateState(connection.userId, { muted: event.muted, deafened: event.deafened });
+      if (!presence) return sendError(connection.socket, event.requestId, "CONFLICT", "Сначала подключитесь к голосовому каналу");
+      broadcast({ type: "voice.participant.updated", participant: presence });
+      return;
+    }
     if (event.type === "voice.member.disconnect") {
       if (!(await hasPermission(connection.userId, "VOICE_MODERATE"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для управления голосовым каналом");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Выйдите из канала самостоятельно");

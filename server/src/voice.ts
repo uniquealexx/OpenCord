@@ -24,6 +24,7 @@ export interface VoiceService {
   capability(): Promise<VoiceCapability>;
   issueJoin(request: VoiceJoinRequest): Promise<VoiceJoinAuthorization>;
   leave(userId: string): Promise<VoicePresence | null>;
+  updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened">): VoicePresence | null;
   disconnect(userId: string, reason: "moderated" | "replaced" | "channel_deleted"): Promise<VoicePresence | null>;
   removeChannel(channelId: string): Promise<VoicePresence[]>;
   presence(): VoicePresence[];
@@ -47,6 +48,7 @@ export class DisabledVoiceService implements VoiceService {
 
   async issueJoin(): Promise<VoiceJoinAuthorization> { throw new VoiceUnavailableError(); }
   async leave(): Promise<VoicePresence | null> { return null; }
+  updateState(): VoicePresence | null { return null; }
   async disconnect(): Promise<VoicePresence | null> { return null; }
   async removeChannel(): Promise<VoicePresence[]> { return []; }
   presence(): VoicePresence[] { return []; }
@@ -106,6 +108,14 @@ export class LiveKitVoiceService implements VoiceService {
     return presence;
   }
 
+  updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened">): VoicePresence | null {
+    const current = this.presences.get(userId);
+    if (!current) return null;
+    const next = { ...current, ...state };
+    this.presences.set(userId, next);
+    return next;
+  }
+
   async disconnect(userId: string, reason: "moderated" | "replaced" | "channel_deleted"): Promise<VoicePresence | null> {
     void reason;
     return this.leave(userId);
@@ -130,7 +140,13 @@ export class LiveKitVoiceService implements VoiceService {
     const parsed = parseRoomName(room);
     if (!parsed) return null;
     this.roomsByChannel.set(parsed.channelId, room);
-    const presence: VoicePresence = { userId, channelId: parsed.channelId };
+    const previous = this.presences.get(userId);
+    const presence: VoicePresence = {
+      userId,
+      channelId: parsed.channelId,
+      muted: previous?.muted ?? false,
+      deafened: previous?.deafened ?? false,
+    };
     if (event.event === "participant_joined") {
       this.presences.set(userId, presence);
       return { joined: presence };
@@ -151,7 +167,17 @@ export class LiveKitVoiceService implements VoiceService {
       if (!parsed || !channelIds.includes(parsed.channelId)) continue;
       this.roomsByChannel.set(parsed.channelId, room.name);
       const participants = await this.client.listParticipants(room.name);
-      for (const participant of participants) if (participant.identity) next.set(participant.identity, { userId: participant.identity, channelId: parsed.channelId });
+      for (const participant of participants) {
+        if (!participant.identity) continue;
+        const previous = this.presences.get(participant.identity);
+        const microphone = participant.tracks.find((track) => track.source === TrackSource.MICROPHONE);
+        next.set(participant.identity, {
+          userId: participant.identity,
+          channelId: parsed.channelId,
+          muted: microphone?.muted ?? previous?.muted ?? false,
+          deafened: previous?.deafened ?? false,
+        });
+      }
     }
     this.presences.clear();
     for (const presence of next.values()) this.presences.set(presence.userId, presence);

@@ -15,10 +15,10 @@ OpenCord использует два независимых номера вер�
 {
   "status": "ok",
   "service": "opencord-server",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "releaseChannel": "development",
   "buildCommit": null,
-  "protocolVersion": 13,
+  "protocolVersion": 14,
   "database": "postgres",
   "voice": {
     "status": "degraded",

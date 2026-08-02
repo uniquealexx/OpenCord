@@ -41,6 +41,15 @@ describe("OpenCord protocol", () => {
     expect(serverEventSchema.parse({ type: "member.removed", userId: "member-1" })).toEqual({ type: "member.removed", userId: "member-1" });
   });
 
+  it("validates voice mute and deafen state synchronization", () => {
+    const requestId = crypto.randomUUID();
+    const channelId = crypto.randomUUID();
+    const participant = { userId: "voice-member", channelId, muted: true, deafened: false };
+    expect(clientEventSchema.parse({ type: "voice.state.update", requestId, muted: true, deafened: false })).toMatchObject({ muted: true, deafened: false });
+    expect(serverEventSchema.parse({ type: "voice.participant.updated", participant })).toEqual({ type: "voice.participant.updated", participant });
+    expect(() => serverEventSchema.parse({ type: "voice.participant.updated", participant: { userId: "voice-member", channelId } })).toThrow();
+  });
+
   it("limits message attachments and validates their metadata", () => {
     const attachmentId = crypto.randomUUID();
     expect(clientEventSchema.parse({ type: "chat.send", requestId: crypto.randomUUID(), channelId: crypto.randomUUID(), content: "Файл", attachmentIds: [attachmentId] })).toMatchObject({ attachmentIds: [attachmentId] });

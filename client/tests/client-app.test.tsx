@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer, VoiceParticipantRow } from "@/components/client-app";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
@@ -296,6 +296,26 @@ describe("ClientApp", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: channel.name }), { clientX: 120, clientY: 100 });
     await user.click(screen.getByRole("menuitem", { name: "Удалить канал" }));
     expect(onDeleteChannel).toHaveBeenCalledWith(channel);
+  });
+
+  it("shows a voice avatar ring only while speaking and renders mute states", () => {
+    const profile = readyState().profile!;
+    const member = { id: "voice-member", displayName: "Марина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==" };
+    const participant = { userId: member.id, channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false };
+    const { rerender } = render(<VoiceParticipantRow participant={participant} member={member} profile={profile} currentUserId="local-user" speaking />);
+
+    const avatar = screen.getByLabelText("Марина");
+    expect(avatar).toHaveClass("ring-2", "ring-emerald-400");
+    expect(avatar.querySelector("img")).toHaveAttribute("src", member.avatar);
+    expect(screen.queryByLabelText(/выключен/u)).not.toBeInTheDocument();
+
+    rerender(<VoiceParticipantRow participant={{ ...participant, muted: true }} member={member} profile={profile} currentUserId="local-user" speaking />);
+    expect(screen.getByLabelText("Марина")).not.toHaveClass("ring-2");
+    expect(screen.getByLabelText("Микрофон выключен: Марина")).toBeInTheDocument();
+
+    rerender(<VoiceParticipantRow participant={{ ...participant, muted: true, deafened: true }} member={member} profile={profile} currentUserId="local-user" speaking={false} />);
+    expect(screen.getByLabelText("Звук и микрофон выключены: Марина")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Микрофон выключен: Марина")).not.toBeInTheDocument();
   });
 
   it("offers finite and unlimited capacity for a voice channel", async () => {

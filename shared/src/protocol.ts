@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 13 as const;
+export const PROTOCOL_VERSION = 14 as const;
 
 export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
 export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
@@ -38,6 +38,8 @@ export const voiceCapabilitySchema = z.object({
 export const voicePresenceSchema = z.object({
   userId: z.string().min(1),
   channelId: z.string().uuid(),
+  muted: z.boolean(),
+  deafened: z.boolean(),
 });
 
 export const memberSchema = z.object({
@@ -96,6 +98,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
   z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
+  z.object({ type: z.literal("voice.state.update"), requestId: requestIdSchema, muted: z.boolean(), deafened: z.boolean() }),
   z.object({ type: z.literal("voice.member.disconnect"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("ping"), requestId: requestIdSchema }),
 ]).superRefine((event, context) => {
@@ -116,6 +119,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member.removed"), userId: z.string().min(1) }),
   z.object({ type: z.literal("voice.join.authorized"), requestId: requestIdSchema, channelId: z.string().uuid(), endpoint: z.string().url(), token: z.string().min(20).max(4_000), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("voice.participant.joined"), participant: voicePresenceSchema }),
+  z.object({ type: z.literal("voice.participant.updated"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.left"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.disconnected"), userId: z.string().min(1), channelId: z.string().uuid(), reason: z.enum(["moderated", "replaced", "channel_deleted"]) }),
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),

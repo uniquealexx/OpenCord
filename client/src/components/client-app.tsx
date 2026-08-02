@@ -86,6 +86,14 @@ export function ClientApp(): React.ReactElement {
     onError: setNotice,
   }, connectionRevision);
   const voice = useVoiceSession(voiceAuthorization, state?.preferences ?? createDefaultState().preferences, setNotice);
+  const updateVoiceState = connection.updateVoiceState;
+  const connectedVoiceUserId = connectionServer ? accessByServer[connectionServer.id]?.id : undefined;
+  const hasConnectedVoicePresence = Boolean(connectionServer && connectedVoiceUserId && voice.channelId && (voicePresenceByServer[connectionServer.id] ?? []).some((participant) => participant.userId === connectedVoiceUserId && participant.channelId === voice.channelId));
+
+  useEffect(() => {
+    if (voice.status !== "connected" || !hasConnectedVoicePresence) return;
+    updateVoiceState(voice.muted, voice.deafened);
+  }, [hasConnectedVoicePresence, updateVoiceState, voice.deafened, voice.muted, voice.status]);
 
   useEffect(() => {
     const bridge = window.openCord?.storage;
@@ -396,7 +404,7 @@ export function ChannelSidebar({ server, activeChannelId, profile, canManageChan
   return <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-[#0e121b]">
     <button aria-label={`${ru.server.manage}: ${server.name}`} onClick={onServerMenu} className="flex h-14 items-center justify-between border-b border-white/[.055] px-4 text-left font-semibold text-slate-100 transition hover:bg-white/[.035]">{server.name}<ChevronDown className="size-4 text-slate-500" /></button>
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-4"><ChannelGroup title={ru.channel.text} canCreate={canManageChannels} onCreate={onCreateChannel}>{textChannels.map((channel) => <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}><Hash className="size-4 shrink-0" /><span className="truncate">{channel.name}</span></button>)}</ChannelGroup>
-    <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <div key={channel.id} className="mb-1"><button onClick={() => { if (onJoinVoice) onJoinVoice(channel); else onVoiceNotice?.(); }} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}><Volume2 className="size-4" /><span className="truncate">{channel.name}</span>{voiceParticipants.some((participant) => participant.channelId === channel.id) && <span className="ml-auto text-[10px] text-slate-500">{voiceParticipants.filter((participant) => participant.channelId === channel.id).length}/{channel.participantLimit === 0 ? "∞" : channel.participantLimit ?? voiceCapability?.maxParticipants ?? 25}</span>}</button>{voiceParticipants.filter((participant) => participant.channelId === channel.id).map((participant) => { const member = server.members.find((item) => item.id === participant.userId); const isSpeaking = activeSpeakerIds.includes(participant.userId); return <div key={participant.userId} className={cn("ml-7 flex h-7 items-center gap-1.5 text-xs text-slate-500", isSpeaking && "text-emerald-300")}><span className={cn("size-1.5 rounded-full", isSpeaking ? "bg-emerald-400 shadow-[0_0_8px_#34d399]" : "bg-slate-600")} />{member?.displayName ?? "Участник"}{participant.userId === currentUserId && " (вы)"}</div>; })}</div>)}</ChannelGroup></div>
+    <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <div key={channel.id} className="mb-1"><button onClick={() => { if (onJoinVoice) onJoinVoice(channel); else onVoiceNotice?.(); }} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}><Volume2 className="size-4" /><span className="truncate">{channel.name}</span>{voiceParticipants.some((participant) => participant.channelId === channel.id) && <span className="ml-auto text-[10px] text-slate-500">{voiceParticipants.filter((participant) => participant.channelId === channel.id).length}/{channel.participantLimit === 0 ? "∞" : channel.participantLimit ?? voiceCapability?.maxParticipants ?? 25}</span>}</button><div className="space-y-0.5">{voiceParticipants.filter((participant) => participant.channelId === channel.id).map((participant) => <VoiceParticipantRow key={participant.userId} participant={participant} member={server.members.find((item) => item.id === participant.userId)} profile={profile} currentUserId={currentUserId} speaking={activeSpeakerIds.includes(participant.userId)} />)}</div></div>)}</ChannelGroup></div>
     {voiceChannelId && onLeaveVoice && onMuted && onDeafened && <VoicePanel channel={voiceChannels.find((channel) => channel.id === voiceChannelId)} status={voiceStatus} muted={muted} deafened={deafened} onMuted={onMuted} onDeafened={onDeafened} onLeave={onLeaveVoice} />}
     <div className="flex h-14 items-center gap-2 border-t border-white/[.055] bg-[#0a0d14] px-2"><button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5"><Avatar name={profile.displayName} image={profile.avatar} size="sm" status="online" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span><span className="block text-[10px] text-emerald-400">{ru.common.online}</span></span></button><button title={ru.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200"><Settings className="size-4" /></button></div>
     {contextMenu && <div role="menu" aria-label={ru.channel.manageMenu(contextMenu.channel.name)} onPointerDown={(event) => event.stopPropagation()} className="fixed z-[80] w-48 rounded-xl border border-white/10 bg-[#171c28] p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.55)]" style={{ left: contextMenu.x, top: contextMenu.y }}>
@@ -404,6 +412,22 @@ export function ChannelSidebar({ server, activeChannelId, profile, canManageChan
       <button role="menuitem" onClick={() => { const channel = contextMenu.channel; setContextMenu(null); onDeleteChannel(channel); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-red-300 hover:bg-red-400/10"><Trash2 className="size-3.5" />{ru.channel.delete}</button>
     </div>}
   </aside>;
+}
+
+export function VoiceParticipantRow({ participant, member, profile, currentUserId, speaking }: { participant: VoicePresence; member?: MockMember; profile: LocalProfile; currentUserId: string; speaking: boolean }): React.ReactElement {
+  const isCurrentUser = participant.userId === currentUserId;
+  const displayName = member?.displayName ?? (isCurrentUser ? profile.displayName : "Участник");
+  const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
+  const isSpeaking = speaking && !participant.muted && !participant.deafened;
+  return <div className="ml-6 flex min-h-9 items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200">
+    <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn("transition-[box-shadow] duration-150", isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0e121b] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
+    <span className="min-w-0 flex-1 truncate">{displayName}{isCurrentUser && " (вы)"}</span>
+    {participant.deafened
+      ? <span aria-label={`Звук и микрофон выключены: ${displayName}`} title="Звук и микрофон выключены" className="grid size-6 shrink-0 place-items-center text-red-300"><VolumeX className="size-3.5" /></span>
+      : participant.muted
+        ? <span aria-label={`Микрофон выключен: ${displayName}`} title="Микрофон выключен" className="grid size-6 shrink-0 place-items-center text-red-300"><MicOff className="size-3.5" /></span>
+        : null}
+  </div>;
 }
 
 function VoicePanel({ channel, status, muted, deafened, onMuted, onDeafened, onLeave }: { channel?: MockChannel; status: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted: boolean; deafened: boolean; onMuted: (value: boolean) => void; onDeafened: (value: boolean) => void; onLeave: () => void }): React.ReactElement {

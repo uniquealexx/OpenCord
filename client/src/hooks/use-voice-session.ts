@@ -135,29 +135,39 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     return () => { cancelled = true; };
   }, [authorization, disposeRoom, onError, refreshDevices]);
 
+  const setIncomingAudioMuted = useCallback((value: boolean): void => {
+    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) element.muted = value;
+  }, []);
+
+  const setMuted = useCallback(async (value: boolean): Promise<void> => {
+    if (!value && deafened) {
+      setIncomingAudioMuted(false);
+      muteBeforeDeafenRef.current = false;
+      setDeafenedState(false);
+    }
+    await roomRef.current?.localParticipant.setMicrophoneEnabled(!value);
+    setMutedState(value);
+  }, [deafened, setIncomingAudioMuted]);
+
   useEffect(() => {
     if (preferences.voiceInputMode !== "push-to-talk" || status !== "connected") return;
     const shouldIgnore = (target: EventTarget | null): boolean => target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
     const down = (event: KeyboardEvent): void => {
       if (event.code !== preferences.pushToTalkKey || event.repeat || shouldIgnore(event.target)) return;
       event.preventDefault();
-      void roomRef.current?.localParticipant.setMicrophoneEnabled(true); setMutedState(false);
+      void setMuted(false);
     };
     const up = (event: KeyboardEvent): void => {
       if (event.code !== preferences.pushToTalkKey) return;
-      void roomRef.current?.localParticipant.setMicrophoneEnabled(false); setMutedState(true);
+      void setMuted(true);
     };
-    const blur = (): void => { void roomRef.current?.localParticipant.setMicrophoneEnabled(false); setMutedState(true); };
+    const blur = (): void => { void setMuted(true); };
     window.addEventListener("keydown", down); window.addEventListener("keyup", up); window.addEventListener("blur", blur);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); window.removeEventListener("blur", blur); };
-  }, [preferences.pushToTalkKey, preferences.voiceInputMode, status]);
+  }, [preferences.pushToTalkKey, preferences.voiceInputMode, setMuted, status]);
 
-  const setMuted = useCallback(async (value: boolean): Promise<void> => {
-    await roomRef.current?.localParticipant.setMicrophoneEnabled(!value);
-    setMutedState(value);
-  }, []);
   const setDeafened = useCallback(async (value: boolean): Promise<void> => {
-    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) element.muted = value;
+    setIncomingAudioMuted(value);
     if (value) {
       muteBeforeDeafenRef.current = muted;
       await setMuted(true);
@@ -165,7 +175,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       await setMuted(false);
     }
     setDeafenedState(value);
-  }, [muted, setMuted]);
+  }, [muted, setIncomingAudioMuted, setMuted]);
   const setInputDevice = useCallback(async (deviceId: string | null): Promise<void> => {
     const room = roomRef.current;
     if (!room || !deviceId) return;

@@ -1,4 +1,4 @@
-# OpenCord Protocol v13
+# OpenCord Protocol v14
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
 
@@ -52,6 +52,7 @@ Challenge одноразовый в рамках соединения. Прив�
 - `channel.update`;
 - `channel.delete`;
 - `member.role.set`;
+- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`;
 - `server.delete`;
 - `ping`.
 
@@ -63,11 +64,14 @@ Challenge одноразовый в рамках соединения. Прив�
 - `history.result`;
 - `message.created`, `message.updated`, `message.deleted`;
 - `member.updated`, `member.removed`;
+- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
 `channel.create`, `channel.update` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`.
 
 Голосовой канал содержит `participantLimit`: значения `1–25` задают конечную вместимость, а `0` означает экспериментальный режим без ограничения (`∞` в клиенте). Текстовые каналы всегда передают `null`. Лимит проверяет OpenCord Server перед выдачей LiveKit-токена, поэтому изменение применяется к уже созданной комнате без её пересоздания.
+
+`VoicePresence` содержит `userId`, `channelId`, `muted` и `deafened`. После входа в LiveKit-комнату и при каждом переключении заглушки клиент отправляет `voice.state.update`; сервер принимает состояние только от самого подключённого пользователя и рассылает `voice.participant.updated`. Это управляющие метаданные интерфейса — аудио через WebSocket OpenCord не передаётся.
 
 `message.update` разрешён исключительно автору сообщения. Даже владелец и администратор не могут редактировать чужой текст или вложения. Событие содержит итоговый `attachmentIds`: сервер принимает существующие вложения этого сообщения и новые незанятые загрузки автора, атомарно заменяет связи и удаляет откреплённые файлы. После изменения сервер устанавливает `editedAt` и рассылает `message.updated`. `message.delete` разрешён автору, а для чужих сообщений — владельцу и администраторам с правом `MANAGE_MESSAGES`; сервер рассылает `message.deleted` и удаляет связанные вложения.
 
