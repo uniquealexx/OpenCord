@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useVoiceSession } from "@/hooks/use-voice-session";
+import { createResponsiveVoiceActivityGate, mergeResponsiveSpeakerIds, useVoiceSession } from "@/hooks/use-voice-session";
 import { createDefaultState } from "@/shared/state";
 
 describe("voice session controls", () => {
@@ -21,5 +21,41 @@ describe("voice session controls", () => {
     await act(async () => result.current.setMuted(false));
     expect(result.current).toMatchObject({ muted: false, deafened: false });
     expect(remoteAudio.muted).toBe(false);
+  });
+
+  it("activates responsive voice activity on the first loud sample and releases without a fade delay", () => {
+    const changes: boolean[] = [];
+    const gate = createResponsiveVoiceActivityGate((speaking) => changes.push(speaking));
+
+    gate.sample(0.011);
+    gate.sample(0.012);
+    expect(changes).toEqual([true]);
+
+    gate.sample(0.006);
+    gate.sample(0.006);
+    expect(changes).toEqual([true]);
+    gate.sample(0.006);
+    expect(changes).toEqual([true, false]);
+  });
+
+  it("uses hysteresis so small level changes do not flicker the voice ring", () => {
+    const changes: boolean[] = [];
+    const gate = createResponsiveVoiceActivityGate((speaking) => changes.push(speaking));
+
+    gate.sample(0.02);
+    gate.sample(0.009);
+    gate.sample(0.006);
+    gate.sample(0.009);
+    gate.sample(0.006);
+    gate.reset();
+
+    expect(changes).toEqual([true, false]);
+  });
+
+  it("lets responsive audio analysis override a delayed LiveKit speaker state", () => {
+    expect(mergeResponsiveSpeakerIds(["local-user", "fallback-user"], [
+      { identity: "local-user", speaking: false },
+      { identity: "responsive-user", speaking: true },
+    ])).toEqual(["fallback-user", "responsive-user"]);
   });
 });

@@ -306,6 +306,7 @@ describe("ClientApp", () => {
 
     const avatar = screen.getByLabelText("Марина");
     expect(avatar).toHaveClass("ring-2", "ring-emerald-400");
+    expect(avatar).not.toHaveClass("transition-[box-shadow]", "duration-150");
     expect(avatar.querySelector("img")).toHaveAttribute("src", member.avatar);
     expect(screen.queryByLabelText(/выключен/u)).not.toBeInTheDocument();
 

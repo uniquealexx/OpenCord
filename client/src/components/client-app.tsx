@@ -420,7 +420,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
   return <div className="ml-6 flex min-h-9 items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200">
-    <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn("transition-[box-shadow] duration-150", isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0e121b] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
+    <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0e121b] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
     <span className="min-w-0 flex-1 truncate">{displayName}{isCurrentUser && " (вы)"}</span>
     {participant.deafened
       ? <span aria-label={`Звук и микрофон выключены: ${displayName}`} title="Звук и микрофон выключены" className="grid size-6 shrink-0 place-items-center text-red-300"><VolumeX className="size-3.5" /></span>
