@@ -11,10 +11,12 @@ import { GitHubReleaseBundleProvider, githubReleaseManifestUrl, LocalServerBundl
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
 import { downloadAttachment, previewAttachment, uploadAttachment } from "./attachments";
 import { autoUpdater } from "electron-updater";
-import { ClientUpdateManager } from "./client-updater";
+import { ClientUpdateManager, runRequiredStartupUpdate } from "./client-updater";
+import type { ClientUpdateState } from "../src/shared/updater";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
+let updateWindow: BrowserWindow | null = null;
 let store: ClientStateStore;
 let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
@@ -22,6 +24,7 @@ let serverBundleProvider: ReleaseAwareServerBundleProvider;
 let clientUpdateManager: ClientUpdateManager;
 let bundleCleanupStarted = false;
 let clientUpdateInstalling = false;
+let startupGateCompleted = false;
 const selectedSshKeys = new Map<string, string>();
 
 function isTrustedRenderer(url: string): boolean {
@@ -87,6 +90,99 @@ function createWindow(): void {
   }
 }
 
+function createUpdateWindow(): void {
+  updateWindow = new BrowserWindow({
+    width: 540,
+    height: 390,
+    show: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    backgroundColor: "#090b12",
+    title: "Обновление OpenCord",
+    webPreferences: {
+      preload: path.join(__dirname, "update-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  updateWindow.once("ready-to-show", () => updateWindow?.show());
+  updateWindow.on("closed", () => { updateWindow = null; });
+  updateWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  updateWindow.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith("file://")) event.preventDefault();
+  });
+  void updateWindow.loadFile(path.join(__dirname, "..", "out", "update.html"));
+}
+
+function emitClientUpdateState(state: ClientUpdateState): void {
+  for (const window of [mainWindow, updateWindow]) {
+    if (window && !window.isDestroyed()) window.webContents.send(IPC.updateStateChanged, state);
+  }
+}
+
+async function prepareAndInstallClientUpdate(): Promise<void> {
+  if (!bundleCleanupStarted) {
+    bundleCleanupStarted = true;
+    await serverBundleProvider.dispose();
+  }
+  clientUpdateInstalling = true;
+  try {
+    clientUpdateManager.install();
+  } catch (error) {
+    clientUpdateInstalling = false;
+    throw error;
+  }
+}
+
+async function showRequiredUpdateError(message: string): Promise<"retry" | "quit"> {
+  const options = {
+    type: "error" as const,
+    title: "Не удалось обновить OpenCord",
+    message: "Для запуска OpenCord необходимо проверить и установить актуальную версию.",
+    detail: message,
+    buttons: ["Повторить", "Выйти"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const result = updateWindow ? await dialog.showMessageBox(updateWindow, options) : await dialog.showMessageBox(options);
+  return result.response === 0 ? "retry" : "quit";
+}
+
+async function passStartupUpdateGate(): Promise<void> {
+  if (!app.isPackaged || process.platform !== "win32") {
+    startupGateCompleted = true;
+    createWindow();
+    return;
+  }
+
+  if (!updateWindow || updateWindow.isDestroyed()) createUpdateWindow();
+  const result = await runRequiredStartupUpdate(clientUpdateManager, showRequiredUpdateError);
+  if (result === "quit") {
+    app.quit();
+    return;
+  }
+  if (result === "install") {
+    try {
+      await prepareAndInstallClientUpdate();
+    } catch (error) {
+      const decision = await showRequiredUpdateError(error instanceof Error ? error.message : String(error));
+      if (decision === "retry") await passStartupUpdateGate();
+      else app.quit();
+    }
+    return;
+  }
+
+  startupGateCompleted = true;
+  createWindow();
+  if (updateWindow && !updateWindow.isDestroyed()) updateWindow.destroy();
+}
+
 function registerIpc(): void {
   ipcMain.handle(IPC.windowMinimize, () => mainWindow?.minimize());
   ipcMain.handle(IPC.windowToggleMaximize, () => {
@@ -147,19 +243,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.updateGetState, () => clientUpdateManager.getState());
   ipcMain.handle(IPC.updateCheck, () => clientUpdateManager.check());
   ipcMain.handle(IPC.updateDownload, () => clientUpdateManager.download());
-  ipcMain.handle(IPC.updateInstall, async () => {
-    if (!bundleCleanupStarted) {
-      bundleCleanupStarted = true;
-      await serverBundleProvider.dispose();
-    }
-    clientUpdateInstalling = true;
-    try {
-      clientUpdateManager.install();
-    } catch (error) {
-      clientUpdateInstalling = false;
-      throw error;
-    }
-  });
+  ipcMain.handle(IPC.updateInstall, () => prepareAndInstallClientUpdate());
 }
 
 if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {
@@ -168,7 +252,7 @@ if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {
 
 app.setAppUserModelId("org.opencord.desktop");
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   configureMediaPermissions();
   store = new ClientStateStore(app.getPath("userData"));
   identityStore = new IdentityStore(app.getPath("userData"));
@@ -192,9 +276,7 @@ void app.whenReady().then(() => {
     autoUpdater,
     app.getVersion(),
     app.isPackaged && process.platform === "win32",
-    (state) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.updateStateChanged, state);
-    },
+    emitClientUpdateState,
   );
   deploymentManager = new DeploymentManager(serverBundleProvider, (credentialId) => {
     const keyPath = selectedSshKeys.get(credentialId);
@@ -203,12 +285,8 @@ void app.whenReady().then(() => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.deploymentProgress, progress);
   });
   registerIpc();
-  createWindow();
-  if (app.isPackaged && process.platform === "win32") {
-    const automaticCheck = setTimeout(() => { void clientUpdateManager.check(); }, 10_000);
-    automaticCheck.unref();
-  }
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  await passStartupUpdateGate();
+  app.on("activate", () => { if (startupGateCompleted && BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
 app.on("window-all-closed", () => {

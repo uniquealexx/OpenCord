@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Обновление OpenCord</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; background: #090b12; color: #eef2ff; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 20% 10%, rgba(139, 92, 246, .18), transparent 42%), radial-gradient(circle at 85% 85%, rgba(34, 211, 238, .1), transparent 38%), #090b12; }
+      main { width: min(460px, calc(100vw - 48px)); padding: 34px; border: 1px solid rgba(148, 163, 184, .16); border-radius: 26px; background: rgba(17, 24, 39, .88); box-shadow: 0 24px 80px rgba(0, 0, 0, .42); }
+      .mark { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 24px; border-radius: 17px; background: linear-gradient(145deg, #7c3aed, #4f46e5); box-shadow: 0 12px 32px rgba(124, 58, 237, .3); font-size: 22px; font-weight: 800; }
+      h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+      p { margin: 10px 0 0; color: #94a3b8; font-size: 14px; line-height: 1.6; }
+      .versions { margin-top: 22px; color: #64748b; font-size: 12px; }
+      .track { height: 7px; margin-top: 24px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .07); }
+      .bar { width: 30%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #8b5cf6, #22d3ee); transition: width .25s ease; }
+      .bar.indeterminate { animation: scanning 1.25s ease-in-out infinite alternate; }
+      .error { color: #fca5a5; }
+      @keyframes scanning { from { transform: translateX(-55%); } to { transform: translateX(285%); } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark">O</div>
+      <h1 id="title">Проверяем обновления</h1>
+      <p id="message">OpenCord сверяет установленную версию с доверенным релизом на GitHub.</p>
+      <div class="versions" id="versions"></div>
+      <div class="track"><div class="bar indeterminate" id="bar"></div></div>
+    </main>
+    <script>
+      const title = document.getElementById("title");
+      const message = document.getElementById("message");
+      const versions = document.getElementById("versions");
+      const bar = document.getElementById("bar");
+
+      function render(state) {
+        title.className = "";
+        message.className = "";
+        versions.textContent = `Установлена версия ${state.currentVersion}`;
+        bar.className = "bar indeterminate";
+        bar.style.width = "30%";
+        if (state.status === "available") {
+          title.textContent = "Найдено обязательное обновление";
+          message.textContent = `Версия ${state.version} будет скачана и установлена автоматически.`;
+          versions.textContent = `${state.currentVersion} → ${state.version}`;
+        } else if (state.status === "downloading") {
+          title.textContent = "Скачиваем обновление";
+          message.textContent = `Загружено ${Math.round(state.percent)}%. Не закрывайте OpenCord.`;
+          versions.textContent = `${state.currentVersion} → ${state.version}`;
+          bar.className = "bar";
+          bar.style.width = `${Math.max(2, state.percent)}%`;
+        } else if (state.status === "downloaded") {
+          title.textContent = "Запускаем установку";
+          message.textContent = "Обновление проверено. OpenCord перезапустится автоматически.";
+          versions.textContent = `${state.currentVersion} → ${state.version}`;
+          bar.className = "bar";
+          bar.style.width = "100%";
+        } else if (state.status === "error") {
+          title.textContent = "Не удалось проверить обновление";
+          title.className = "error";
+          message.textContent = state.message;
+          message.className = "error";
+          bar.className = "bar";
+          bar.style.width = "0";
+        } else {
+          title.textContent = "Проверяем обновления";
+          message.textContent = "OpenCord сверяет установленную версию с доверенным релизом на GitHub.";
+        }
+      }
+
+      window.openCordUpdateGate.onStateChange(render);
+      window.openCordUpdateGate.getState().then(render);
+    </script>
+  </body>
+</html>

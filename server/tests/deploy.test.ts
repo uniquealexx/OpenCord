@@ -56,6 +56,8 @@ describe("production deployment", () => {
     expect(workflow).toContain("OpenCord-Setup-$version-x64.exe.blockmap");
     expect(workflow).toContain("release-input/release-manifest.json");
     expect(workflow).toContain("--draft=false");
+    expect(workflow).toContain("Publish separate server release");
+    expect(workflow).toContain('$serverTag = "server-v$version"');
     expect(workflow).toContain("release/release-manifest.json");
     expect(workflow).toContain("gh release create");
     expect(workflow).not.toMatch(/uses:\s+[^\s]+@(main|master|v\d+)\s*$/mu);

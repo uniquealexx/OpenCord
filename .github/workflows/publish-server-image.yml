@@ -233,3 +233,34 @@ jobs:
               gh release edit "${env:GITHUB_REF_NAME}" --draft=false --latest
             }
           }
+
+      - name: Publish separate server release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ needs.publish.outputs.version }}"
+          $channel = "${{ needs.publish.outputs.channel }}"
+          $serverTag = "server-v$version"
+          $serverTitle = "OpenCord Server $version"
+          if ($channel -eq "beta") { $serverTitle = "$serverTitle Beta" }
+          New-Item -ItemType Directory -Path "server-release" -Force | Out-Null
+          gh release download "${env:GITHUB_REF_NAME}" `
+            --pattern "opencord-server-$version.tar.gz" `
+            --pattern "opencord-server-$version.tar.gz.sha256" `
+            --dir "server-release" --clobber
+          Copy-Item -LiteralPath "release-input/release-manifest.json" -Destination "server-release/release-manifest.json" -Force
+          $assets = @(
+            "server-release/opencord-server-$version.tar.gz",
+            "server-release/opencord-server-$version.tar.gz.sha256",
+            "server-release/release-manifest.json"
+          )
+          gh release view $serverTag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $serverTag $assets --clobber
+            gh release edit $serverTag --title $serverTitle
+          } elseif ($channel -eq "beta") {
+            gh release create $serverTag $assets --target "${env:GITHUB_SHA}" --title $serverTitle --notes "Server-only artifacts for OpenCord $version." --prerelease
+          } else {
+            gh release create $serverTag $assets --target "${env:GITHUB_SHA}" --title $serverTitle --notes "Server-only artifacts for OpenCord $version."
+          }

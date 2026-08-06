@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["electron/main.ts", "electron/preload.ts"],
+  entry: ["electron/main.ts", "electron/preload.ts", "electron/update-preload.ts"],
   format: ["cjs"],
   platform: "node",
   target: "es2022",

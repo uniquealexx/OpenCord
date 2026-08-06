@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ClientUpdateManager, resolveClientRelease, type ElectronUpdaterAdapter } from "../electron/client-updater";
+import { ClientUpdateManager, resolveClientRelease, runRequiredStartupUpdate, type ElectronUpdaterAdapter } from "../electron/client-updater";
 
 const version = "0.2.0-beta.1";
 const installerName = `OpenCord-Setup-${version}-x64.exe`;
@@ -101,5 +101,44 @@ describe("Electron client updater", () => {
     const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", true, () => undefined, fetcher);
     await manager.check();
     await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("Размер") });
+  });
+
+  it("continues startup immediately when the installed client is current", async () => {
+    const manager = {
+      check: vi.fn(async () => ({ status: "up-to-date", currentVersion: version, channel: "beta", checkedAt: new Date().toISOString() } as const)),
+      download: vi.fn(),
+    };
+    await expect(runRequiredStartupUpdate(manager, vi.fn())).resolves.toBe("ready");
+    expect(manager.download).not.toHaveBeenCalled();
+  });
+
+  it("downloads a newer client automatically before allowing startup", async () => {
+    const manager = {
+      check: vi.fn(async () => ({ status: "available", currentVersion: "0.1.0-beta.3", channel: "beta", version, releaseUrl: `https://github.com/uniquealexx/OpenCord/releases/tag/v${version}`, sizeBytes: installerBytes.length } as const)),
+      download: vi.fn(async () => ({ status: "downloaded", currentVersion: "0.1.0-beta.3", channel: "beta", version } as const)),
+    };
+    await expect(runRequiredStartupUpdate(manager, vi.fn())).resolves.toBe("install");
+    expect(manager.download).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed mandatory check and never bypasses it", async () => {
+    const manager = {
+      check: vi.fn()
+        .mockResolvedValueOnce({ status: "error", currentVersion: "0.1.0-beta.3", channel: "beta", message: "GitHub недоступен" })
+        .mockResolvedValueOnce({ status: "up-to-date", currentVersion: version, channel: "beta", checkedAt: new Date().toISOString() }),
+      download: vi.fn(),
+    };
+    const decide = vi.fn(async () => "retry" as const);
+    await expect(runRequiredStartupUpdate(manager, decide)).resolves.toBe("ready");
+    expect(manager.check).toHaveBeenCalledTimes(2);
+    expect(decide).toHaveBeenCalledWith("GitHub недоступен");
+  });
+
+  it("exits when the mandatory update check fails and the user declines retry", async () => {
+    const manager = {
+      check: vi.fn(async () => ({ status: "error", currentVersion: "0.1.0-beta.3", channel: "beta", message: "Нет сети" } as const)),
+      download: vi.fn(),
+    };
+    await expect(runRequiredStartupUpdate(manager, async () => "quit")).resolves.toBe("quit");
   });
 });

@@ -30,6 +30,35 @@ export interface ElectronUpdaterAdapter {
 }
 
 type StateListener = (state: ClientUpdateState) => void;
+export type StartupUpdateDecision = "retry" | "quit";
+export type StartupUpdateResult = "ready" | "install" | "quit";
+
+interface StartupUpdateManager {
+  check(): Promise<ClientUpdateState>;
+  download(): Promise<ClientUpdateState>;
+}
+
+export async function runRequiredStartupUpdate(
+  manager: StartupUpdateManager,
+  decideAfterError: (message: string) => Promise<StartupUpdateDecision>,
+): Promise<StartupUpdateResult> {
+  for (;;) {
+    const checked = await manager.check();
+    if (checked.status === "disabled" || checked.status === "up-to-date") return "ready";
+    if (checked.status === "available") {
+      const downloaded = await manager.download();
+      if (downloaded.status === "downloaded") return "install";
+      if (downloaded.status !== "error") throw new Error(`Unexpected startup update state after download: ${downloaded.status}`);
+      if (await decideAfterError(downloaded.message) === "quit") return "quit";
+      continue;
+    }
+    if (checked.status === "error") {
+      if (await decideAfterError(checked.message) === "quit") return "quit";
+      continue;
+    }
+    throw new Error(`Unexpected startup update state after check: ${checked.status}`);
+  }
+}
 
 export class ClientUpdateManager {
   private state: ClientUpdateState;

@@ -24,7 +24,7 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
     bridgeKeys: Object.keys(window.openCord ?? {}).sort(),
     hasNodeRequire: "require" in window,
   }));
-  expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "storage", "window"], hasNodeRequire: false });
+  expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "storage", "updates", "window"], hasNodeRequire: false });
 
   const onboardingName = page.getByPlaceholder("Отображаемое имя");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);
@@ -38,7 +38,7 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   await page.getByRole("button", { name: "Создать локальный профиль" }).click();
   await expect(page.getByRole("heading", { name: "Главный экран" })).toBeVisible();
   await page.getByTitle("Подключиться").click();
-  await page.getByLabel("HTTPS-адрес сервера").fill(`http://127.0.0.1:${port}`);
+  await page.getByLabel("Адрес сервера").fill(`http://127.0.0.1:${port}`);
   await page.getByRole("button", { name: "Подключиться к серверу" }).click();
   await expect(page.getByText("подключено")).toBeVisible({ timeout: 10_000 });
   const composer = page.getByLabel(/Написать в #общий/);
