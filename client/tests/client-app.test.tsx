@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, sortMessagesChronologically, upsertDeployedServer, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
@@ -46,15 +47,23 @@ describe("ClientApp", () => {
 
   afterEach(cleanup);
 
+  it("does not request another voice join when opening the current room", () => {
+    expect(shouldRequestVoiceJoin("connected", "voice", "voice", "voice")).toBe(false);
+    expect(shouldRequestVoiceJoin("connecting", null, "voice", "voice")).toBe(false);
+    expect(shouldRequestVoiceJoin("reconnecting", "voice", "voice", "voice")).toBe(false);
+    expect(shouldRequestVoiceJoin("connected", "voice", "voice", "another-voice")).toBe(true);
+    expect(shouldRequestVoiceJoin("error", null, "voice", "voice")).toBe(true);
+  });
+
   it("shows the saved one-button server update action only to the owner", async () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
-    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveLimit={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveLimit={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
   });
 
@@ -125,12 +134,32 @@ describe("ClientApp", () => {
     expect(save).toHaveBeenCalled();
   });
 
-  it("saves the unlimited attachment option from server settings", async () => {
-    const onSaveLimit = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveLimit={onSaveLimit} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
-    fireEvent.change(screen.getByRole("slider", { name: "Максимальный размер загружаемого файла" }), { target: { value: "2025" } });
-    await userEvent.click(screen.getByRole("button", { name: "Сохранить лимит" }));
-    expect(onSaveLimit).toHaveBeenCalledWith(null);
+  it("saves the server name, unlimited attachments and screen-share limits together", async () => {
+    const user = userEvent.setup();
+    const onSaveSettings = vi.fn(() => true);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const nameInput = screen.getByRole("textbox", { name: "Название сервера" });
+    await user.clear(nameInput);
+    await user.type(nameInput, "Новый OpenCord");
+    const input = screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" });
+    await user.clear(input);
+    await user.type(input, "2001");
+    fireEvent.change(screen.getByRole("slider", { name: "Максимальное качество демонстрации экрана" }), { target: { value: "1" } });
+    fireEvent.change(screen.getByRole("slider", { name: "Максимальная частота кадров демонстрации экрана" }), { target: { value: "0" } });
+    expect(screen.getAllByText("∞")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15 });
+  });
+
+  it("saves a manually entered bounded attachment limit", async () => {
+    const user = userEvent.setup();
+    const onSaveSettings = vi.fn(() => true);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const input = screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" });
+    await user.clear(input);
+    await user.type(input, "1500");
+    await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
   });
 
   it("opens a profile preview from both the message avatar and author name", async () => {
@@ -311,6 +340,8 @@ describe("ClientApp", () => {
       name: "OpenCord Server",
       avatar: "data:image/png;base64,AA==",
       maxAttachmentBytes: 25 * 1024 * 1024,
+      screenShareMaxResolution: 720,
+      screenShareMaxFrameRate: 30,
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
       members: [{ id: "server-admin", displayName: "Анна", avatar: "data:image/webp;base64,AA==", status: "online", role: "administrator" }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
@@ -319,6 +350,8 @@ describe("ClientApp", () => {
     expect(next.servers[0]?.name).toBe("OpenCord Server");
     expect(next.servers[0]?.avatar).toBe("data:image/png;base64,AA==");
     expect(next.servers[0]?.maxAttachmentBytes).toBe(25 * 1024 * 1024);
+    expect(next.servers[0]?.screenShareMaxResolution).toBe(720);
+    expect(next.servers[0]?.screenShareMaxFrameRate).toBe(30);
     expect(next.servers[0]?.channels[0]?.serverId).toBe("test-server");
     expect(next.servers[0]?.members[0]).toMatchObject({
       displayName: "Анна",
@@ -337,6 +370,8 @@ describe("ClientApp", () => {
       name: "OpenCord Server",
       avatar: null,
       maxAttachmentBytes: null,
+      screenShareMaxResolution: 1080,
+      screenShareMaxFrameRate: 60,
       channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit })),
       members: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
@@ -385,6 +420,29 @@ describe("ClientApp", () => {
     rerender(<VoiceParticipantRow participant={{ ...participant, muted: true, deafened: true }} member={member} profile={profile} currentUserId="local-user" speaking={false} />);
     expect(screen.getByLabelText("Звук и микрофон выключены: Марина")).toBeInTheDocument();
     expect(screen.queryByLabelText("Микрофон выключен: Марина")).not.toBeInTheDocument();
+  });
+
+  it("lets the user choose a screen share and keeps the viewer until explicit exit", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    const profile = state.profile!;
+    const voiceChannel = state.servers[0]!.channels[2]!;
+    const server = { ...state.servers[0]!, members: [{ id: "voice-member", displayName: "Марина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null }] };
+    const participant = { userId: "voice-member", channelId: voiceChannel.id, muted: false, deafened: false };
+    const stream = { participantIdentity: "voice-member", participantName: "Марина", local: false, track: {} } as unknown as ScreenShareStream;
+    const onViewScreenShare = vi.fn();
+    const onExitScreenShare = vi.fn();
+    const commonProps = { channel: voiceChannel, server, profile, participants: [participant], currentUserId: "local-user", connectedChannelId: voiceChannel.id, status: "connected" as const, muted: false, deafened: false, activeSpeakerIds: [], isScreenSharing: false, onMuted: vi.fn(), onDeafened: vi.fn(), onStartScreenShare: vi.fn(), onStopScreenShare: vi.fn(), onViewScreenShare, onExitScreenShare, onLeaveVoice: vi.fn() };
+    const { rerender } = render(<VoiceChannelView {...commonProps} screenShares={[stream]} viewingScreenShareId={null} />);
+
+    await user.click(screen.getByRole("button", { name: "Смотреть трансляцию Марина" }));
+    expect(onViewScreenShare).toHaveBeenCalledWith("voice-member");
+
+    rerender(<VoiceChannelView {...commonProps} screenShares={[]} viewingScreenShareId="voice-member" />);
+    expect(screen.getByRole("heading", { name: "Трансляция временно недоступна" })).toBeInTheDocument();
+    expect(screen.getByText(/останется открытым/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Выйти из просмотра" }));
+    expect(onExitScreenShare).toHaveBeenCalledOnce();
   });
 
   it("offers finite and unlimited capacity for a voice channel", async () => {

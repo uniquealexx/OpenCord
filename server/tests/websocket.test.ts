@@ -170,6 +170,16 @@ describe("WebSocket chat flow", () => {
     expect(await ownerAvatarUpdated).toMatchObject({ avatar: "data:image/png;base64,AA==" });
     expect(await memberAvatarUpdated).toMatchObject({ avatar: "data:image/png;base64,AA==" });
 
+    const settingsDenied = waitForEvent(member.socket, "error");
+    member.socket.send(JSON.stringify({ type: "server.settings.update", requestId: randomUUID(), name: "Нельзя", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 }));
+    expect((await settingsDenied).code).toBe("FORBIDDEN");
+
+    const ownerSettingsSnapshot = waitForEvent(owner.socket, "server.snapshot");
+    const memberSettingsSnapshot = waitForEvent(member.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "server.settings.update", requestId: randomUUID(), name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 }));
+    expect((await ownerSettingsSnapshot).server).toMatchObject({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
+    expect((await memberSettingsSnapshot).server).toMatchObject({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
+
     const ownerMessageCreated = waitForEvent(member.socket, "message.created");
     owner.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: existingChannel.id, content: "Сообщение владельца" }));
     const ownerMessage = await ownerMessageCreated;

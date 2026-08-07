@@ -254,7 +254,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "server.settings.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения настроек сервера");
-      await repository.updateServerAttachmentLimit(event.maxAttachmentBytes);
+      await repository.updateServerSettings({ name: event.name, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate });
       await broadcastSnapshots();
       return;
     }

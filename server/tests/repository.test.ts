@@ -16,12 +16,21 @@ beforeEach(async () => {
 afterEach(async () => database.close());
 
 describe("ChatRepository", () => {
-  it("persists bounded and unlimited attachment limits", async () => {
-    expect((await repository.getServer()).maxAttachmentBytes).toBe(10 * 1024 * 1024);
-    await repository.updateServerAttachmentLimit(2000 * 1024 * 1024);
-    expect((await repository.getServer()).maxAttachmentBytes).toBe(2000 * 1024 * 1024);
-    await repository.updateServerAttachmentLimit(null);
-    expect((await repository.getServer()).maxAttachmentBytes).toBeNull();
+  it("persists server name, attachment limit and screen-share limits", async () => {
+    expect(await repository.getServer()).toMatchObject({ name: "OpenCord Local", maxAttachmentBytes: 10 * 1024 * 1024, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
+    await repository.updateServerSettings({ name: "Команда", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
+    expect(await repository.getServer()).toMatchObject({ name: "Команда", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
+    await repository.updateServerSettings({ name: "Команда без лимита", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 });
+    expect(await repository.getServer()).toMatchObject({ name: "Команда без лимита", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 });
+  });
+
+  it("does not overwrite a manually changed name on the same deployment restart", async () => {
+    await repository.configureServer("Имя установки", "deployment-1");
+    await repository.updateServerSettings({ name: "Ручное имя", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
+    await repository.configureServer("Старое имя установки", "deployment-1");
+    expect((await repository.getServer()).name).toBe("Ручное имя");
+    await repository.configureServer("Новая установка", "deployment-2");
+    expect((await repository.getServer()).name).toBe("Новая установка");
   });
 
   it("stores and returns message history", async () => {

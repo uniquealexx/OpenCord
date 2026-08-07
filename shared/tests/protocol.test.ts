@@ -73,13 +73,17 @@ describe("OpenCord protocol", () => {
     expect(serverEventSchema.parse({ type: "message.deleted", messageId, channelId })).toEqual({ type: "message.deleted", messageId, channelId });
   });
 
-  it("validates bounded and unlimited server attachment limits", () => {
+  it("validates server identity, attachment and screen-share settings", () => {
     const requestId = crypto.randomUUID();
-    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE })).toMatchObject({ maxAttachmentBytes: MEBIBYTE });
-    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES })).toMatchObject({ maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES });
-    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: null })).toMatchObject({ maxAttachmentBytes: null });
-    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE - 1 })).toThrow();
-    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES + 1 })).toThrow();
+    const settings = { name: "Команда OpenCord", screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 } as const;
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings })).toMatchObject({ maxAttachmentBytes: MEBIBYTE, ...settings });
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES, ...settings })).toMatchObject({ maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES });
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: null, ...settings })).toMatchObject({ maxAttachmentBytes: null });
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE - 1, ...settings })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES + 1, ...settings })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, screenShareMaxResolution: 1440 })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, screenShareMaxFrameRate: 120 })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, name: "x" })).toThrow();
   });
 
   it("validates paginated message search filters", () => {

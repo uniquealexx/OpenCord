@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConnectionQuality, Room, RoomEvent, Track, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack } from "livekit-client";
+import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack, type RemoteVideoTrack } from "livekit-client";
 import type { ClientPreferences } from "@/shared/state";
 
 export type VoiceSessionStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface VoiceAuthorization { channelId: string; endpoint: string; token: string; expiresAt: string }
+export interface ScreenShareSettings { width: number; height: number; frameRate: 15 | 30 | 60; maxBitrate: number; includeAudio: boolean; contentHint: "detail" | "motion" }
+export type ScreenShareStream =
+  | { participantIdentity: string; participantName: string; local: true; track: LocalVideoTrack }
+  | { participantIdentity: string; participantName: string; local: false; track: RemoteVideoTrack };
 
 export interface VoiceSession {
   status: VoiceSessionStatus;
@@ -16,10 +20,14 @@ export interface VoiceSession {
   quality: "excellent" | "good" | "poor" | "unknown";
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
+  screenShares: ScreenShareStream[];
+  isScreenSharing: boolean;
   setMuted(value: boolean): Promise<void>;
   setDeafened(value: boolean): Promise<void>;
   setInputDevice(deviceId: string | null): Promise<void>;
   setOutputDevice(deviceId: string | null): Promise<void>;
+  startScreenShare(settings: ScreenShareSettings): Promise<void>;
+  stopScreenShare(): Promise<void>;
   leave(): Promise<void>;
 }
 
@@ -88,6 +96,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   const [quality, setQuality] = useState<VoiceSession["quality"]>("unknown");
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [screenShares, setScreenShares] = useState<ScreenShareStream[]>([]);
 
   const publishActiveSpeakers = useCallback((): void => {
     const ids = mergeResponsiveSpeakerIds(liveKitSpeakerIdsRef.current, responsiveDetectorsRef.current.values());
@@ -165,6 +174,10 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     setChannelId(null);
     setActiveSpeakerIds([]);
     setQuality("unknown");
+    setScreenShares((current) => {
+      for (const item of current) if (item.local) item.track.stop();
+      return [];
+    });
   }, []);
 
   useEffect(() => {
@@ -181,7 +194,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       if (cancelled) return;
       setStatus("connecting");
       const currentPreferences = preferencesRef.current;
-      const room = new Room({ audioCaptureDefaults: {
+      const room = new Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: {
         deviceId: currentPreferences.voiceInputDeviceId ?? undefined,
         channelCount: 1,
         echoCancellation: currentPreferences.echoCancellation,
@@ -189,9 +202,13 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         autoGainControl: currentPreferences.autoGainControl,
       } });
       roomRef.current = room;
-      room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _publication, participant: RemoteParticipant) => {
+      room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, publication, participant: RemoteParticipant) => {
+        if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+          setScreenShares((current) => [...current.filter((item) => item.participantIdentity !== participant.identity), { participantIdentity: participant.identity, participantName: participant.name || participant.identity, local: false, track: track as RemoteVideoTrack }]);
+          return;
+        }
         if (track.kind !== Track.Kind.Audio) return;
-        startResponsiveDetector(track as RemoteAudioTrack, participant.identity);
+        if (publication.source === Track.Source.Microphone) startResponsiveDetector(track as RemoteAudioTrack, participant.identity);
         const element = track.attach() as HTMLMediaElement;
         element.autoplay = true;
         element.hidden = true;
@@ -199,7 +216,12 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         document.body.appendChild(element);
         audioElementsRef.current.push(element);
       });
-      room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+      room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, publication, participant) => {
+        if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+          setScreenShares((current) => current.filter((item) => item.participantIdentity !== participant.identity));
+          for (const element of track.detach() as HTMLMediaElement[]) element.remove();
+          return;
+        }
         if (track.kind === Track.Kind.Audio) stopResponsiveDetector(track as RemoteAudioTrack);
         for (const element of track.detach() as HTMLMediaElement[]) {
           audioElementsRef.current = audioElementsRef.current.filter((item) => item !== element);
@@ -209,6 +231,12 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
         liveKitSpeakerIdsRef.current = new Set(speakers.map((speaker) => speaker.identity));
         publishActiveSpeakers();
+      });
+      room.on(RoomEvent.LocalTrackUnpublished, (publication) => {
+        if (publication.source === Track.Source.ScreenShare) setScreenShares((current) => {
+          for (const item of current) if (item.local) item.track.stop();
+          return current.filter((item) => !item.local);
+        });
       });
       room.on(RoomEvent.ConnectionQualityChanged, (nextQuality) => setQuality(nextQuality === ConnectionQuality.Excellent ? "excellent" : nextQuality === ConnectionQuality.Good ? "good" : nextQuality === ConnectionQuality.Poor ? "poor" : "unknown"));
       room.on(RoomEvent.Reconnecting, () => setStatus("reconnecting"));
@@ -296,7 +324,63 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     if (!room || !deviceId) return;
     await room.switchActiveDevice("audiooutput", deviceId);
   }, []);
+  const stopScreenShare = useCallback(async (): Promise<void> => {
+    const room = roomRef.current;
+    if (room) await room.localParticipant.setScreenShareEnabled(false);
+    setScreenShares((current) => {
+      for (const item of current) if (item.local) item.track.stop();
+      return current.filter((item) => !item.local);
+    });
+  }, []);
+  const startScreenShare = useCallback(async (settings: ScreenShareSettings): Promise<void> => {
+    const room = roomRef.current;
+    if (!room || status !== "connected") throw new Error("Сначала подключитесь к голосовому каналу");
+    if (room.localParticipant.isScreenShareEnabled) await room.localParticipant.setScreenShareEnabled(false);
+    const captureOptions = {
+      audio: settings.includeAudio,
+      resolution: { width: settings.width, height: settings.height, frameRate: settings.frameRate },
+      contentHint: settings.contentHint,
+      systemAudio: settings.includeAudio ? "include" as const : "exclude" as const,
+    };
+    const publishOptions = {
+      simulcast: true,
+      videoCodec: "vp8" as const,
+      screenShareEncoding: { maxBitrate: settings.maxBitrate, maxFramerate: settings.frameRate, priority: "high" as const },
+      degradationPreference: settings.contentHint === "motion" ? "maintain-framerate" as const : "maintain-resolution" as const,
+    };
+    const capturedTracks = await room.localParticipant.createScreenTracks(captureOptions);
+    const capturedVideo = capturedTracks.find((item): item is LocalVideoTrack => item instanceof LocalVideoTrack);
+    if (!capturedVideo) {
+      for (const item of capturedTracks) item.stop();
+      throw new Error("LiveKit не создал видеотрек демонстрации");
+    }
+    void window.openCord?.screenShare?.report(`captured-video ${JSON.stringify({ readyState: capturedVideo.mediaStreamTrack.readyState, muted: capturedVideo.mediaStreamTrack.muted, enabled: capturedVideo.mediaStreamTrack.enabled, settings: capturedVideo.mediaStreamTrack.getSettings() })}`);
+    // Keep the raw capture exclusively for local preview. Publish a clone so
+    // WebRTC/simulcast cannot alter or suspend the preview's media source.
+    const previewTrack = capturedVideo;
+    const publishingVideo = new LocalVideoTrack(capturedVideo.mediaStreamTrack.clone());
+    publishingVideo.source = Track.Source.ScreenShare;
+    const publishingTracks = capturedTracks.map((item) => item === capturedVideo ? publishingVideo : item);
+    const removeLocal = (): void => setScreenShares((current) => {
+      previewTrack.stop();
+      return current.filter((item) => !item.local);
+    });
+    previewTrack.mediaStreamTrack.addEventListener("ended", removeLocal, { once: true });
+    setScreenShares((current) => {
+      for (const item of current) if (item.local) item.track.stop();
+      return [...current.filter((item) => !item.local), { participantIdentity: room.localParticipant.identity, participantName: room.localParticipant.name || "Вы", local: true, track: previewTrack }];
+    });
+    try {
+      await Promise.all(publishingTracks.map((item) => room.localParticipant.publishTrack(item, publishOptions)));
+      void window.openCord?.screenShare?.report(`published-video ${JSON.stringify({ previewReadyState: previewTrack.mediaStreamTrack.readyState, previewMuted: previewTrack.mediaStreamTrack.muted, previewEnabled: previewTrack.mediaStreamTrack.enabled, publishReadyState: publishingVideo.mediaStreamTrack.readyState, publishMuted: publishingVideo.mediaStreamTrack.muted, publishEnabled: publishingVideo.mediaStreamTrack.enabled })}`);
+    } catch (error) {
+      previewTrack.stop();
+      for (const item of publishingTracks) item.stop();
+      setScreenShares((current) => current.filter((item) => !item.local));
+      throw error;
+    }
+  }, [status]);
   const leave = useCallback(async (): Promise<void> => { setStatus("idle"); await disposeRoom(); }, [disposeRoom]);
 
-  return { status, channelId, muted, deafened, activeSpeakerIds, quality, inputDevices, outputDevices, setMuted, setDeafened, setInputDevice, setOutputDevice, leave };
+  return { status, channelId, muted, deafened, activeSpeakerIds, quality, inputDevices, outputDevices, screenShares, isScreenSharing: screenShares.some((item) => item.local), setMuted, setDeafened, setInputDevice, setOutputDevice, startScreenShare, stopScreenShare, leave };
 }

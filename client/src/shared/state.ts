@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, DEFAULT_ATTACHMENT_LIMIT_BYTES } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, DEFAULT_ATTACHMENT_LIMIT_BYTES, screenShareFrameRateSchema, screenShareResolutionSchema } from "@opencord/shared";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
 export const STATE_VERSION = 3 as const;
@@ -39,6 +39,8 @@ export const mockServerSchema = z.object({
   address: z.string().max(200).nullable(),
   accent: z.string().regex(/^#[0-9a-f]{6}$/i),
   maxAttachmentBytes: attachmentUploadLimitSchema.default(DEFAULT_ATTACHMENT_LIMIT_BYTES),
+  screenShareMaxResolution: screenShareResolutionSchema.optional(),
+  screenShareMaxFrameRate: screenShareFrameRateSchema.optional(),
   channels: z.array(mockChannelSchema),
   members: z.array(mockMemberSchema),
   deployment: savedDeploymentConfigurationSchema.optional(),

@@ -154,6 +154,35 @@ const migrations = [
       $$;
     `,
   },
+  {
+    id: "011_server_screen_share_limits",
+    sql: `
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS screen_share_max_resolution integer NOT NULL DEFAULT 1080;
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS screen_share_max_frame_rate integer NOT NULL DEFAULT 60;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'servers_screen_share_max_resolution_check'
+            AND conrelid = 'servers'::regclass
+        ) THEN
+          ALTER TABLE servers ADD CONSTRAINT servers_screen_share_max_resolution_check CHECK (
+            screen_share_max_resolution IN (480, 720, 1080)
+          );
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'servers_screen_share_max_frame_rate_check'
+            AND conrelid = 'servers'::regclass
+        ) THEN
+          ALTER TABLE servers ADD CONSTRAINT servers_screen_share_max_frame_rate_check CHECK (
+            screen_share_max_frame_rate IN (15, 30, 60)
+          );
+        END IF;
+      END
+      $$;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

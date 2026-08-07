@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell, type DesktopCapturerSource, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { IPC } from "../src/shared/bridge";
@@ -13,6 +13,8 @@ import { downloadAttachment, previewAttachment, uploadAttachment } from "./attac
 import { autoUpdater } from "electron-updater";
 import { ClientUpdateManager, runRequiredStartupUpdate } from "./client-updater";
 import type { ClientUpdateState } from "../src/shared/updater";
+import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
+import { isAllowedRendererPermission } from "./permissions";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
@@ -26,6 +28,7 @@ let bundleCleanupStarted = false;
 let clientUpdateInstalling = false;
 let startupGateCompleted = false;
 const selectedSshKeys = new Map<string, string>();
+let pendingScreenShare: { source: DesktopCapturerSource; includeAudio: boolean; expiresAt: number } | null = null;
 
 function isTrustedRenderer(url: string): boolean {
   if (developmentUrl) {
@@ -36,15 +39,44 @@ function isTrustedRenderer(url: string): boolean {
 
 function configureMediaPermissions(): void {
   const appSession = session.defaultSession;
-  appSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => permission === "media"
-    && details.mediaType === "audio"
-    && isTrustedRenderer(webContents?.getURL() || requestingOrigin));
-  appSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    const audioOnly = permission === "media" && "mediaTypes" in details && details.mediaTypes?.includes("audio") === true && details.mediaTypes.includes("video") === false;
-    callback(audioOnly && isTrustedRenderer(webContents.getURL()));
+  appSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    const trustedRenderer = isTrustedRenderer(webContents?.getURL() || requestingOrigin);
+    void details;
+    return trustedRenderer && isAllowedRendererPermission(permission);
   });
-  // Never grant a screen or system-audio capture source in this client.
-  appSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
+  appSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const trustedRenderer = isTrustedRenderer(webContents.getURL());
+    if (isAllowedRendererPermission(permission)) {
+      void details;
+      callback(trustedRenderer);
+      return;
+    }
+    callback(false);
+  });
+  appSession.setDisplayMediaRequestHandler((request, callback) => {
+    const selection = pendingScreenShare;
+    pendingScreenShare = null;
+    const requestFrame = request.frame;
+    const trustedFrame = isTrustedRenderer(requestFrame?.url || request.securityOrigin);
+    // The source picker awaits an IPC round trip before LiveKit calls
+    // getDisplayMedia, so Chromium no longer reports an active user gesture.
+    // The short-lived, single-use selection is the authorization boundary.
+    if (!selection || selection.expiresAt < Date.now() || !trustedFrame) {
+      console.warn("Screen share request denied", { hasSelection: Boolean(selection), expired: Boolean(selection && selection.expiresAt < Date.now()), trustedFrame, securityOrigin: request.securityOrigin, frameUrl: requestFrame?.url });
+      callback({});
+      return;
+    }
+    console.info("Screen share source granted", { sourceId: selection.source.id, includeAudio: selection.includeAudio, securityOrigin: request.securityOrigin, frameUrl: requestFrame?.url });
+    callback({ video: selection.source, ...(selection.includeAudio ? { audio: "loopback" as const } : {}) });
+  });
+}
+
+function requireMainRenderer(event: IpcMainInvokeEvent): void {
+  if (!mainWindow || event.sender.id !== mainWindow.webContents.id || !isTrustedRenderer(event.sender.getURL())) throw new Error("Недоверенный источник запроса");
+}
+
+async function listScreenShareSources(): Promise<DesktopCapturerSource[]> {
+  return desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 480, height: 270 }, fetchWindowIcons: true });
 }
 
 function createWindow(): void {
@@ -77,6 +109,9 @@ function createWindow(): void {
   });
   mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
     console.error(`OpenCord preload failed (${preloadPath}):`, error);
+  });
+  mainWindow.webContents.on("console-message", (details) => {
+    if (details.message.startsWith("[screen-share]")) console.info(details.message);
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     const allowed = developmentUrl ? url.startsWith(developmentUrl) : url.startsWith("file://");
@@ -283,6 +318,30 @@ void app.whenReady().then(async () => {
     return keyPath;
   }, (progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.deploymentProgress, progress);
+  });
+  ipcMain.handle(IPC.screenShareListSources, async (event) => {
+    requireMainRenderer(event);
+    const sources = await listScreenShareSources();
+    return screenShareSourcesSchema.parse(sources.map((source) => ({
+      id: source.id,
+      name: source.name,
+      kind: source.id.startsWith("screen:") ? "screen" : "window",
+      thumbnail: source.thumbnail.toDataURL(),
+      appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
+    })));
+  });
+  ipcMain.handle(IPC.screenShareSelectSource, async (event, input: unknown) => {
+    requireMainRenderer(event);
+    const selection = screenShareSelectionSchema.parse(input);
+    const source = (await listScreenShareSources()).find((item) => item.id === selection.sourceId);
+    if (!source) throw new Error("Выбранный экран или окно больше недоступны");
+    const expiresAt = Date.now() + 15_000;
+    pendingScreenShare = { source, includeAudio: selection.includeAudio, expiresAt };
+    console.info("Screen share source selected", { sourceId: source.id, includeAudio: selection.includeAudio });
+  });
+  ipcMain.handle(IPC.screenShareDiagnostic, async (event, input: unknown) => {
+    requireMainRenderer(event);
+    console.info("[screen-share]", screenShareDiagnosticSchema.parse(input));
   });
   registerIpc();
   await passStartupUpdateGate();

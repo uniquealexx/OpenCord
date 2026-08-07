@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, MEBIBYTE, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type ServerEvent, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, Users, Volume2, VolumeX, X } from "lucide-react";
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type VoiceCapability, type VoicePresence } from "@opencord/shared";
+import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -13,21 +13,27 @@ import { ProfilePreview } from "@/components/profile-preview";
 import { ServerDialog } from "@/components/server-dialog";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 import { ServerSearchPanel } from "@/components/server-search-panel";
+import { ScreenShareDialog, ScreenShareSurface } from "@/components/screen-share-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
-import { useVoiceSession, type VoiceAuthorization } from "@/hooks/use-voice-session";
+import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization } from "@/hooks/use-voice-session";
 import { ru } from "@/lib/i18n/ru";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
 import { createDefaultState, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
 import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 
-type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "channel" | "channel-edit" | "channel-delete" | null;
+type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "channel" | "channel-edit" | "channel-delete" | "screen-share" | null;
 type CurrentAccess = { id: string; role: MemberRole; permissions: Permission[] };
 const VOICE_PARTICIPANT_LIMIT_MAX = 25;
+
+export function shouldRequestVoiceJoin(status: "idle" | "connecting" | "connected" | "reconnecting" | "error", connectedChannelId: string | null, authorizedChannelId: string | null, targetChannelId: string): boolean {
+  const alreadyJoiningOrConnected = status === "connecting" || status === "connected" || status === "reconnecting";
+  return !alreadyJoiningOrConnected || (connectedChannelId !== targetChannelId && authorizedChannelId !== targetChannelId);
+}
 
 export function ClientApp(): React.ReactElement {
   const [state, setState] = useState<PersistedClientState | null>(null);
@@ -47,6 +53,7 @@ export function ClientApp(): React.ReactElement {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResult, setSearchResult] = useState<MessageSearchResult | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [viewingScreenShareId, setViewingScreenShareId] = useState<string | null>(null);
   const searchRequestRef = useRef<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
@@ -158,7 +165,6 @@ export function ClientApp(): React.ReactElement {
   const searchMembers = activeServer && !activeServer.members.some((member) => member.id === (currentAccess?.id ?? profile.id))
     ? [{ id: currentAccess?.id ?? profile.id, displayName: profile.displayName, role: "Вы", serverRole: currentAccess?.role, status: "online" as const, avatarColor: "#7c5cff", avatar: profile.avatar }, ...activeServer.members]
     : activeServer?.members ?? [];
-
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
     commit((current) => ({ ...current, activeServerId: server.id, activeChannelId: channel?.id ?? null }));
@@ -199,6 +205,8 @@ export function ClientApp(): React.ReactElement {
   }
 
   function joinVoiceChannel(channel: MockChannel): void {
+    selectChannel(channel.id);
+    if (!shouldRequestVoiceJoin(voice.status, voice.channelId, voiceAuthorization?.channelId ?? null, channel.id)) return;
     if (!activeServer?.address) { setNotice("Голосовой чат доступен только на подключённом OpenCord Server"); return; }
     if (voiceCapability?.status !== "available") { setNotice(voiceCapability?.warning ?? "Голосовой сервер недоступен. Обновите или проверьте сервер."); return; }
     if (!connection.joinVoice(channel.id)) setNotice("Сервер ещё не готов подключить к голосовому каналу");
@@ -208,6 +216,24 @@ export function ClientApp(): React.ReactElement {
     connection.leaveVoice();
     void voice.leave();
     setVoiceAuthorization(null);
+    setViewingScreenShareId(null);
+  }
+
+  async function startScreenShare(settings: ScreenShareSettings): Promise<void> {
+    await voice.startScreenShare(settings);
+    setViewingScreenShareId(currentAccess?.id ?? null);
+    if (voice.channelId) selectChannel(voice.channelId);
+    setNotice("Демонстрация экрана запущена");
+  }
+
+  async function stopScreenShare(): Promise<void> {
+    await voice.stopScreenShare();
+    setNotice("Демонстрация экрана остановлена");
+  }
+
+  function viewScreenShare(participantIdentity: string): void {
+    setViewingScreenShareId(participantIdentity);
+    if (voice.channelId) selectChannel(voice.channelId);
   }
 
   function addServer(server: MockServer): boolean {
@@ -263,9 +289,9 @@ export function ClientApp(): React.ReactElement {
     return true;
   }
 
-  function updateServerAttachmentLimit(maxAttachmentBytes: number | null): boolean {
-    if (!connection.updateServerSettings(maxAttachmentBytes)) { setNotice("Сервер сейчас недоступен для изменения настроек"); return false; }
-    setNotice(maxAttachmentBytes === null ? "Лимит загрузки отключён" : `Лимит загрузки: ${Math.round(maxAttachmentBytes / MEBIBYTE)} МБ`);
+  function saveServerSettings(settings: ServerSettings): boolean {
+    if (!connection.updateServerSettings(settings)) { setNotice("Сервер сейчас недоступен для изменения настроек"); return false; }
+    setNotice("Настройки сервера сохранены");
     return true;
   }
 
@@ -372,8 +398,8 @@ export function ClientApp(): React.ReactElement {
     <main className="relative flex min-h-0 flex-1 overflow-hidden bg-[#0c0f17] text-slate-200">
       <ServerRail servers={state.servers} activeId={activeServer?.id} onHome={openHome} onSelect={selectServer} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} />
       {activeServer ? <>
-        <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} />
-        {activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#111520]">
+        <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)} isScreenSharing={voice.isScreenSharing} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} />
+        {activeChannel?.kind === "voice" ? <VoiceChannelView channel={activeChannel} server={activeServer} profile={profile} participants={voiceParticipants} currentUserId={currentAccess?.id ?? profile.id} connectedChannelId={voice.channelId} status={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShares={voice.screenShares} viewingScreenShareId={viewingScreenShareId} isScreenSharing={voice.isScreenSharing} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} onExitScreenShare={() => setViewingScreenShareId(null)} onLeaveVoice={leaveVoiceChannel} /> : activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#111520]">
           <ChatHeader channelName={activeChannel?.name ?? "канал"} description={activeChannel?.description ?? ""} connectionStatus={activeServer.address ? connection.status : "demo"} memberList={state.preferences.showMemberList} searchOpen={searchOpen} onSearch={() => setSearchOpen(true)} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} />
           <ProtocolNotice status={connection.status} />
           <div className="flex min-h-0 flex-1">
@@ -396,11 +422,12 @@ export function ClientApp(): React.ReactElement {
       <ServerDialog open={modal === "connect"} onOpenChange={(open) => setModal(open ? "connect" : null)} onAdd={addServer} />
       <ProfileDialog key={modal === "profile" ? "profile-open" : "profile-closed"} profile={state.profile} open={modal === "profile"} onOpenChange={(open) => setModal(open ? "profile" : null)} onSave={saveProfile} />
       {modal === "settings" && <SettingsDialog preferences={state.preferences} open confirmReset={confirmReset} onOpenChange={(open) => { setModal(open ? "settings" : null); if (!open) setConfirmReset(false); }} onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))} onRequestReset={() => setConfirmReset(true)} onCancelReset={() => setConfirmReset(false)} onReset={() => void reset()} />}
-      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onUpdate={() => setModal("update")} onSaveLimit={updateServerAttachmentLimit} onConfirm={() => leaveServer(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
+      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onUpdate={() => setModal("update")} onSaveSettings={saveServerSettings} onConfirm={() => leaveServer(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
       {activeServer && <ServerAvatarDialog key={`${activeServer.id}-${activeServer.avatar ?? "none"}`} server={activeServer} open={modal === "server-avatar"} onOpenChange={(open) => setModal(open ? "server-avatar" : null)} onSave={updateServerAvatar} />}
       <ChannelDialog open={modal === "channel"} onOpenChange={(open) => setModal(open ? "channel" : null)} onCreate={createServerChannel} />
       {managedChannel && <EditChannelDialog key={managedChannel.id} channel={managedChannel} open={modal === "channel-edit"} onOpenChange={(open) => { setModal(open ? "channel-edit" : null); if (!open) setManagedChannel(null); }} onSave={(name, description, participantLimit) => editServerChannel(managedChannel, name, description, participantLimit)} />}
       {managedChannel && <DeleteChannelDialog channel={managedChannel} open={modal === "channel-delete"} onOpenChange={(open) => { setModal(open ? "channel-delete" : null); if (!open) setManagedChannel(null); }} onConfirm={() => deleteServerChannel(managedChannel)} />}
+      <ScreenShareDialog open={modal === "screen-share"} maxResolution={activeServer?.screenShareMaxResolution ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION} maxFrameRate={activeServer?.screenShareMaxFrameRate ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE} onOpenChange={(open) => setModal(open ? "screen-share" : null)} onStart={startScreenShare} />
     </main>
   );
 }
@@ -429,7 +456,7 @@ function HomeScreen({ serverCount, onCreate, onConnect }: { serverCount: number;
   </section>;
 }
 
-export function ChannelSidebar({ server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, deafened = false, activeSpeakerIds = [], currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onSelectChannel, onServerMenu, onProfile, onSettings, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onVoiceNotice }: { server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onVoiceNotice?: () => void }): React.ReactElement {
+export function ChannelSidebar({ server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onSelectChannel, onServerMenu, onProfile, onSettings, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice }: { server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void }): React.ReactElement {
   const textChannels = server.channels.filter((channel) => channel.kind === "text");
   const voiceChannels = server.channels.filter((channel) => channel.kind === "voice");
   const [contextMenu, setContextMenu] = useState<{ channel: MockChannel; x: number; y: number } | null>(null);
@@ -459,8 +486,8 @@ export function ChannelSidebar({ server, activeChannelId, profile, canManageChan
   return <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-[#0e121b]">
     <button aria-label={`${ru.server.manage}: ${server.name}`} onClick={onServerMenu} className="flex h-14 items-center justify-between border-b border-white/[.055] px-4 text-left font-semibold text-slate-100 transition hover:bg-white/[.035]">{server.name}<ChevronDown className="size-4 text-slate-500" /></button>
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-4"><ChannelGroup title={ru.channel.text} canCreate={canManageChannels} onCreate={onCreateChannel}>{textChannels.map((channel) => <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}><Hash className="size-4 shrink-0" /><span className="truncate">{channel.name}</span></button>)}</ChannelGroup>
-    <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <div key={channel.id} className="mb-1"><button onClick={() => { if (onJoinVoice) onJoinVoice(channel); else onVoiceNotice?.(); }} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}><Volume2 className="size-4" /><span className="truncate">{channel.name}</span>{voiceParticipants.some((participant) => participant.channelId === channel.id) && <span className="ml-auto text-[10px] text-slate-500">{voiceParticipants.filter((participant) => participant.channelId === channel.id).length}/{channel.participantLimit === 0 ? "∞" : channel.participantLimit ?? voiceCapability?.maxParticipants ?? 25}</span>}</button><div className="space-y-0.5">{voiceParticipants.filter((participant) => participant.channelId === channel.id).map((participant) => <VoiceParticipantRow key={participant.userId} participant={participant} member={server.members.find((item) => item.id === participant.userId)} profile={profile} currentUserId={currentUserId} speaking={activeSpeakerIds.includes(participant.userId)} />)}</div></div>)}</ChannelGroup></div>
-    {voiceChannelId && onLeaveVoice && onMuted && onDeafened && <VoicePanel channel={voiceChannels.find((channel) => channel.id === voiceChannelId)} status={voiceStatus} muted={muted} deafened={deafened} onMuted={onMuted} onDeafened={onDeafened} onLeave={onLeaveVoice} />}
+    <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <div key={channel.id} className="mb-1"><button onClick={() => { if (onJoinVoice) onJoinVoice(channel); else onVoiceNotice?.(); }} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}><Volume2 className="size-4" /><span className="truncate">{channel.name}</span>{voiceParticipants.some((participant) => participant.channelId === channel.id) && <span className="ml-auto text-[10px] text-slate-500">{voiceParticipants.filter((participant) => participant.channelId === channel.id).length}/{channel.participantLimit === 0 ? "∞" : channel.participantLimit ?? voiceCapability?.maxParticipants ?? 25}</span>}</button><div className="space-y-0.5">{voiceParticipants.filter((participant) => participant.channelId === channel.id).map((participant) => <VoiceParticipantRow key={participant.userId} participant={participant} member={server.members.find((item) => item.id === participant.userId)} profile={profile} currentUserId={currentUserId} speaking={activeSpeakerIds.includes(participant.userId)} sharing={screenShareParticipantIds.includes(participant.userId)} onViewScreenShare={onViewScreenShare} />)}</div></div>)}</ChannelGroup></div>
+    {voiceChannelId && onLeaveVoice && onMuted && onDeafened && <VoicePanel channel={voiceChannels.find((channel) => channel.id === voiceChannelId)} status={voiceStatus} muted={muted} deafened={deafened} isScreenSharing={isScreenSharing} onMuted={onMuted} onDeafened={onDeafened} onStartScreenShare={onStartScreenShare} onStopScreenShare={onStopScreenShare} onLeave={onLeaveVoice} />}
     <div className="flex h-14 items-center gap-2 border-t border-white/[.055] bg-[#0a0d14] px-2"><button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5"><Avatar name={profile.displayName} image={profile.avatar} size="sm" status="online" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span><span className="block text-[10px] text-emerald-400">{ru.common.online}</span></span></button><button title={ru.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200"><Settings className="size-4" /></button></div>
     {contextMenu && <div role="menu" aria-label={ru.channel.manageMenu(contextMenu.channel.name)} onPointerDown={(event) => event.stopPropagation()} className="fixed z-[80] w-48 rounded-xl border border-white/10 bg-[#171c28] p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.55)]" style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button role="menuitem" onClick={() => { const channel = contextMenu.channel; setContextMenu(null); onEditChannel(channel); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-300 hover:bg-white/[.06] hover:text-white"><Pencil className="size-3.5" />{ru.channel.edit}</button>
@@ -469,7 +496,7 @@ export function ChannelSidebar({ server, activeChannelId, profile, canManageChan
   </aside>;
 }
 
-export function VoiceParticipantRow({ participant, member, profile, currentUserId, speaking }: { participant: VoicePresence; member?: MockMember; profile: LocalProfile; currentUserId: string; speaking: boolean }): React.ReactElement {
+export function VoiceParticipantRow({ participant, member, profile, currentUserId, speaking, sharing = false, onViewScreenShare }: { participant: VoicePresence; member?: MockMember; profile: LocalProfile; currentUserId: string; speaking: boolean; sharing?: boolean; onViewScreenShare?: (participantIdentity: string) => void }): React.ReactElement {
   const isCurrentUser = participant.userId === currentUserId;
   const displayName = member?.displayName ?? (isCurrentUser ? profile.displayName : "Участник");
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
@@ -477,6 +504,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   return <ProfilePreview side="right" wrapperClassName="ml-6 flex" triggerClassName="flex min-h-9 w-[224px] items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200" profile={{ displayName, avatar, color: member?.avatarColor, status: member?.status ?? (isCurrentUser ? "online" : "offline"), role: member?.role, bio: isCurrentUser ? profile.bio : undefined, isCurrentUser }}>
     <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0e121b] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
     <span className="min-w-0 flex-1 truncate">{displayName}{isCurrentUser && " (вы)"}</span>
+    {sharing && <span title={`Смотреть экран: ${displayName}`} aria-label={`Смотреть экран: ${displayName}`} onClick={(event) => { event.stopPropagation(); onViewScreenShare?.(participant.userId); }} className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-cyan-400/10 text-cyan-300 hover:bg-cyan-400/20"><MonitorUp className="size-3.5" /></span>}
     {participant.deafened
       ? <span aria-label={`Звук и микрофон выключены: ${displayName}`} title="Звук и микрофон выключены" className="grid size-6 shrink-0 place-items-center text-red-300"><VolumeX className="size-3.5" /></span>
       : participant.muted
@@ -485,9 +513,93 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   </ProfilePreview>;
 }
 
-function VoicePanel({ channel, status, muted, deafened, onMuted, onDeafened, onLeave }: { channel?: MockChannel; status: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted: boolean; deafened: boolean; onMuted: (value: boolean) => void; onDeafened: (value: boolean) => void; onLeave: () => void }): React.ReactElement {
+interface VoiceChannelViewProps {
+  channel: MockChannel;
+  server: MockServer;
+  profile: LocalProfile;
+  participants: VoicePresence[];
+  currentUserId: string;
+  connectedChannelId: string | null;
+  status: "idle" | "connecting" | "connected" | "reconnecting" | "error";
+  muted: boolean;
+  deafened: boolean;
+  activeSpeakerIds: string[];
+  screenShares: ScreenShareStream[];
+  viewingScreenShareId: string | null;
+  isScreenSharing: boolean;
+  onMuted: (value: boolean) => void;
+  onDeafened: (value: boolean) => void;
+  onStartScreenShare: () => void;
+  onStopScreenShare: () => void;
+  onViewScreenShare: (participantIdentity: string) => void;
+  onExitScreenShare: () => void;
+  onLeaveVoice: () => void;
+}
+
+export function VoiceChannelView({ channel, server, profile, participants, currentUserId, connectedChannelId, status, muted, deafened, activeSpeakerIds, screenShares, viewingScreenShareId, isScreenSharing, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onExitScreenShare, onLeaveVoice }: VoiceChannelViewProps): React.ReactElement {
+  const channelParticipants = participants.filter((participant) => participant.channelId === channel.id);
+  const connectedHere = connectedChannelId === channel.id;
+  const availableScreenShares = connectedHere ? screenShares : [];
+  const viewedStream = screenShares.find((stream) => stream.participantIdentity === viewingScreenShareId);
+  const statusLabel = status === "reconnecting" ? "Переподключение…" : status === "connecting" ? "Подключение…" : connectedHere && status === "connected" ? "Голос подключён" : status === "error" ? "Ошибка подключения" : "Не подключено";
+  const participantProfile = (identity: string, fallbackName?: string): { name: string; avatar: string | null; color?: string; status: "online" | "idle" | "offline" } => {
+    const member = server.members.find((item) => item.id === identity);
+    const isCurrentUser = identity === currentUserId;
+    return {
+      name: member?.displayName ?? (isCurrentUser ? profile.displayName : fallbackName ?? "Участник"),
+      avatar: member?.avatar ?? (isCurrentUser ? profile.avatar : null),
+      color: member?.avatarColor,
+      status: member?.status ?? (isCurrentUser ? "online" : "offline"),
+    };
+  };
+  const viewedProfile = viewingScreenShareId ? participantProfile(viewingScreenShareId, viewedStream?.participantName) : null;
+
+  return <section aria-label={`Голосовой канал ${channel.name}`} className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0d111a]">
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[.06] px-5">
+      <span className="grid size-8 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Volume2 className="size-4" /></span>
+      <div className="min-w-0"><h1 className="truncate text-sm font-bold text-slate-100">{channel.name}</h1><p className="truncate text-[11px] text-slate-500">{channel.description || "Голосовой канал"}</p></div>
+      <div className="ml-auto flex items-center gap-2"><span className="rounded-lg bg-white/[.045] px-2.5 py-1 text-[10px] font-medium text-slate-400">{channelParticipants.length} участн.</span><span className={cn("rounded-lg px-2.5 py-1 text-[10px] font-semibold", connectedHere && status === "connected" ? "bg-emerald-400/10 text-emerald-300" : status === "error" ? "bg-red-400/10 text-red-300" : "bg-amber-400/10 text-amber-300")}>{statusLabel}</span></div>
+    </header>
+
+    <div className="min-h-0 flex-1 overflow-hidden p-4 sm:p-5">
+      {viewingScreenShareId ? <div className="flex h-full min-h-0 flex-col gap-3">
+        <div className="flex shrink-0 items-center gap-3 rounded-2xl border border-cyan-400/15 bg-cyan-400/[.045] px-4 py-3">
+          <span className="relative grid size-9 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300"><MonitorUp className="size-4" /><span className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-[#111824] bg-red-400" /></span>
+          <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-100">{viewedStream?.local ? "Ваша демонстрация" : `${viewedProfile?.name ?? "Участник"} демонстрирует экран`}</p><p className="text-[11px] text-slate-500">Просмотр закреплён и завершится только по вашей команде</p></div>
+          <Button variant="secondary" onClick={onExitScreenShare} className="ml-auto shrink-0"><X className="size-4" />Выйти из просмотра</Button>
+        </div>
+        {viewedStream ? <ScreenShareSurface stream={viewedStream} className="h-full min-h-[260px] flex-1" /> : <div className="grid min-h-[260px] flex-1 place-items-center rounded-2xl border border-dashed border-white/10 bg-black/25 px-6 text-center"><div><span className="mx-auto grid size-16 place-items-center rounded-3xl bg-white/[.045] text-slate-500"><MonitorUp className="size-7" /></span><h2 className="mt-4 text-lg font-bold text-slate-200">Трансляция временно недоступна</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">Она могла завершиться или переподключаться. Режим просмотра останется открытым, пока вы не нажмёте «Выйти из просмотра».</p></div></div>}
+      </div> : <div className="scrollbar-thin h-full overflow-y-auto pr-1">
+        <div className="mb-7"><div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-bold text-slate-200">Участники голосового канала</h2><p className="mt-1 text-xs text-slate-500">Говорите, запускайте демонстрацию или выберите активный экран ниже.</p></div><Users className="size-4 text-slate-600" /></div>
+          {channelParticipants.length ? <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">{channelParticipants.map((participant) => {
+            const participantData = participantProfile(participant.userId);
+            const speaking = activeSpeakerIds.includes(participant.userId) && !participant.muted && !participant.deafened;
+            return <div key={participant.userId} className={cn("relative flex min-h-40 flex-col items-center justify-center rounded-2xl border bg-[#141a26] p-5 text-center transition", speaking ? "border-emerald-400/55 shadow-[0_0_0_1px_rgba(52,211,153,.15),0_16px_45px_rgba(0,0,0,.25)]" : "border-white/[.07]")}><Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="xl" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-4 ring-offset-[#141a26]")} /><p className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100">{participantData.name}{participant.userId === currentUserId && " (вы)"}</p><p className={cn("mt-1 text-[10px] font-medium", speaking ? "text-emerald-300" : "text-slate-600")}>{speaking ? "Говорит" : participant.deafened ? "Звук отключён" : participant.muted ? "Микрофон выключен" : "В голосовом канале"}</p>{participant.deafened ? <VolumeX className="absolute right-3 top-3 size-4 text-red-300" /> : participant.muted ? <MicOff className="absolute right-3 top-3 size-4 text-red-300" /> : null}</div>;
+          })}</div> : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[.018] px-6 py-10 text-center text-sm text-slate-600">В канале пока никого нет.</div>}
+        </div>
+
+        <div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-bold text-slate-200">Демонстрации экрана</h2><p className="mt-1 text-xs text-slate-500">Каждая трансляция подключается отдельно — выберите, какую смотреть.</p></div><span className="rounded-lg bg-cyan-400/10 px-2 py-1 text-[10px] font-bold text-cyan-300">{availableScreenShares.length} LIVE</span></div>
+          {availableScreenShares.length ? <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{availableScreenShares.map((stream) => {
+            const streamProfile = participantProfile(stream.participantIdentity, stream.participantName);
+            return <button key={stream.participantIdentity} type="button" aria-label={`Смотреть трансляцию ${streamProfile.name}`} onClick={() => onViewScreenShare(stream.participantIdentity)} className="group overflow-hidden rounded-2xl border border-cyan-400/15 bg-[#111925] text-left transition hover:-translate-y-0.5 hover:border-cyan-300/45 hover:shadow-[0_18px_55px_rgba(0,0,0,.3)]"><div className="relative grid aspect-video place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_35%,rgba(34,211,238,.16),transparent_45%),linear-gradient(145deg,#0a0f18,#121a28)]"><MonitorUp className="size-11 text-cyan-300/75 transition group-hover:scale-110" /><span className="absolute left-3 top-3 rounded-md bg-red-500 px-2 py-1 text-[9px] font-black tracking-wider text-white shadow">LIVE</span><span className="absolute bottom-3 right-3 rounded-lg bg-black/65 px-2.5 py-1 text-[10px] font-semibold text-white backdrop-blur">Смотреть</span></div><div className="flex items-center gap-3 p-3"><Avatar name={streamProfile.name} image={streamProfile.avatar} color={streamProfile.color} size="md" status={streamProfile.status} /><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-100">{stream.local ? "Ваша демонстрация" : `Экран ${streamProfile.name}`}</p><p className="mt-0.5 truncate text-[11px] text-slate-500">Нажмите, чтобы подключиться к просмотру</p></div></div></button>;
+          })}</div> : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[.018] px-6 py-9 text-center"><MonitorUp className="mx-auto size-6 text-slate-600" /><p className="mt-3 text-sm font-medium text-slate-400">Сейчас никто не показывает экран</p><p className="mt-1 text-xs text-slate-600">Запустите свою демонстрацию кнопкой в панели управления.</p></div>}
+        </div>
+      </div>}
+    </div>
+
+    {connectedHere && <div className="flex shrink-0 items-center justify-center gap-2 border-t border-white/[.06] bg-[#0a0e16]/95 px-4 py-3">
+      <button type="button" aria-label={muted ? "Включить микрофон" : "Выключить микрофон"} title={muted ? "Включить микрофон" : "Выключить микрофон"} onClick={() => onMuted(!muted)} className={cn("grid size-10 place-items-center rounded-full border transition", muted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}>{muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}</button>
+      <button type="button" aria-label={deafened ? "Включить звук" : "Отключить звук"} title={deafened ? "Включить звук" : "Отключить звук"} onClick={() => onDeafened(!deafened)} className={cn("grid size-10 place-items-center rounded-full border transition", deafened ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}><VolumeX className="size-4" /></button>
+      <button type="button" aria-label={isScreenSharing ? "Остановить демонстрацию" : "Начать демонстрацию"} title={isScreenSharing ? "Остановить демонстрацию" : "Начать демонстрацию"} disabled={status !== "connected"} onClick={isScreenSharing ? onStopScreenShare : onStartScreenShare} className={cn("grid size-10 place-items-center rounded-full border transition disabled:opacity-35", isScreenSharing ? "border-cyan-300/30 bg-cyan-400/15 text-cyan-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}><MonitorUp className="size-4" /></button>
+      <div className="mx-1 h-7 w-px bg-white/10" />
+      <button type="button" aria-label="Выйти из голосового канала" title="Выйти из голосового канала" onClick={onLeaveVoice} className="grid h-10 w-14 place-items-center rounded-full bg-red-500 text-white shadow-[0_8px_24px_rgba(239,68,68,.2)] transition hover:bg-red-400"><PhoneOff className="size-4" /></button>
+    </div>}
+  </section>;
+}
+
+function VoicePanel({ channel, status, muted, deafened, isScreenSharing, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onLeave }: { channel?: MockChannel; status: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted: boolean; deafened: boolean; isScreenSharing: boolean; onMuted: (value: boolean) => void; onDeafened: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onLeave: () => void }): React.ReactElement {
   const label = status === "reconnecting" ? "Переподключение…" : status === "connecting" ? "Подключение…" : status === "connected" ? "Подключено" : "Ошибка соединения";
-  return <div className="border-t border-violet-400/15 bg-violet-400/[.06] px-3 py-2"><div className="flex items-center gap-2 text-xs"><Headphones className="size-3.5 text-violet-300" /><span className="min-w-0 flex-1 truncate font-medium text-slate-200">{channel?.name ?? "Голосовой канал"}</span><span className="text-[10px] text-slate-500">{label}</span></div><div className="mt-2 flex gap-1"><button title={muted ? "Включить микрофон" : "Выключить микрофон"} onClick={() => onMuted(!muted)} className={cn("rounded-lg p-1.5 hover:bg-white/10", muted ? "text-red-300" : "text-slate-300")}>{muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}</button><button title={deafened ? "Включить звук" : "Отключить звук"} onClick={() => onDeafened(!deafened)} className={cn("rounded-lg p-1.5 hover:bg-white/10", deafened ? "text-red-300" : "text-slate-300")}><VolumeX className="size-4" /></button><button title="Выйти из голосового канала" onClick={onLeave} className="ml-auto rounded-lg p-1.5 text-red-300 hover:bg-red-400/10"><PhoneOff className="size-4" /></button></div></div>;
+  return <div className="border-t border-violet-400/15 bg-violet-400/[.06] px-3 py-2"><div className="flex items-center gap-2 text-xs"><Headphones className="size-3.5 text-violet-300" /><span className="min-w-0 flex-1 truncate font-medium text-slate-200">{channel?.name ?? "Голосовой канал"}</span><span className="text-[10px] text-slate-500">{label}</span></div><div className="mt-2 flex gap-1"><button title={muted ? "Включить микрофон" : "Выключить микрофон"} onClick={() => onMuted(!muted)} className={cn("rounded-lg p-1.5 hover:bg-white/10", muted ? "text-red-300" : "text-slate-300")}>{muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}</button><button title={deafened ? "Включить звук" : "Отключить звук"} onClick={() => onDeafened(!deafened)} className={cn("rounded-lg p-1.5 hover:bg-white/10", deafened ? "text-red-300" : "text-slate-300")}><VolumeX className="size-4" /></button><button title={isScreenSharing ? "Остановить демонстрацию" : "Демонстрация экрана"} disabled={status !== "connected"} onClick={isScreenSharing ? onStopScreenShare : onStartScreenShare} className={cn("rounded-lg p-1.5 hover:bg-white/10 disabled:opacity-35", isScreenSharing ? "bg-cyan-400/15 text-cyan-300" : "text-slate-300")}><MonitorUp className="size-4" /></button><button title="Выйти из голосового канала" onClick={onLeave} className="ml-auto rounded-lg p-1.5 text-red-300 hover:bg-red-400/10"><PhoneOff className="size-4" /></button></div></div>;
 }
 
 function ChannelDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenChange: (open: boolean) => void; onCreate: (name: string, kind: "text" | "voice", description: string) => void }): React.ReactElement {
@@ -521,28 +633,73 @@ function DeleteChannelDialog({ channel, open, onOpenChange, onConfirm }: { chann
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><div className="mb-3 grid size-11 place-items-center rounded-2xl bg-red-400/10 text-red-300"><Trash2 className="size-5" /></div><DialogTitle>{ru.channel.deleteTitle}</DialogTitle><DialogDescription>{ru.channel.deleteDescription(channel.name)}</DialogDescription></DialogHeader><div className="flex gap-3"><Button variant="secondary" onClick={() => onOpenChange(false)} className="flex-1">{ru.common.cancel}</Button><Button variant="danger" onClick={onConfirm} className="flex-1"><Trash2 className="size-4" />{ru.channel.deleteConfirm}</Button></div></DialogContent></Dialog>;
 }
 
-export function LeaveServerDialog({ server, canManageServer, canUpdate, canDeleteForAll, open, onOpenChange, onAvatar, onUpdate, onSaveLimit, onConfirm, onDeleteForAll }: { server: MockServer; canManageServer: boolean; canUpdate: boolean; canDeleteForAll: boolean; open: boolean; onOpenChange: (open: boolean) => void; onAvatar: () => void; onUpdate: () => void; onSaveLimit: (maxAttachmentBytes: number | null) => boolean; onConfirm: () => void; onDeleteForAll: () => void }): React.ReactElement {
+export function LeaveServerDialog({ server, canManageServer, canUpdate, canDeleteForAll, open, onOpenChange, onAvatar, onUpdate, onSaveSettings, onConfirm, onDeleteForAll }: { server: MockServer; canManageServer: boolean; canUpdate: boolean; canDeleteForAll: boolean; open: boolean; onOpenChange: (open: boolean) => void; onAvatar: () => void; onUpdate: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onConfirm: () => void; onDeleteForAll: () => void }): React.ReactElement {
   const sliderMax = 2025;
   const currentMegabytes = server.maxAttachmentBytes === null ? sliderMax : Math.round(server.maxAttachmentBytes / MEBIBYTE);
   const [limitStep, setLimitStep] = useState(currentMegabytes);
-  const unlimited = limitStep > 2000;
+  const [limitInput, setLimitInput] = useState(server.maxAttachmentBytes === null ? "2001" : String(currentMegabytes));
+  const currentResolution = server.screenShareMaxResolution ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION;
+  const currentFrameRate = server.screenShareMaxFrameRate ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE;
+  const [serverName, setServerName] = useState(server.name);
+  const [maxResolution, setMaxResolution] = useState<ScreenShareResolution>(currentResolution);
+  const [maxFrameRate, setMaxFrameRate] = useState<ScreenShareFrameRate>(currentFrameRate);
+  const parsedLimit = Number.parseInt(limitInput, 10);
+  const validLimit = Number.isFinite(parsedLimit) && parsedLimit >= 1;
+  const unlimited = validLimit && parsedLimit > 2000;
   const progress = ((limitStep - 1) / (sliderMax - 1)) * 100;
-  function saveLimit(): void {
-    if (onSaveLimit(unlimited ? null : Math.max(1, Math.min(2000, limitStep)) * MEBIBYTE)) onOpenChange(false);
+  function saveSettings(): void {
+    const name = serverName.trim();
+    if (!validLimit || name.length < 2) return;
+    if (onSaveSettings({ name, maxAttachmentBytes: unlimited ? null : parsedLimit * MEBIBYTE, screenShareMaxResolution: maxResolution, screenShareMaxFrameRate: maxFrameRate })) onOpenChange(false);
   }
-  return <Dialog open={open} onOpenChange={(nextOpen) => { if (nextOpen) setLimitStep(currentMegabytes); onOpenChange(nextOpen); }}>
+  function changeSlider(value: number): void {
+    setLimitStep(value);
+    setLimitInput(value > 2000 ? "2001" : String(value));
+  }
+  function changeLimitInput(value: string): void {
+    const digits = value.replace(/\D/gu, "");
+    setLimitInput(digits);
+    if (!digits) return;
+    const numericValue = Number.parseInt(digits, 10);
+    setLimitStep(numericValue > 2000 ? sliderMax : Math.max(1, numericValue));
+  }
+  return <Dialog open={open} onOpenChange={(nextOpen) => { if (nextOpen) { setServerName(server.name); setLimitStep(currentMegabytes); setLimitInput(server.maxAttachmentBytes === null ? "2001" : String(currentMegabytes)); setMaxResolution(currentResolution); setMaxFrameRate(currentFrameRate); } onOpenChange(nextOpen); }}>
     <DialogContent className="overflow-hidden border-white/10 bg-[#111725] p-0 sm:max-w-xl">
-      <div className="relative h-28 overflow-hidden bg-gradient-to-br from-violet-600 via-indigo-600 to-cyan-500">
-        <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_75%_20%,white,transparent_28%)]" />
-        <div className="absolute bottom-0 left-6 translate-y-1/2"><Avatar image={server.avatar} name={server.name} color={server.accent} size="xl" className="ring-4 ring-[#111725] shadow-xl" /></div>
+      <div className="relative -mx-5 -mt-5 mb-12">
+        <div className="relative h-32 overflow-hidden bg-gradient-to-br from-violet-600 via-indigo-600 to-cyan-500">
+          <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_75%_20%,white,transparent_28%)]" />
+          <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/15 to-transparent" />
+        </div>
+        <div className="absolute -bottom-10 left-6"><Avatar image={server.avatar} name={server.name} color={server.accent} size="xl" className="ring-4 ring-[#111725] shadow-2xl" /></div>
       </div>
-      <div className="space-y-5 px-6 pb-6 pt-12">
+      <div className="space-y-5 pb-1">
         <DialogHeader><DialogTitle className="text-xl">{server.address ? ru.server.manage : ru.server.leaveTitle}</DialogTitle><DialogDescription>{server.address ? ru.server.manageDescription(server.name) : ru.server.leaveLocalDescription(server.name)}</DialogDescription></DialogHeader>
-        {server.address && <section className="rounded-2xl border border-white/[.07] bg-black/15 p-4">
-          <div className="mb-4 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-slate-200">Размер загружаемых файлов</p><p className="mt-1 text-xs leading-5 text-slate-500">От 1 до 2000 МБ. Сдвиньте ползунок чуть правее 2000, чтобы снять ограничение.</p></div><span className={cn("grid min-w-20 place-items-center rounded-xl px-3 py-2 text-sm font-bold", unlimited ? "bg-cyan-400/10 text-cyan-200" : "bg-violet-400/10 text-violet-200")}>{unlimited ? "∞" : `${limitStep} МБ`}</span></div>
-          <input aria-label="Максимальный размер загружаемого файла" type="range" min={1} max={sliderMax} step={1} value={limitStep} onChange={(event) => setLimitStep(Number(event.target.value))} disabled={!canManageServer} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full disabled:cursor-not-allowed disabled:opacity-50" style={{ background: `linear-gradient(90deg, #8b5cf6 0%, #22d3ee ${progress}%, #1e293b ${progress}%, #1e293b 100%)` }} />
-          <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>1 МБ</span><span>500</span><span>1000</span><span>1500</span><span>2000</span><span>∞</span></div>
-          {canManageServer ? <Button type="button" onClick={saveLimit} className="mt-4 w-full"><Settings className="size-4" />Сохранить лимит</Button> : <p className="mt-3 text-xs text-slate-500">Изменять лимит может владелец или администратор сервера.</p>}
+        {server.address && <section className="space-y-5 rounded-2xl border border-white/[.07] bg-black/15 p-4">
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-slate-200" htmlFor="server-settings-name">Название сервера</label>
+            <Input id="server-settings-name" aria-label="Название сервера" value={serverName} onChange={(event) => setServerName(event.target.value)} minLength={2} maxLength={48} disabled={!canManageServer} />
+            <p className="mt-1.5 text-xs text-slate-500">Новое название сразу появится у всех подключённых участников.</p>
+          </div>
+
+          <div className="border-t border-white/[.06] pt-5">
+            <div className="mb-4 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-slate-200">Размер загружаемых файлов</p><p className="mt-1 text-xs leading-5 text-slate-500">От 1 до 2000 МБ. Значение 2001 или больше снимает ограничение.</p></div><label className={cn("flex h-10 min-w-28 items-center rounded-xl border px-3 transition focus-within:ring-2", unlimited ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-200 focus-within:ring-cyan-400/25" : "border-violet-400/20 bg-violet-400/10 text-violet-200 focus-within:ring-violet-400/25")}><input aria-label="Лимит загрузки в мегабайтах" inputMode="numeric" value={limitInput} onChange={(event) => changeLimitInput(event.target.value)} disabled={!canManageServer} className="w-16 bg-transparent text-right text-sm font-bold outline-none disabled:cursor-not-allowed" /><span className="ml-2 min-w-5 text-xs font-bold">{unlimited ? "∞" : "МБ"}</span></label></div>
+            <input aria-label="Максимальный размер загружаемого файла" type="range" min={1} max={sliderMax} step={1} value={limitStep} onChange={(event) => changeSlider(Number(event.target.value))} disabled={!canManageServer} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full disabled:cursor-not-allowed disabled:opacity-50" style={{ background: `linear-gradient(90deg, #8b5cf6 0%, #22d3ee ${progress}%, #1e293b ${progress}%, #1e293b 100%)` }} />
+            <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>1 МБ</span><span>500</span><span>1000</span><span>1500</span><span>2000</span><span>∞</span></div>
+          </div>
+
+          <div className="border-t border-white/[.06] pt-5">
+            <div className="mb-3 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-slate-200">Максимальное качество демонстрации</p><p className="mt-1 text-xs leading-5 text-slate-500">Клиенты не смогут выбрать разрешение выше установленного.</p></div><span className="rounded-xl bg-cyan-400/10 px-3 py-2 text-sm font-bold text-cyan-200">{maxResolution}p</span></div>
+            <input aria-label="Максимальное качество демонстрации экрана" type="range" min={0} max={SCREEN_SHARE_RESOLUTIONS.length - 1} step={1} value={SCREEN_SHARE_RESOLUTIONS.indexOf(maxResolution)} onChange={(event) => setMaxResolution(SCREEN_SHARE_RESOLUTIONS[Number(event.target.value)] ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION)} disabled={!canManageServer} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full disabled:cursor-not-allowed disabled:opacity-50" style={{ background: `linear-gradient(90deg, #8b5cf6 0%, #22d3ee ${(SCREEN_SHARE_RESOLUTIONS.indexOf(maxResolution) / (SCREEN_SHARE_RESOLUTIONS.length - 1)) * 100}%, #1e293b ${(SCREEN_SHARE_RESOLUTIONS.indexOf(maxResolution) / (SCREEN_SHARE_RESOLUTIONS.length - 1)) * 100}%, #1e293b 100%)` }} />
+            <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>480p</span><span>720p</span><span>1080p</span></div>
+          </div>
+
+          <div className="border-t border-white/[.06] pt-5">
+            <div className="mb-3 flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-slate-200">Максимальная частота кадров</p><p className="mt-1 text-xs leading-5 text-slate-500">Отдельный лимит плавности для новых демонстраций.</p></div><span className="rounded-xl bg-violet-400/10 px-3 py-2 text-sm font-bold text-violet-200">{maxFrameRate} FPS</span></div>
+            <input aria-label="Максимальная частота кадров демонстрации экрана" type="range" min={0} max={SCREEN_SHARE_FRAME_RATES.length - 1} step={1} value={SCREEN_SHARE_FRAME_RATES.indexOf(maxFrameRate)} onChange={(event) => setMaxFrameRate(SCREEN_SHARE_FRAME_RATES[Number(event.target.value)] ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE)} disabled={!canManageServer} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full disabled:cursor-not-allowed disabled:opacity-50" style={{ background: `linear-gradient(90deg, #8b5cf6 0%, #22d3ee ${(SCREEN_SHARE_FRAME_RATES.indexOf(maxFrameRate) / (SCREEN_SHARE_FRAME_RATES.length - 1)) * 100}%, #1e293b ${(SCREEN_SHARE_FRAME_RATES.indexOf(maxFrameRate) / (SCREEN_SHARE_FRAME_RATES.length - 1)) * 100}%, #1e293b 100%)` }} />
+            <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>15 FPS</span><span>30 FPS</span><span>60 FPS</span></div>
+          </div>
+
+          {canManageServer ? <Button type="button" onClick={saveSettings} disabled={!validLimit || serverName.trim().length < 2} className="w-full"><Settings className="size-4" />Сохранить настройки</Button> : <p className="text-xs text-slate-500">Изменять настройки может только владелец сервера.</p>}
         </section>}
         <section className="grid gap-2 sm:grid-cols-2">
           {canManageServer && server.address && <button type="button" onClick={onAvatar} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-white/[.025] p-4 text-left text-sm font-semibold text-slate-200 transition hover:bg-white/[.06]"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Camera className="size-4" /></span>Аватар сервера</button>}
@@ -787,7 +944,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
   const members = snapshot.members.map((member) => ({ id: member.id, displayName: member.displayName, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar }));
   return {
     ...current,
-    servers: current.servers.map((server) => server.id === targetId ? { ...server, name: snapshot.name, avatar: snapshot.avatar, maxAttachmentBytes: snapshot.maxAttachmentBytes, channels, members } : server),
+    servers: current.servers.map((server) => server.id === targetId ? { ...server, name: snapshot.name, avatar: snapshot.avatar, maxAttachmentBytes: snapshot.maxAttachmentBytes, screenShareMaxResolution: snapshot.screenShareMaxResolution, screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate, channels, members, ...(server.deployment ? { deployment: { ...server.deployment, serverName: snapshot.name } } : {}) } : server),
     messages: current.messages.filter((message) => !removedChannelIds.has(message.channelId)),
     activeChannelId: channels.some((channel) => channel.id === current.activeChannelId) ? current.activeChannelId : channels.find((channel) => channel.kind === "text")?.id ?? null,
   };
@@ -815,7 +972,7 @@ export function upsertDeployedServer(current: PersistedClientState, serverUrl: s
   const matching = current.servers.filter((server) => sameServerAddress(server.address, serverUrl));
   if (!matching.length) {
     const id = createId("server");
-    return { ...current, servers: [...current.servers, { id, name: serverName, address: serverUrl, accent: "#7c5cff", maxAttachmentBytes: DEFAULT_ATTACHMENT_LIMIT_BYTES, channels: [], members: [], ...(deployment ? { deployment } : {}) }], activeServerId: id, activeChannelId: null };
+    return { ...current, servers: [...current.servers, { id, name: serverName, address: serverUrl, accent: "#7c5cff", maxAttachmentBytes: DEFAULT_ATTACHMENT_LIMIT_BYTES, screenShareMaxResolution: DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, screenShareMaxFrameRate: DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, channels: [], members: [], ...(deployment ? { deployment } : {}) }], activeServerId: id, activeChannelId: null };
   }
   const retained = matching[0]!;
   const withoutDuplicates = removeServers(current, (server) => server.id !== retained.id && sameServerAddress(server.address, serverUrl));

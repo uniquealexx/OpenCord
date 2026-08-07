@@ -4,6 +4,7 @@ import { parsePersistedState } from "../src/shared/state";
 import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedServerBundleSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
 import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
 import { clientUpdateStateSchema } from "../src/shared/updater";
+import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 
 const bridge: OpenCordBridge = {
   window: {
@@ -51,6 +52,11 @@ const bridge: OpenCordBridge = {
     selectAndUpload: async (context) => attachmentUploadResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentSelectAndUpload, attachmentTransferContextSchema.parse(context))),
     download: async (request) => (await ipcRenderer.invoke(IPC.attachmentDownload, attachmentDownloadRequestSchema.parse(request))) === true,
     preview: async (request) => attachmentPreviewResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentPreview, attachmentDownloadRequestSchema.parse(request))),
+  },
+  screenShare: {
+    listSources: async () => screenShareSourcesSchema.parse(await ipcRenderer.invoke(IPC.screenShareListSources)),
+    selectSource: async (selection) => { await ipcRenderer.invoke(IPC.screenShareSelectSource, screenShareSelectionSchema.parse(selection)); },
+    report: async (message) => { await ipcRenderer.invoke(IPC.screenShareDiagnostic, screenShareDiagnosticSchema.parse(message)); },
   },
   updates: {
     getState: async () => clientUpdateStateSchema.parse(await ipcRenderer.invoke(IPC.updateGetState)),

@@ -41,6 +41,8 @@ export interface LiveKitVoiceOptions {
   maxParticipants: number;
 }
 
+export const LIVEKIT_PUBLISH_SOURCES = [TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
+
 export class DisabledVoiceService implements VoiceService {
   async capability(): Promise<VoiceCapability> {
     return { status: "disabled", secureTransport: false, maxParticipants: 25, warning: "Голосовой сервер не настроен" };
@@ -97,7 +99,7 @@ export class LiveKitVoiceService implements VoiceService {
     const participants = await this.client.listParticipants(room);
     if (request.participantLimit > 0 && participants.filter((participant) => participant.identity !== request.userId).length >= request.participantLimit) throw new VoiceRoomFullError();
     const token = new AccessToken(this.options.apiKey, this.options.apiSecret, { identity: request.userId, ttl: 300 });
-    token.addGrant({ roomJoin: true, room, canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canSubscribe: true, canPublishData: false, canUpdateOwnMetadata: false });
+    token.addGrant({ roomJoin: true, room, canPublish: true, canPublishSources: LIVEKIT_PUBLISH_SOURCES, canSubscribe: true, canPublishData: false, canUpdateOwnMetadata: false });
     return { endpoint: this.options.publicUrl, token: await token.toJwt(), expiresAt: new Date(Date.now() + 300_000).toISOString(), replaced };
   }
 

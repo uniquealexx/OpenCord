@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES } from "@opencord/shared";
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION } from "@opencord/shared";
 import { AlertTriangle, Globe2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -34,6 +34,8 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
       address: normalizedAddress,
       accent: "#36c5f0",
       maxAttachmentBytes: DEFAULT_ATTACHMENT_LIMIT_BYTES,
+      screenShareMaxResolution: DEFAULT_SCREEN_SHARE_MAX_RESOLUTION,
+      screenShareMaxFrameRate: DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE,
       channels: [
         { id: `${id}-general`, serverId: id, name: "общий", kind: "text", description: "Основной канал", participantLimit: null },
         { id: `${id}-voice`, serverId: id, name: "Гостиная", kind: "voice", description: "Голос появится позже", participantLimit: 25 },

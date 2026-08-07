@@ -3,6 +3,7 @@ import type { DeploymentConnection, DeploymentEnvironment, DeploymentProgress, D
 import type { Attachment } from "@opencord/shared";
 import type { AttachmentDownloadRequest, AttachmentTransferContext } from "./attachments";
 import type { ClientUpdateState } from "./updater";
+import type { ScreenShareSelection, ScreenShareSource } from "./screen-share";
 
 export const IPC = {
   windowMinimize: "window:minimize",
@@ -27,6 +28,9 @@ export const IPC = {
   attachmentSelectAndUpload: "attachment:select-and-upload",
   attachmentDownload: "attachment:download",
   attachmentPreview: "attachment:preview",
+  screenShareListSources: "screen-share:list-sources",
+  screenShareSelectSource: "screen-share:select-source",
+  screenShareDiagnostic: "screen-share:diagnostic",
   updateGetState: "update:get-state",
   updateCheck: "update:check",
   updateDownload: "update:download",
@@ -71,6 +75,11 @@ export interface OpenCordBridge {
     selectAndUpload(context: AttachmentTransferContext): Promise<Attachment | null>;
     download(request: AttachmentDownloadRequest): Promise<boolean>;
     preview(request: AttachmentDownloadRequest): Promise<string>;
+  };
+  screenShare?: {
+    listSources(): Promise<ScreenShareSource[]>;
+    selectSource(selection: ScreenShareSelection): Promise<void>;
+    report(message: string): Promise<void>;
   };
   updates?: {
     getState(): Promise<ClientUpdateState>;

@@ -1,12 +1,26 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 16 as const;
+export const PROTOCOL_VERSION = 18 as const;
 
 export const MEBIBYTE = 1024 * 1024;
 export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
 export const ATTACHMENT_LIMIT_MAX_BYTES = 2000 * MEBIBYTE;
 export const DEFAULT_ATTACHMENT_LIMIT_BYTES = 10 * MEBIBYTE;
 export const attachmentUploadLimitSchema = z.number().int().min(ATTACHMENT_LIMIT_MIN_BYTES).max(ATTACHMENT_LIMIT_MAX_BYTES).nullable();
+
+export const SCREEN_SHARE_RESOLUTIONS = [480, 720, 1080] as const;
+export const SCREEN_SHARE_FRAME_RATES = [15, 30, 60] as const;
+export const DEFAULT_SCREEN_SHARE_MAX_RESOLUTION = 1080 as const;
+export const DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE = 60 as const;
+export const screenShareResolutionSchema = z.union([z.literal(480), z.literal(720), z.literal(1080)]);
+export const screenShareFrameRateSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
+export const serverNameSchema = z.string().trim().min(2).max(48);
+export const serverSettingsSchema = z.object({
+  name: serverNameSchema,
+  maxAttachmentBytes: attachmentUploadLimitSchema,
+  screenShareMaxResolution: screenShareResolutionSchema,
+  screenShareMaxFrameRate: screenShareFrameRateSchema,
+});
 
 export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
 export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
@@ -119,7 +133,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
-  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, maxAttachmentBytes: attachmentUploadLimitSchema }),
+  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape }),
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
   z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
@@ -133,7 +147,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
 export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("auth.challenge"), requestId: requestIdSchema, protocolVersion: z.literal(PROTOCOL_VERSION), challenge: z.string(), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("auth.ok"), requestId: requestIdSchema, userId: z.string(), serverId: z.string().uuid(), sessionToken: z.string().min(40).max(200), sessionExpiresAt: z.string().datetime() }),
-  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), name: z.string().min(2).max(48), avatar: serverAvatarSchema.default(null), maxAttachmentBytes: attachmentUploadLimitSchema, channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
+  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), avatar: serverAvatarSchema.default(null), ...serverSettingsSchema.shape, channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
   z.object({ type: z.literal("history.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema) }),
@@ -159,6 +173,9 @@ export type MemberRole = z.infer<typeof memberRoleSchema>;
 export type Permission = z.infer<typeof permissionSchema>;
 export type VoiceCapability = z.infer<typeof voiceCapabilitySchema>;
 export type VoicePresence = z.infer<typeof voicePresenceSchema>;
+export type ScreenShareResolution = z.infer<typeof screenShareResolutionSchema>;
+export type ScreenShareFrameRate = z.infer<typeof screenShareFrameRateSchema>;
+export type ServerSettings = z.infer<typeof serverSettingsSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type MessageContentType = z.infer<typeof messageContentTypeSchema>;

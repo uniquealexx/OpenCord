@@ -116,10 +116,11 @@ describe("server connection", () => {
       expect(result.current.updateProfile({ displayName: "Новое имя", avatar: "data:image/webp;base64,AA==" })).toBe(true);
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
+      expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 })).toBe(true);
       expect(result.current.updateVoiceState(true, false)).toBe(true);
       searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
     });
-    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[] }) ?? [];
+    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; name?: string; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
     expect(sentEvents.some((event) => event.type === "message.update")).toBe(true);
@@ -128,6 +129,7 @@ describe("server connection", () => {
     expect(sentEvents.some((event) => event.type === "profile.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "server.leave")).toBe(true);
     expect(sentEvents.some((event) => event.type === "server.avatar.update")).toBe(true);
+    expect(sentEvents.find((event) => event.type === "server.settings.update")).toMatchObject({ name: "Новая команда", screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
     expect(sentEvents.some((event) => event.type === "voice.state.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "message.search")).toBe(true);
 
