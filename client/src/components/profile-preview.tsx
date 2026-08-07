@@ -38,12 +38,16 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
 
   useEffect(() => {
     if (!open) return;
+    const close = (): void => {
+      setOpen(false);
+      triggerRef.current?.blur();
+    };
     const closeOutside = (event: PointerEvent): void => {
       const target = event.target as Node;
-      if (!triggerRef.current?.contains(target) && !cardRef.current?.contains(target)) setOpen(false);
+      if (!triggerRef.current?.contains(target) && !cardRef.current?.contains(target)) close();
     };
-    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") setOpen(false); };
-    const closeOnLayoutChange = (): void => setOpen(false);
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") close(); };
+    const closeOnLayoutChange = (): void => close();
     document.addEventListener("pointerdown", closeOutside);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", closeOnLayoutChange);
@@ -57,7 +61,7 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
   }, [open]);
 
   function toggle(): void {
-    if (open) { setOpen(false); return; }
+    if (open) { setOpen(false); triggerRef.current?.blur(); return; }
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
       const width = 300;
@@ -81,7 +85,7 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
         <div className="h-[74px] bg-[radial-gradient(circle_at_18%_0%,rgba(139,92,246,.7),transparent_52%),linear-gradient(120deg,#312e81,#164e63)]" />
         <div className="px-4 pb-4">
           <div className="-mt-9 flex items-end justify-between">
-            <div className="rounded-full bg-[#151a27] p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
+            <div data-testid="profile-avatar-frame" className="rounded-[28%] bg-[#151a27] p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
             {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">Это вы</span>}
           </div>
           <h3 className="mt-2 truncate text-base font-bold text-white">{profile.displayName}</h3>

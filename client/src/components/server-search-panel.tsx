@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { File, FileText, Film, Hash, ImageIcon, LoaderCircle, Search, User, X } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Check, ChevronDown, File, FileText, Film, Hash, ImageIcon, LoaderCircle, Paperclip, Search, User, X } from "lucide-react";
 import type { MessageContentType, MessageSearchFilters, MessageSearchResult } from "@opencord/shared";
 import { Avatar } from "@/components/avatar";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,8 @@ const contentTypeOptions: { id: MessageContentType; label: string; icon: typeof 
   { id: "video", label: "Видео", icon: Film },
   { id: "file", label: "Файлы", icon: File },
 ];
+
+const attachmentTypes: MessageContentType[] = ["image", "video", "file"];
 
 export function ServerSearchPanel({ open, serverName, channels, members, result, loading, onClose, onSearch, onOpenMessage }: { open: boolean; serverName: string; channels: MockChannel[]; members: MockMember[]; result: MessageSearchResult | null; loading: boolean; onClose: () => void; onSearch: (filters: MessageSearchFilters) => void; onOpenMessage: (message: MockMessage) => void }): React.ReactElement | null {
   const [query, setQuery] = useState("");
@@ -29,16 +31,21 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
   function toggleType(type: MessageContentType): void {
     setContentTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type]);
   }
+  function toggleAttachments(): void {
+    setContentTypes((current) => attachmentTypes.every((type) => current.includes(type))
+      ? current.filter((type) => !attachmentTypes.includes(type))
+      : [...new Set([...current, ...attachmentTypes])]);
+  }
 
   return <aside aria-label="Поиск по серверу" className="absolute inset-y-0 right-0 z-50 flex w-[420px] max-w-[calc(100%-16px)] flex-col border-l border-white/10 bg-[#0f131d] shadow-[-24px_0_70px_rgba(0,0,0,.45)]">
     <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="border-b border-white/[.07] p-4">
       <div className="mb-3 flex items-center gap-2"><Search className="size-4 text-violet-300" /><div className="min-w-0 flex-1"><h2 className="text-sm font-bold text-white">Поиск</h2><p className="truncate text-[10px] text-slate-500">{serverName}</p></div><button type="button" aria-label="Закрыть поиск" onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-white/5 hover:text-white"><X className="size-4" /></button></div>
-      <div className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 focus-within:border-violet-400/40"><Search className="size-4 text-slate-500" /><input autoFocus aria-label="Текст поиска" value={query} onChange={(event) => setQuery(event.target.value)} maxLength={200} placeholder="Поиск по сообщениям и именам файлов" className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600" /><button type="submit" disabled={!canSearch || loading} className="rounded-lg bg-violet-500 px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-35">Найти</button></div>
+      <div className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 focus-within:border-violet-400/40"><Search className="size-4 text-slate-500" /><input autoFocus aria-label="Текст поиска" value={query} onChange={(event) => setQuery(event.target.value)} maxLength={200} placeholder="Текст необязателен — выберите фильтр ниже" className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600" /><button type="submit" disabled={!canSearch || loading} className="rounded-lg bg-violet-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(124,92,255,.22)] transition hover:bg-violet-400 disabled:opacity-35">Найти</button></div>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <label className="flex h-9 items-center gap-2 rounded-lg border border-white/[.07] bg-white/[.025] px-2.5 text-xs text-slate-400"><User className="size-3.5 shrink-0" /><select aria-label="Автор сообщения" value={authorId} onChange={(event) => setAuthorId(event.target.value)} className="min-w-0 flex-1 bg-[#151a27] text-slate-300 outline-none"><option value="">Любой автор</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
-        <label className="flex h-9 items-center gap-2 rounded-lg border border-white/[.07] bg-white/[.025] px-2.5 text-xs text-slate-400"><Hash className="size-3.5 shrink-0" /><select aria-label="Канал" value={channelId} onChange={(event) => setChannelId(event.target.value)} className="min-w-0 flex-1 bg-[#151a27] text-slate-300 outline-none"><option value="">Все каналы</option>{channels.filter((channel) => channel.kind === "text").map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}</select></label>
+        <SearchCombobox label="Автор сообщения" value={authorId} placeholder="Любой автор" icon={User} options={members.map((member) => ({ value: member.id, label: member.displayName }))} onChange={setAuthorId} />
+        <SearchCombobox label="Канал" value={channelId} placeholder="Все каналы" icon={Hash} options={channels.filter((channel) => channel.kind === "text").map((channel) => ({ value: channel.id, label: `#${channel.name}` }))} onChange={setChannelId} />
       </div>
-      <div className="mt-2 flex flex-wrap gap-1.5">{contentTypeOptions.map((option) => { const Icon = option.icon; const active = contentTypes.includes(option.id); return <button key={option.id} type="button" aria-pressed={active} onClick={() => toggleType(option.id)} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", active ? "border-violet-400/35 bg-violet-400/15 text-violet-200" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Icon className="size-3" />{option.label}</button>; })}</div>
+      <div className="mt-2 flex flex-wrap gap-1.5"><button type="button" aria-pressed={attachmentTypes.every((type) => contentTypes.includes(type))} onClick={toggleAttachments} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", attachmentTypes.every((type) => contentTypes.includes(type)) ? "border-cyan-400/35 bg-cyan-400/12 text-cyan-100" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Paperclip className="size-3" />Вложения</button>{contentTypeOptions.map((option) => { const Icon = option.icon; const active = contentTypes.includes(option.id); return <button key={option.id} type="button" aria-pressed={active} onClick={() => toggleType(option.id)} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", active ? "border-violet-400/35 bg-violet-400/15 text-violet-200" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Icon className="size-3" />{option.label}</button>; })}</div>
     </form>
 
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-3">
@@ -60,4 +67,35 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
 
 function toLocalSearchMessage(message: MessageSearchResult["messages"][number]): MockMessage {
   return { ...message, authorColor: "#7c5cff", editedAt: message.editedAt ?? undefined };
+}
+
+function SearchCombobox({ label, value, placeholder, icon: Icon, options, onChange }: { label: string; value: string; placeholder: string; icon: typeof User; options: { value: string; label: string }[]; onChange: (value: string) => void }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
+  const selected = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent): void => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const choose = (nextValue: string): void => { onChange(nextValue); setOpen(false); };
+  return <div ref={rootRef} className="relative min-w-0">
+    <button type="button" role="combobox" aria-label={label} aria-controls={listboxId} aria-expanded={open} aria-haspopup="listbox" onClick={() => setOpen((current) => !current)} className={cn("flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border px-3 text-left text-xs shadow-[inset_0_1px_rgba(255,255,255,.025)] transition", open ? "border-violet-400/45 bg-[#191e2c] ring-2 ring-violet-400/10" : "border-white/[.08] bg-[#151a27] hover:border-white/[.14] hover:bg-[#191e2c]")}>
+      <Icon className={cn("size-3.5 shrink-0", open ? "text-violet-300" : "text-slate-500")} />
+      <span className={cn("min-w-0 flex-1 truncate", selected ? "text-slate-200" : "text-slate-500")}>{selected?.label ?? placeholder}</span>
+      <ChevronDown className={cn("size-3.5 shrink-0 text-slate-600 transition-transform", open && "rotate-180 text-violet-300")} />
+    </button>
+    {open && <div id={listboxId} role="listbox" aria-label={label} className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-52 overflow-y-auto rounded-xl border border-white/10 bg-[#191e2b] p-1.5 shadow-[0_18px_50px_rgba(0,0,0,.55)]">
+      {[{ value: "", label: placeholder }, ...options].map((option) => <button key={option.value || "all"} type="button" role="option" aria-selected={option.value === value} onClick={() => choose(option.value)} className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition", option.value === value ? "bg-violet-400/14 text-violet-100" : "text-slate-400 hover:bg-white/[.05] hover:text-white")}><span className="min-w-0 flex-1 truncate">{option.label}</span>{option.value === value && <Check className="size-3.5 shrink-0 text-violet-300" />}</button>)}
+    </div>}
+  </div>;
 }

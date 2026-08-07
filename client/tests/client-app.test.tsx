@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, upsertDeployedServer, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, sortMessagesChronologically, upsertDeployedServer, VoiceParticipantRow } from "@/components/client-app";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
@@ -133,9 +133,20 @@ describe("ClientApp", () => {
     expect(profileButtons).toHaveLength(2);
     await user.click(profileButtons[0]!);
     expect(screen.getByRole("dialog", { name: `Профиль ${message.authorName}` })).toBeInTheDocument();
+    expect(screen.getByTestId("profile-avatar-frame")).toHaveClass("rounded-[28%]");
     fireEvent.keyDown(window, { key: "Escape" });
+    expect(profileButtons[0]).not.toHaveFocus();
     await user.click(profileButtons[1]!);
     expect(screen.getByRole("dialog", { name: `Профиль ${message.authorName}` })).toBeInTheDocument();
+  });
+
+  it("keeps edited messages ordered by their original creation time", () => {
+    const messages = [
+      { id: "new", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Новое", createdAt: "2026-08-07T12:00:00.000Z", editedAt: null },
+      { id: "old", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Старое, но изменённое", createdAt: "2026-08-06T12:00:00.000Z", editedAt: "2026-08-07T13:00:00.000Z" },
+    ];
+
+    expect(sortMessagesChronologically(messages).map((message) => message.id)).toEqual(["old", "new"]);
   });
 
   it("opens a profile preview from the member list", async () => {
