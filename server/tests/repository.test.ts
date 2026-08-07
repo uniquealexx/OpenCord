@@ -16,6 +16,14 @@ beforeEach(async () => {
 afterEach(async () => database.close());
 
 describe("ChatRepository", () => {
+  it("persists bounded and unlimited attachment limits", async () => {
+    expect((await repository.getServer()).maxAttachmentBytes).toBe(10 * 1024 * 1024);
+    await repository.updateServerAttachmentLimit(2000 * 1024 * 1024);
+    expect((await repository.getServer()).maxAttachmentBytes).toBe(2000 * 1024 * 1024);
+    await repository.updateServerAttachmentLimit(null);
+    expect((await repository.getServer()).maxAttachmentBytes).toBeNull();
+  });
+
   it("stores and returns message history", async () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text");

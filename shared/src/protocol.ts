@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 15 as const;
+export const PROTOCOL_VERSION = 16 as const;
+
+export const MEBIBYTE = 1024 * 1024;
+export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
+export const ATTACHMENT_LIMIT_MAX_BYTES = 2000 * MEBIBYTE;
+export const DEFAULT_ATTACHMENT_LIMIT_BYTES = 10 * MEBIBYTE;
+export const attachmentUploadLimitSchema = z.number().int().min(ATTACHMENT_LIMIT_MIN_BYTES).max(ATTACHMENT_LIMIT_MAX_BYTES).nullable();
 
 export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
 export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
@@ -54,7 +60,7 @@ export const attachmentSchema = z.object({
   id: z.string().uuid(),
   fileName: z.string().min(1).max(255),
   mimeType: z.string().min(1).max(100),
-  sizeBytes: z.number().int().min(1).max(10 * 1024 * 1024),
+  sizeBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   sha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
@@ -113,6 +119,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
+  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, maxAttachmentBytes: attachmentUploadLimitSchema }),
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
   z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
@@ -126,7 +133,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
 export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("auth.challenge"), requestId: requestIdSchema, protocolVersion: z.literal(PROTOCOL_VERSION), challenge: z.string(), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("auth.ok"), requestId: requestIdSchema, userId: z.string(), serverId: z.string().uuid(), sessionToken: z.string().min(40).max(200), sessionExpiresAt: z.string().datetime() }),
-  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), name: z.string().min(2).max(48), avatar: serverAvatarSchema.default(null), channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
+  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), name: z.string().min(2).max(48), avatar: serverAvatarSchema.default(null), maxAttachmentBytes: attachmentUploadLimitSchema, channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
   z.object({ type: z.literal("history.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema) }),

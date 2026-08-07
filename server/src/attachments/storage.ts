@@ -5,8 +5,6 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-
 export interface StoredAttachmentObject {
   storageKey: string;
   sizeBytes: number;
@@ -14,7 +12,7 @@ export interface StoredAttachmentObject {
 }
 
 export interface AttachmentStorage {
-  store(storageKey: string, input: Readable, expectedSize: number): Promise<StoredAttachmentObject>;
+  store(storageKey: string, input: Readable, expectedSize: number, maxBytes: number | null): Promise<StoredAttachmentObject>;
   open(storageKey: string): Readable;
   remove(storageKey: string): Promise<void>;
 }
@@ -22,8 +20,8 @@ export interface AttachmentStorage {
 export class FileSystemAttachmentStorage implements AttachmentStorage {
   constructor(private readonly root: string) {}
 
-  async store(storageKey: string, input: Readable, expectedSize: number): Promise<StoredAttachmentObject> {
-    if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_ATTACHMENT_BYTES) throw new AttachmentSizeError();
+  async store(storageKey: string, input: Readable, expectedSize: number, maxBytes: number | null): Promise<StoredAttachmentObject> {
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || (maxBytes !== null && expectedSize > maxBytes)) throw new AttachmentSizeError();
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const target = this.resolve(storageKey);
     const temporary = `${target}.${randomUUID()}.tmp`;
@@ -32,7 +30,7 @@ export class FileSystemAttachmentStorage implements AttachmentStorage {
     const meter = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         sizeBytes += chunk.length;
-        if (sizeBytes > MAX_ATTACHMENT_BYTES) { callback(new AttachmentSizeError()); return; }
+        if (maxBytes !== null && sizeBytes > maxBytes) { callback(new AttachmentSizeError()); return; }
         hash.update(chunk);
         callback(null, chunk);
       },

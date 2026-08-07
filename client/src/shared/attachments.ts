@@ -11,9 +11,10 @@ const serverAddressSchema = z.string().url().superRefine((value, context) => {
 export const attachmentTransferContextSchema = z.object({
   serverAddress: serverAddressSchema,
   sessionToken: z.string().min(40).max(200),
+  maxAttachmentBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable(),
 });
 
-export const attachmentDownloadRequestSchema = attachmentTransferContextSchema.extend({ attachment: attachmentSchema });
+export const attachmentDownloadRequestSchema = attachmentTransferContextSchema.omit({ maxAttachmentBytes: true }).extend({ attachment: attachmentSchema });
 export const attachmentUploadResultSchema = attachmentSchema.nullable();
 export const attachmentPreviewResultSchema = z.string().max(15_000_000).regex(/^data:(?:image\/(?:png|jpeg|gif|webp)|video\/(?:mp4|webm|ogg));base64,/u);
 

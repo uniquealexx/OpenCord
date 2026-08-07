@@ -2,7 +2,7 @@ import type { Attachment, Channel, ChatMessage, Member, MemberRole, MessageSearc
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
-interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null }
+interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; max_attachment_bytes: number | string | null }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
 interface UserRow extends QueryRow { id: string; display_name: string; avatar: string | null; role: MemberRole }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null }
@@ -29,11 +29,11 @@ export class ChatRepository {
     await this.database.query("UPDATE servers SET deleted_at = now() WHERE id = $1", [DEFAULT_SERVER_ID]);
   }
 
-  async getServer(): Promise<{ id: string; name: string; avatar: string | null; channels: Channel[] }> {
-    const [server] = await this.database.query<ServerRow>("SELECT id, name, avatar FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
+  async getServer(): Promise<{ id: string; name: string; avatar: string | null; maxAttachmentBytes: number | null; channels: Channel[] }> {
+    const [server] = await this.database.query<ServerRow>("SELECT id, name, avatar, max_attachment_bytes FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
     if (!server) throw new Error("Default server is missing");
     const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
-    return { id: server.id, name: server.name, avatar: server.avatar, channels: channels.map(mapChannel) };
+    return { id: server.id, name: server.name, avatar: server.avatar, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), channels: channels.map(mapChannel) };
   }
 
   async updateServerAvatar(avatar: string | null): Promise<void> {
@@ -299,6 +299,10 @@ export class ChatRepository {
     const ordered = rows.reverse();
     const attachments = await this.getAttachmentsForMessages(ordered.map((message) => message.id));
     return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? []));
+  }
+
+  async updateServerAttachmentLimit(maxAttachmentBytes: number | null): Promise<void> {
+    await this.database.query("UPDATE servers SET max_attachment_bytes = $2 WHERE id = $1", [DEFAULT_SERVER_ID, maxAttachmentBytes]);
   }
 
   async searchMessages(filters: MessageSearchFilters): Promise<MessageSearchResult> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, clientEventSchema, serverEventSchema, userAvatarSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, clientEventSchema, serverEventSchema, userAvatarSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -71,6 +71,15 @@ describe("OpenCord protocol", () => {
     expect(() => clientEventSchema.parse({ type: "message.update", requestId: crypto.randomUUID(), messageId, content: "Файл", attachmentIds: [attachmentId, attachmentId] })).toThrow();
     expect(clientEventSchema.parse({ type: "message.delete", requestId: crypto.randomUUID(), messageId })).toMatchObject({ type: "message.delete", messageId });
     expect(serverEventSchema.parse({ type: "message.deleted", messageId, channelId })).toEqual({ type: "message.deleted", messageId, channelId });
+  });
+
+  it("validates bounded and unlimited server attachment limits", () => {
+    const requestId = crypto.randomUUID();
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE })).toMatchObject({ maxAttachmentBytes: MEBIBYTE });
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES })).toMatchObject({ maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES });
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: null })).toMatchObject({ maxAttachmentBytes: null });
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE - 1 })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES + 1 })).toThrow();
   });
 
   it("validates paginated message search filters", () => {

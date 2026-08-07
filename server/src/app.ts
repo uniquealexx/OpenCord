@@ -10,7 +10,7 @@ import type { Database } from "./database/database";
 import { runMigrations } from "./database/migrations";
 import { ChatRepository, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
-import { AttachmentSizeError, FileSystemAttachmentStorage, MAX_ATTACHMENT_BYTES, type AttachmentStorage } from "./attachments/storage";
+import { AttachmentSizeError, FileSystemAttachmentStorage, type AttachmentStorage } from "./attachments/storage";
 import { DisabledVoiceService, VoiceRoomFullError, VoiceUnavailableError, type VoiceService } from "./voice";
 import type { ServerBuildInfo } from "./build-info";
 
@@ -74,18 +74,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     } catch { return reply.code(401).send({ error: "INVALID_WEBHOOK" }); }
   });
 
-  app.post("/api/attachments", { bodyLimit: MAX_ATTACHMENT_BYTES }, async (request, reply) => {
+  app.post("/api/attachments", { bodyLimit: Number.MAX_SAFE_INTEGER }, async (request, reply) => {
     const userId = authorizeHttp(request.headers.authorization);
     if (!userId) return reply.code(401).send({ error: "AUTH_REQUIRED" });
     if (await repository.countPendingAttachments(userId) >= 20) return reply.code(429).send({ error: "TOO_MANY_PENDING_ATTACHMENTS" });
     const expectedSize = Number(request.headers["content-length"]);
-    if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_ATTACHMENT_BYTES) return reply.code(413).send({ error: "FILE_TOO_LARGE" });
+    const { maxAttachmentBytes } = await repository.getServer();
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || (maxAttachmentBytes !== null && expectedSize > maxAttachmentBytes)) return reply.code(413).send({ error: "FILE_TOO_LARGE" });
     const fileName = decodeFileName(request.headers["x-opencord-file-name"]);
     if (!fileName) return reply.code(400).send({ error: "INVALID_FILE_NAME" });
     const mimeType = parseMimeType(request.headers["x-opencord-mime-type"]);
     const id = randomUUID();
     try {
-      const stored = await attachmentStorage.store(id, request.body as Readable, expectedSize);
+      const stored = await attachmentStorage.store(id, request.body as Readable, expectedSize, maxAttachmentBytes);
       try {
         const attachment = await repository.createAttachment(id, userId, stored.storageKey, fileName, mimeType, stored.sizeBytes, stored.sha256);
         return reply.code(201).send(attachment);
@@ -249,6 +250,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await repository.updateServerAvatar(event.avatar);
       const server = await repository.getServer();
       broadcast({ type: "server.avatar.updated", serverId: server.id, avatar: server.avatar });
+      return;
+    }
+    if (event.type === "server.settings.update") {
+      if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения настроек сервера");
+      await repository.updateServerAttachmentLimit(event.maxAttachmentBytes);
+      await broadcastSnapshots();
       return;
     }
     if (event.type === "voice.join") {

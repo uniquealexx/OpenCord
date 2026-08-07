@@ -7,12 +7,12 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { attachmentSchema, type Attachment } from "@opencord/shared";
 
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 
-export async function uploadAttachment(filePath: string, serverAddress: string, sessionToken: string): Promise<Attachment> {
+export async function uploadAttachment(filePath: string, serverAddress: string, sessionToken: string, maxAttachmentBytes: number | null): Promise<Attachment> {
   const info = await stat(filePath);
   if (!info.isFile() || info.size < 1) throw new Error("Выбран пустой файл или не обычный файл");
-  if (info.size > MAX_ATTACHMENT_BYTES) throw new Error("Файл превышает лимит 10 МБ");
+  if (maxAttachmentBytes !== null && info.size > maxAttachmentBytes) throw new Error(`Файл превышает лимит ${Math.floor(maxAttachmentBytes / 1024 / 1024)} МБ`);
   const endpoint = attachmentUrl(serverAddress);
   const { response, outgoing } = openRequest(endpoint, "POST", {
     authorization: `Bearer ${sessionToken}`,
@@ -42,7 +42,7 @@ export async function downloadAttachment(serverAddress: string, sessionToken: st
   incoming.on("data", (chunk: Buffer) => {
     written += chunk.length;
     hash.update(chunk);
-    if (written > MAX_ATTACHMENT_BYTES) incoming.destroy(new Error("Сервер прислал слишком большой файл"));
+    if (written > attachment.sizeBytes) incoming.destroy(new Error("Сервер прислал файл больше заявленного размера"));
   });
   try {
     await pipeline(incoming, createWriteStream(temporary, { flags: "wx", mode: 0o600 }));
@@ -65,6 +65,7 @@ export async function downloadAttachment(serverAddress: string, sessionToken: st
 
 export async function previewAttachment(serverAddress: string, sessionToken: string, attachment: Attachment): Promise<string> {
   if (!new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/webm", "video/ogg"]).has(attachment.mimeType)) throw new Error("Предпросмотр этого типа файла недоступен");
+  if (attachment.sizeBytes > MAX_PREVIEW_BYTES) throw new Error("Предпросмотр файлов больше 10 МБ недоступен — скачайте файл");
   const endpoint = attachmentUrl(serverAddress, attachment.id);
   const { response, outgoing } = openRequest(endpoint, "GET", { authorization: `Bearer ${sessionToken}` });
   outgoing.end();
@@ -117,7 +118,7 @@ async function readBinaryResponse(response: IncomingMessage): Promise<Buffer> {
   for await (const chunk of response) {
     const buffer = Buffer.from(chunk as Uint8Array);
     size += buffer.length;
-    if (size > MAX_ATTACHMENT_BYTES) throw new Error("Сервер прислал слишком большой медиафайл");
+    if (size > MAX_PREVIEW_BYTES) throw new Error("Сервер прислал слишком большой медиафайл");
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);

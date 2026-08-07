@@ -226,7 +226,7 @@ function registerIpc(): void {
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     const filePath = result.filePaths[0];
     if (result.canceled || !filePath) return null;
-    return uploadAttachment(filePath, context.serverAddress, context.sessionToken);
+    return uploadAttachment(filePath, context.serverAddress, context.sessionToken, context.maxAttachmentBytes);
   });
   ipcMain.handle(IPC.attachmentDownload, async (_event, input: unknown) => {
     const request = attachmentDownloadRequestSchema.parse(input);

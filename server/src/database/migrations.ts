@@ -132,6 +132,28 @@ const migrations = [
       $$;
     `,
   },
+  {
+    id: "010_server_attachment_limit",
+    sql: `
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS max_attachment_bytes bigint DEFAULT 10485760;
+      ALTER TABLE attachments ALTER COLUMN size_bytes TYPE bigint;
+      ALTER TABLE attachments DROP CONSTRAINT IF EXISTS attachments_size_bytes_check;
+      ALTER TABLE attachments ADD CONSTRAINT attachments_size_bytes_check CHECK (size_bytes BETWEEN 1 AND 9007199254740991);
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'servers_max_attachment_bytes_check'
+            AND conrelid = 'servers'::regclass
+        ) THEN
+          ALTER TABLE servers ADD CONSTRAINT servers_max_attachment_bytes_check CHECK (
+            max_attachment_bytes IS NULL OR max_attachment_bytes BETWEEN 1048576 AND 2097152000
+          );
+        END IF;
+      END
+      $$;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

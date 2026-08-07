@@ -17,6 +17,7 @@ const server: MockServer = {
   name: "Local server",
   address: "http://127.0.0.1:3210",
   accent: "#36c5f0",
+  maxAttachmentBytes: 10 * 1024 * 1024,
   channels: [],
   members: [],
 };

@@ -16,6 +16,7 @@ function readyState(): PersistedClientState {
     name: "Тестовый сервер",
     address: null,
     accent: "#7c5cff",
+    maxAttachmentBytes: 10 * 1024 * 1024,
     channels: [
       { id: "welcome", serverId: "test-server", name: "добро-пожаловать", kind: "text", description: "Начните знакомство", participantLimit: null },
       { id: "general", serverId: "test-server", name: "общий", kind: "text", description: "Разговоры обо всём", participantLimit: null },
@@ -49,11 +50,11 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
-    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveLimit={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveLimit={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
   });
 
@@ -122,6 +123,14 @@ describe("ClientApp", () => {
     await user.click(screen.getByRole("button", { name: "Отправить" }));
     expect(await screen.findByText("Привет, OpenCord!")).toBeInTheDocument();
     expect(save).toHaveBeenCalled();
+  });
+
+  it("saves the unlimited attachment option from server settings", async () => {
+    const onSaveLimit = vi.fn(() => true);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveLimit={onSaveLimit} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    fireEvent.change(screen.getByRole("slider", { name: "Максимальный размер загружаемого файла" }), { target: { value: "2025" } });
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить лимит" }));
+    expect(onSaveLimit).toHaveBeenCalledWith(null);
   });
 
   it("opens a profile preview from both the message avatar and author name", async () => {
@@ -274,6 +283,7 @@ describe("ClientApp", () => {
       name: "Следующий сервер",
       address: null,
       accent: "#36c5f0",
+      maxAttachmentBytes: 10 * 1024 * 1024,
       channels: [{ id: "next-general", serverId: "next-server", name: "общий", kind: "text", description: "Следующий канал", participantLimit: null }],
       members: [],
     });
@@ -300,6 +310,7 @@ describe("ClientApp", () => {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
       avatar: "data:image/png;base64,AA==",
+      maxAttachmentBytes: 25 * 1024 * 1024,
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
       members: [{ id: "server-admin", displayName: "Анна", avatar: "data:image/webp;base64,AA==", status: "online", role: "administrator" }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
@@ -307,6 +318,7 @@ describe("ClientApp", () => {
 
     expect(next.servers[0]?.name).toBe("OpenCord Server");
     expect(next.servers[0]?.avatar).toBe("data:image/png;base64,AA==");
+    expect(next.servers[0]?.maxAttachmentBytes).toBe(25 * 1024 * 1024);
     expect(next.servers[0]?.channels[0]?.serverId).toBe("test-server");
     expect(next.servers[0]?.members[0]).toMatchObject({
       displayName: "Анна",
@@ -324,6 +336,7 @@ describe("ClientApp", () => {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
       avatar: null,
+      maxAttachmentBytes: null,
       channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit })),
       members: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
