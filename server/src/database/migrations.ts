@@ -183,6 +183,27 @@ const migrations = [
       $$;
     `,
   },
+  {
+    id: "012_user_profile_bio",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS bio text NOT NULL DEFAULT '';
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'users_bio_length_check'
+            AND conrelid = 'users'::regclass
+        ) THEN
+          ALTER TABLE users ADD CONSTRAINT users_bio_length_check CHECK (char_length(bio) <= 160);
+        END IF;
+      END
+      $$;
+    `,
+  },
+  {
+    id: "013_user_profile_banner",
+    sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS banner text NULL;`,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

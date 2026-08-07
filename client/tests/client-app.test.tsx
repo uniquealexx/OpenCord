@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
@@ -10,7 +10,7 @@ function readyState(): PersistedClientState {
   const state: PersistedClientState = {
     ...createDefaultState(),
     onboardingComplete: true,
-    profile: { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: new Date().toISOString() },
+    profile: { id: "local-user", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
   };
   state.servers = [{
     id: "test-server",
@@ -53,6 +53,24 @@ describe("ClientApp", () => {
     expect(shouldRequestVoiceJoin("reconnecting", "voice", "voice", "voice")).toBe(false);
     expect(shouldRequestVoiceJoin("connected", "voice", "voice", "another-voice")).toBe(true);
     expect(shouldRequestVoiceJoin("error", null, "voice", "voice")).toBe(true);
+  });
+
+  it("enforces the voice moderation role hierarchy in the client", () => {
+    expect(canDisconnectVoiceParticipant(true, "owner", "administrator", "owner", "admin")).toBe(true);
+    expect(canDisconnectVoiceParticipant(true, "administrator", "member", "admin", "member")).toBe(true);
+    expect(canDisconnectVoiceParticipant(true, "administrator", "administrator", "admin", "other-admin")).toBe(false);
+    expect(canDisconnectVoiceParticipant(true, "owner", "owner", "owner", "other-owner")).toBe(false);
+    expect(canDisconnectVoiceParticipant(true, "owner", "member", "owner", "owner")).toBe(false);
+    expect(canDisconnectVoiceParticipant(false, "owner", "member", "owner", "member")).toBe(false);
+  });
+
+  it("enforces the server kick role hierarchy in the client", () => {
+    expect(canKickServerMember(true, "owner", "administrator", "owner", "admin")).toBe(true);
+    expect(canKickServerMember(true, "administrator", "member", "admin", "member")).toBe(true);
+    expect(canKickServerMember(true, "administrator", "administrator", "admin", "other-admin")).toBe(false);
+    expect(canKickServerMember(true, "owner", "owner", "owner", "other-owner")).toBe(false);
+    expect(canKickServerMember(true, "owner", "member", "owner", "owner")).toBe(false);
+    expect(canKickServerMember(false, "owner", "member", "owner", "member")).toBe(false);
   });
 
   it("shows the saved one-button server update action only to the owner", async () => {
@@ -101,6 +119,24 @@ describe("ClientApp", () => {
     await user.click(screen.getByRole("menuitem", { name: "Удалить" }));
     expect(confirm).toHaveBeenCalledOnce();
     expect(onDelete).toHaveBeenCalledWith(message);
+  });
+
+  it("closes a message action menu outside its bounds and on Escape", async () => {
+    const user = userEvent.setup();
+    const message = { id: "message-menu", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Закрой меню", createdAt: new Date().toISOString(), editedAt: null };
+    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: /Действия с сообщением/ });
+
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(screen.getByText("Закрой меню"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).not.toHaveFocus();
+
+    await user.click(trigger);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 
   it("replaces attachments while editing and hides message actions", async () => {
@@ -165,13 +201,15 @@ describe("ClientApp", () => {
   it("opens a profile preview from both the message avatar and author name", async () => {
     const user = userEvent.setup();
     const message = readyState().messages[0]!;
-    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    const member = { id: message.authorId, displayName: message.authorName, bio: "Описание с сервера", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: message.authorColor, avatar: null };
+    render(<Message message={message} member={member} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
 
     const profileButtons = screen.getAllByRole("button", { name: `Открыть профиль ${message.authorName}` });
     expect(profileButtons).toHaveLength(2);
     await user.click(profileButtons[0]!);
     expect(screen.getByRole("dialog", { name: `Профиль ${message.authorName}` })).toBeInTheDocument();
     expect(screen.getByTestId("profile-avatar-frame")).toHaveClass("rounded-[28%]");
+    expect(screen.getByText("Описание с сервера")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(profileButtons[0]).not.toHaveFocus();
     await user.click(profileButtons[1]!);
@@ -264,10 +302,11 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const requestFullscreen = vi.fn(async () => undefined);
     Object.defineProperty(HTMLVideoElement.prototype, "requestFullscreen", { configurable: true, value: requestFullscreen });
-    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "ролик.mp4", mimeType: "video/mp4", sizeBytes: 2048, sha256: "a".repeat(64) };
-    render(<AttachmentView attachment={attachment} onDownload={vi.fn()} onPreview={vi.fn(async () => "data:video/mp4;base64,AA==")} />);
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "ролик.mp4", mimeType: "video/mp4", sizeBytes: 25 * 1024 * 1024, sha256: "a".repeat(64) };
+    render(<AttachmentView attachment={attachment} onDownload={vi.fn()} onPreview={vi.fn(async () => "file:///C:/Temp/opencord-media-previews/video.mp4")} />);
 
-    expect(await screen.findByLabelText("Видео: ролик.mp4")).toHaveAttribute("controls");
+    expect(await screen.findByLabelText("Видео: ролик.mp4")).toHaveAttribute("src", "file:///C:/Temp/opencord-media-previews/video.mp4");
+    expect(screen.getByLabelText("Видео: ролик.mp4")).toHaveAttribute("controls");
     await user.click(screen.getByRole("button", { name: "На весь экран: ролик.mp4" }));
 
     expect(requestFullscreen).toHaveBeenCalledOnce();
@@ -343,7 +382,7 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
-      members: [{ id: "server-admin", displayName: "Анна", avatar: "data:image/webp;base64,AA==", status: "online", role: "administrator" }],
+      members: [{ id: "server-admin", displayName: "Анна", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator" }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
@@ -355,9 +394,11 @@ describe("ClientApp", () => {
     expect(next.servers[0]?.channels[0]?.serverId).toBe("test-server");
     expect(next.servers[0]?.members[0]).toMatchObject({
       displayName: "Анна",
+      bio: "Администрирую сообщество",
       role: "Администратор",
       serverRole: "administrator",
       avatar: "data:image/webp;base64,AA==",
+      banner: "data:image/webp;base64,AQ==",
     });
   });
 
@@ -400,7 +441,7 @@ describe("ClientApp", () => {
 
   it("shows a voice avatar ring, mute states and a profile preview", () => {
     const profile = readyState().profile!;
-    const member = { id: "voice-member", displayName: "Марина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==" };
+    const member = { id: "voice-member", displayName: "Марина", bio: "Люблю голосовые разговоры", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==" };
     const participant = { userId: member.id, channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false };
     const { rerender } = render(<VoiceParticipantRow participant={participant} member={member} profile={profile} currentUserId="local-user" speaking />);
 
@@ -411,6 +452,8 @@ describe("ClientApp", () => {
     expect(screen.queryByLabelText(/выключен/u)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Открыть профиль Марина" }));
     expect(screen.getByRole("dialog", { name: "Профиль Марина" })).toBeInTheDocument();
+    expect(screen.getByText("Люблю голосовые разговоры")).toBeInTheDocument();
+    expect(screen.getByTestId("profile-banner").querySelector("img")).toHaveAttribute("src", member.banner);
     fireEvent.keyDown(window, { key: "Escape" });
 
     rerender(<VoiceParticipantRow participant={{ ...participant, muted: true }} member={member} profile={profile} currentUserId="local-user" speaking />);
@@ -427,13 +470,33 @@ describe("ClientApp", () => {
     const state = readyState();
     const profile = state.profile!;
     const voiceChannel = state.servers[0]!.channels[2]!;
-    const server = { ...state.servers[0]!, members: [{ id: "voice-member", displayName: "Марина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null }] };
+    const server = { ...state.servers[0]!, members: [{ id: "voice-member", displayName: "Марина", bio: "Профиль из голосовой комнаты", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null, banner: "data:image/webp;base64,AQ==" }] };
     const participant = { userId: "voice-member", channelId: voiceChannel.id, muted: false, deafened: false };
     const stream = { participantIdentity: "voice-member", participantName: "Марина", local: false, track: {} } as unknown as ScreenShareStream;
     const onViewScreenShare = vi.fn();
     const onExitScreenShare = vi.fn();
-    const commonProps = { channel: voiceChannel, server, profile, participants: [participant], currentUserId: "local-user", connectedChannelId: voiceChannel.id, status: "connected" as const, muted: false, deafened: false, activeSpeakerIds: [], isScreenSharing: false, onMuted: vi.fn(), onDeafened: vi.fn(), onStartScreenShare: vi.fn(), onStopScreenShare: vi.fn(), onViewScreenShare, onExitScreenShare, onLeaveVoice: vi.fn() };
+    const onParticipantMuted = vi.fn();
+    const onParticipantVolume = vi.fn();
+    const onDisconnectParticipant = vi.fn();
+    const commonProps = { channel: voiceChannel, server, profile, participants: [participant], currentUserId: "local-user", currentUserRole: "owner" as const, canModerateVoice: true, connectedChannelId: voiceChannel.id, status: "connected" as const, muted: false, deafened: false, locallyMutedParticipantIds: [], participantVolumes: {}, activeSpeakerIds: [], isScreenSharing: false, onMuted: vi.fn(), onDeafened: vi.fn(), onParticipantMuted, onParticipantVolume, onDisconnectParticipant, onStartScreenShare: vi.fn(), onStopScreenShare: vi.fn(), onViewScreenShare, onExitScreenShare, onLeaveVoice: vi.fn() };
     const { rerender } = render(<VoiceChannelView {...commonProps} screenShares={[stream]} viewingScreenShareId={null} />);
+
+    await user.click(screen.getByRole("button", { name: "Открыть профиль Марина" }));
+    expect(screen.getByRole("dialog", { name: "Профиль Марина" })).toBeInTheDocument();
+    expect(screen.getByText("Профиль из голосовой комнаты")).toBeInTheDocument();
+    expect(screen.getByTestId("profile-banner").querySelector("img")).toHaveAttribute("src", server.members[0]!.banner);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("dialog", { name: "Профиль Марина" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Заглушить у себя: Марина" }));
+    expect(onParticipantMuted).toHaveBeenCalledWith("voice-member", true);
+    rerender(<VoiceChannelView {...commonProps} locallyMutedParticipantIds={["voice-member"]} screenShares={[stream]} viewingScreenShareId={null} />);
+    expect(screen.getByText("Заглушён у вас")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Включить звук у себя: Марина" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(screen.getByRole("slider", { name: "Громкость у себя: Марина" }), { target: { value: "35" } });
+    expect(onParticipantVolume).toHaveBeenCalledWith("voice-member", 0.35);
+    await user.click(screen.getByRole("button", { name: "Отключить от голосового канала: Марина" }));
+    expect(onDisconnectParticipant).toHaveBeenCalledWith("voice-member");
 
     await user.click(screen.getByRole("button", { name: "Смотреть трансляцию Марина" }));
     expect(onViewScreenShare).toHaveBeenCalledWith("voice-member");

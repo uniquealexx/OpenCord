@@ -16,7 +16,10 @@ export const attachmentTransferContextSchema = z.object({
 
 export const attachmentDownloadRequestSchema = attachmentTransferContextSchema.omit({ maxAttachmentBytes: true }).extend({ attachment: attachmentSchema });
 export const attachmentUploadResultSchema = attachmentSchema.nullable();
-export const attachmentPreviewResultSchema = z.string().max(15_000_000).regex(/^data:(?:image\/(?:png|jpeg|gif|webp)|video\/(?:mp4|webm|ogg));base64,/u);
+export const attachmentPreviewResultSchema = z.union([
+  z.string().max(15_000_000).regex(/^data:(?:image\/(?:png|jpeg|gif|webp)|video\/(?:mp4|webm|ogg));base64,/u),
+  z.string().max(2_048).url().refine((value) => new URL(value).protocol === "file:", "Expected a local video preview URL"),
+]);
 
 export type AttachmentTransferContext = z.infer<typeof attachmentTransferContextSchema>;
 export type AttachmentDownloadRequest = z.infer<typeof attachmentDownloadRequestSchema>;

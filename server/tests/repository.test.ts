@@ -130,26 +130,30 @@ describe("ChatRepository", () => {
     await repository.upsertUser("member", "member-public-key", { displayName: "Участник", avatar: null });
     expect(await repository.ensureMembership("owner", "owner-public-key", "owner-public-key")).toBe("owner");
     expect(await repository.ensureMembership("member", "member-public-key", "owner-public-key")).toBe("member");
-    expect(permissionsForRole("owner")).toEqual(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
+    expect(permissionsForRole("owner")).toEqual(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
     expect(permissionsForRole("administrator")).toContain("MANAGE_MESSAGES");
+    expect(permissionsForRole("administrator")).toContain("KICK_MEMBERS");
     expect(await repository.setMemberRole("member", "administrator")).toBe("updated");
-    expect((await repository.listMembers(new Set())).find((member) => member.id === "member")?.role).toBe("administrator");
+    expect((await repository.listMembers(new Map())).find((member) => member.id === "member")?.role).toBe("administrator");
     expect(await repository.setMemberRole("owner", "member")).toBe("owner");
   });
 
-  it("updates a profile in place and clears its avatar when a member leaves", async () => {
+  it("updates a profile in place and clears its public media when a member leaves", async () => {
     const avatar = "data:image/webp;base64,AA==";
+    const banner = "data:image/webp;base64,AQ==";
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["012_user_profile_bio"])).toHaveLength(1);
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["013_user_profile_banner"])).toHaveLength(1);
     await repository.upsertUser("member", "member-public-key", { displayName: "Участник", avatar: null });
     await repository.ensureMembership("member", "member-public-key", undefined, true);
-    expect(await repository.updateUserProfile("member", { displayName: "Новое имя", avatar })).toBe(true);
-    expect(await repository.getMember("member", true)).toMatchObject({ displayName: "Новое имя", avatar });
+    expect(await repository.updateUserProfile("member", { displayName: "Новое имя", bio: "Описание для всех", avatar, banner })).toBe(true);
+    expect(await repository.getMember("member", "dnd")).toMatchObject({ displayName: "Новое имя", bio: "Описание для всех", avatar, banner, status: "dnd" });
     expect(await repository.leaveServer("member")).toBe("owner");
-    expect(await repository.getMember("member", false)).toMatchObject({ avatar: null, role: "owner" });
+    expect(await repository.getMember("member", "offline")).toMatchObject({ bio: "", avatar: null, banner: null, role: "owner" });
 
     await repository.upsertUser("second", "second-public-key", { displayName: "Второй", avatar });
     await repository.ensureMembership("second", "second-public-key");
     expect(await repository.leaveServer("second")).toBe("member");
-    expect((await repository.listMembers(new Set())).some((member) => member.id === "second")).toBe(false);
+    expect((await repository.listMembers(new Map())).some((member) => member.id === "second")).toBe(false);
   });
 
   it("keeps a deletion tombstone across restarts and clears it for a new deployment", async () => {

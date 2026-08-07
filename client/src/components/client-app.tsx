@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, Users, Volume2, VolumeX, X } from "lucide-react";
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
+import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -29,10 +29,25 @@ import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "channel" | "channel-edit" | "channel-delete" | "screen-share" | null;
 type CurrentAccess = { id: string; role: MemberRole; permissions: Permission[] };
 const VOICE_PARTICIPANT_LIMIT_MAX = 25;
+const userStatusLabels: Record<UserStatus, string> = { online: "В сети", idle: "Недоступен", dnd: "Не беспокоить", invisible: "Невидимка" };
+
+export function visibleProfileStatus(status: UserStatus | undefined): PublicMemberStatus {
+  return status === "invisible" ? "offline" : status ?? "online";
+}
 
 export function shouldRequestVoiceJoin(status: "idle" | "connecting" | "connected" | "reconnecting" | "error", connectedChannelId: string | null, authorizedChannelId: string | null, targetChannelId: string): boolean {
   const alreadyJoiningOrConnected = status === "connecting" || status === "connected" || status === "reconnecting";
   return !alreadyJoiningOrConnected || (connectedChannelId !== targetChannelId && authorizedChannelId !== targetChannelId);
+}
+
+export function canDisconnectVoiceParticipant(canModerate: boolean, actorRole: MemberRole | undefined, targetRole: MemberRole | undefined, currentUserId: string, targetUserId: string): boolean {
+  if (!canModerate || currentUserId === targetUserId || !actorRole || !targetRole || targetRole === "owner") return false;
+  return actorRole === "owner" || (actorRole === "administrator" && targetRole === "member");
+}
+
+export function canKickServerMember(canKick: boolean, actorRole: MemberRole | undefined, targetRole: MemberRole | undefined, currentUserId: string, targetUserId: string): boolean {
+  if (!canKick || currentUserId === targetUserId || !actorRole || !targetRole || targetRole === "owner") return false;
+  return actorRole === "owner" || (actorRole === "administrator" && targetRole === "member");
 }
 
 export function ClientApp(): React.ReactElement {
@@ -83,8 +98,17 @@ export function ClientApp(): React.ReactElement {
       setSearchResult((current) => result.offset > 0 && current ? { ...result, offset: 0, messages: [...current.messages, ...result.messages] } : result);
       commit((current) => ({ ...current, messages: [...current.messages.filter((message) => !result.messages.some((found) => found.id === message.id)), ...result.messages.map(toLocalMessage)] }));
     },
-    onMember: (member) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: [...server.members.filter((item) => item.id !== member.id), { id: member.id, displayName: member.displayName, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar }] }), messages: current.messages.map((message) => message.authorId === member.id ? { ...message, authorName: member.displayName, authorAvatar: member.avatar } : message) })),
-    onMemberRemoved: (userId) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: server.members.filter((member) => member.id !== userId) }), messages: current.messages.map((message) => message.authorId === userId ? { ...message, authorAvatar: null } : message) })),
+    onMember: (member) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: [...server.members.filter((item) => item.id !== member.id), { id: member.id, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner }] }), messages: current.messages.map((message) => message.authorId === member.id ? { ...message, authorName: member.displayName, authorAvatar: member.avatar } : message) })),
+    onMemberRemoved: (userId) => {
+      if (connectionServer && userId === currentAccess?.id) {
+        const removedServerId = connectionServer.id;
+        const removedAddress = connectionServer.address;
+        commit((current) => removeServers(current, (server) => server.id === removedServerId || sameServerAddress(server.address, removedAddress)));
+        setModal(null); setVoiceAuthorization(null); setViewingScreenShareId(null); setNotice("Вас исключили с сервера");
+        return;
+      }
+      commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: server.members.filter((member) => member.id !== userId) }), messages: current.messages.map((message) => message.authorId === userId ? { ...message, authorAvatar: null } : message) }));
+    },
     onServerDeleted: () => {
       if (!connectionServer) return;
       const deletedAddress = connectionServer.address;
@@ -102,11 +126,14 @@ export function ClientApp(): React.ReactElement {
     },
     onVoiceDisconnected: (userId, channelId) => {
       if (connectionServer) setVoicePresenceByServer((current) => ({ ...current, [connectionServer.id]: (current[connectionServer.id] ?? []).filter((item) => item.userId !== userId || item.channelId !== channelId) }));
+      setViewingScreenShareId((current) => current === userId ? null : current);
       if (userId === currentAccess?.id) { setVoiceAuthorization(null); setNotice("Вы отключены от голосового канала"); }
     },
     onError: (message) => { setSearchLoading(false); setNotice(message); },
   }, connectionRevision);
-  const voice = useVoiceSession(voiceAuthorization, state?.preferences ?? createDefaultState().preferences, setNotice);
+  const voice = useVoiceSession(voiceAuthorization, state?.preferences ?? createDefaultState().preferences, setNotice, (voiceParticipantSettings) => {
+    commit((current) => ({ ...current, preferences: { ...current.preferences, voiceParticipantSettings } }));
+  });
   const updateVoiceState = connection.updateVoiceState;
   const connectedVoiceUserId = connectionServer ? accessByServer[connectionServer.id]?.id : undefined;
   const hasConnectedVoicePresence = Boolean(connectionServer && connectedVoiceUserId && voice.channelId && (voicePresenceByServer[connectionServer.id] ?? []).some((participant) => participant.userId === connectedVoiceUserId && participant.channelId === voice.channelId));
@@ -163,7 +190,7 @@ export function ClientApp(): React.ReactElement {
   const activeChannel = activeServer?.channels.find((channel) => channel.id === state.activeChannelId) ?? activeServer?.channels.find((channel) => channel.kind === "text");
   const messages = activeChannel ? sortMessagesChronologically(state.messages.filter((message) => message.channelId === activeChannel.id)) : [];
   const searchMembers = activeServer && !activeServer.members.some((member) => member.id === (currentAccess?.id ?? profile.id))
-    ? [{ id: currentAccess?.id ?? profile.id, displayName: profile.displayName, role: "Вы", serverRole: currentAccess?.role, status: "online" as const, avatarColor: "#7c5cff", avatar: profile.avatar }, ...activeServer.members]
+    ? [{ id: currentAccess?.id ?? profile.id, displayName: profile.displayName, role: "Вы", serverRole: currentAccess?.role, status: visibleProfileStatus(profile.status), avatarColor: "#7c5cff", avatar: profile.avatar }, ...activeServer.members]
     : activeServer?.members ?? [];
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
@@ -275,7 +302,7 @@ export function ClientApp(): React.ReactElement {
 
   function saveProfile(profile: LocalProfile): void {
     commit((current) => ({ ...current, profile, messages: current.messages.map((message) => message.authorId === profile.id || message.authorId === currentAccess?.id ? { ...message, authorName: profile.displayName, authorAvatar: profile.avatar } : message) }));
-    if (activeServer?.address && !connection.updateProfile({ displayName: profile.displayName, avatar: profile.avatar })) setNotice("Профиль сохранён локально, но сервер сейчас недоступен для обновления");
+    if (activeServer?.address && !connection.updateProfile({ displayName: profile.displayName, bio: profile.bio, avatar: profile.avatar, banner: profile.banner, status: profile.status ?? "online" })) setNotice("Профиль сохранён локально, но сервер сейчас недоступен для обновления");
   }
 
   function deleteServerForEveryone(): void {
@@ -389,6 +416,16 @@ export function ClientApp(): React.ReactElement {
     setNotice(role === "administrator" ? "Пользователю назначается роль администратора" : "Роль администратора снимается");
   }
 
+  function kickServerMember(userId: string): void {
+    if (!connection.kickMember(userId)) { setNotice("Сервер ещё не готов исключить участника"); return; }
+    setNotice("Запрос на исключение участника отправлен");
+  }
+
+  function disconnectVoiceParticipant(userId: string): void {
+    if (!connection.disconnectVoiceMember(userId)) { setNotice("Сервер ещё не готов отключить участника"); return; }
+    setNotice("Запрос на отключение участника отправлен");
+  }
+
   async function reset(): Promise<void> {
     const resetState = window.openCord ? await window.openCord.storage.reset() : createDefaultState();
     setState(resetState); setConfirmReset(false); setModal(null);
@@ -399,7 +436,7 @@ export function ClientApp(): React.ReactElement {
       <ServerRail servers={state.servers} activeId={activeServer?.id} onHome={openHome} onSelect={selectServer} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} />
       {activeServer ? <>
         <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)} isScreenSharing={voice.isScreenSharing} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} />
-        {activeChannel?.kind === "voice" ? <VoiceChannelView channel={activeChannel} server={activeServer} profile={profile} participants={voiceParticipants} currentUserId={currentAccess?.id ?? profile.id} connectedChannelId={voice.channelId} status={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShares={voice.screenShares} viewingScreenShareId={viewingScreenShareId} isScreenSharing={voice.isScreenSharing} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} onExitScreenShare={() => setViewingScreenShareId(null)} onLeaveVoice={leaveVoiceChannel} /> : activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#111520]">
+        {activeChannel?.kind === "voice" ? <VoiceChannelView channel={activeChannel} server={activeServer} profile={profile} participants={voiceParticipants} currentUserId={currentAccess?.id ?? profile.id} currentUserRole={currentAccess?.role} canModerateVoice={currentAccess?.permissions.includes("VOICE_MODERATE") === true} connectedChannelId={voice.channelId} status={voice.status} muted={voice.muted} deafened={voice.deafened} locallyMutedParticipantIds={voice.locallyMutedParticipantIds} participantVolumes={voice.participantVolumes} activeSpeakerIds={voice.activeSpeakerIds} screenShares={voice.screenShares} viewingScreenShareId={viewingScreenShareId} isScreenSharing={voice.isScreenSharing} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} onParticipantMuted={voice.setParticipantMuted} onParticipantVolume={voice.setParticipantVolume} onDisconnectParticipant={disconnectVoiceParticipant} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} onExitScreenShare={() => setViewingScreenShareId(null)} onLeaveVoice={leaveVoiceChannel} /> : activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#111520]">
           <ChatHeader channelName={activeChannel?.name ?? "канал"} description={activeChannel?.description ?? ""} connectionStatus={activeServer.address ? connection.status : "demo"} memberList={state.preferences.showMemberList} searchOpen={searchOpen} onSearch={() => setSearchOpen(true)} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} />
           <ProtocolNotice status={connection.status} />
           <div className="flex min-h-0 flex-1">
@@ -411,10 +448,10 @@ export function ClientApp(): React.ReactElement {
               </div>
               <Composer draft={draft} channelName={activeChannel?.name ?? "канал"} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} />
             </div>
-            {state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} />}
+            {state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
           </div>
           <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => setSearchOpen(false)} onSearch={searchServer} onOpenMessage={openSearchMessage} />
-        </section> : <NoTextChannelView server={activeServer} profile={state.profile} access={currentAccess} connectionStatus={activeServer.address ? connection.status : "demo"} showMembers={state.preferences.showMemberList} onCreate={() => setModal("channel")} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} onSetRole={setServerMemberRole} />}
+        </section> : <NoTextChannelView server={activeServer} profile={state.profile} access={currentAccess} connectionStatus={activeServer.address ? connection.status : "demo"} showMembers={state.preferences.showMemberList} onCreate={() => setModal("channel")} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
       </> : <HomeScreen serverCount={state.servers.length} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} />}
       {notice && <div role="status" className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 rounded-xl border border-white/10 bg-[#191e2b] px-4 py-2.5 text-xs font-medium text-slate-200 shadow-2xl">{notice}</div>}
       <DeploymentDialog open={modal === "create"} onOpenChange={(open) => setModal(open ? "create" : null)} onDeployed={addDeployedServer} />
@@ -488,7 +525,7 @@ export function ChannelSidebar({ server, activeChannelId, profile, canManageChan
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-4"><ChannelGroup title={ru.channel.text} canCreate={canManageChannels} onCreate={onCreateChannel}>{textChannels.map((channel) => <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}><Hash className="size-4 shrink-0" /><span className="truncate">{channel.name}</span></button>)}</ChannelGroup>
     <ChannelGroup title={ru.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>{voiceChannels.map((channel) => <div key={channel.id} className="mb-1"><button onClick={() => { if (onJoinVoice) onJoinVoice(channel); else onVoiceNotice?.(); }} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}><Volume2 className="size-4" /><span className="truncate">{channel.name}</span>{voiceParticipants.some((participant) => participant.channelId === channel.id) && <span className="ml-auto text-[10px] text-slate-500">{voiceParticipants.filter((participant) => participant.channelId === channel.id).length}/{channel.participantLimit === 0 ? "∞" : channel.participantLimit ?? voiceCapability?.maxParticipants ?? 25}</span>}</button><div className="space-y-0.5">{voiceParticipants.filter((participant) => participant.channelId === channel.id).map((participant) => <VoiceParticipantRow key={participant.userId} participant={participant} member={server.members.find((item) => item.id === participant.userId)} profile={profile} currentUserId={currentUserId} speaking={activeSpeakerIds.includes(participant.userId)} sharing={screenShareParticipantIds.includes(participant.userId)} onViewScreenShare={onViewScreenShare} />)}</div></div>)}</ChannelGroup></div>
     {voiceChannelId && onLeaveVoice && onMuted && onDeafened && <VoicePanel channel={voiceChannels.find((channel) => channel.id === voiceChannelId)} status={voiceStatus} muted={muted} deafened={deafened} isScreenSharing={isScreenSharing} onMuted={onMuted} onDeafened={onDeafened} onStartScreenShare={onStartScreenShare} onStopScreenShare={onStopScreenShare} onLeave={onLeaveVoice} />}
-    <div className="flex h-14 items-center gap-2 border-t border-white/[.055] bg-[#0a0d14] px-2"><button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5"><Avatar name={profile.displayName} image={profile.avatar} size="sm" status="online" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span><span className="block text-[10px] text-emerald-400">{ru.common.online}</span></span></button><button title={ru.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200"><Settings className="size-4" /></button></div>
+    <div className="flex h-14 items-center gap-2 border-t border-white/[.055] bg-[#0a0d14] px-2"><button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5"><Avatar name={profile.displayName} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span><span className={cn("block text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{userStatusLabels[profile.status ?? "online"]}</span></span></button><button title={ru.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200"><Settings className="size-4" /></button></div>
     {contextMenu && <div role="menu" aria-label={ru.channel.manageMenu(contextMenu.channel.name)} onPointerDown={(event) => event.stopPropagation()} className="fixed z-[80] w-48 rounded-xl border border-white/10 bg-[#171c28] p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.55)]" style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button role="menuitem" onClick={() => { const channel = contextMenu.channel; setContextMenu(null); onEditChannel(channel); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-300 hover:bg-white/[.06] hover:text-white"><Pencil className="size-3.5" />{ru.channel.edit}</button>
       <button role="menuitem" onClick={() => { const channel = contextMenu.channel; setContextMenu(null); onDeleteChannel(channel); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-red-300 hover:bg-red-400/10"><Trash2 className="size-3.5" />{ru.channel.delete}</button>
@@ -501,7 +538,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const displayName = member?.displayName ?? (isCurrentUser ? profile.displayName : "Участник");
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
-  return <ProfilePreview side="right" wrapperClassName="ml-6 flex" triggerClassName="flex min-h-9 w-[224px] items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200" profile={{ displayName, avatar, color: member?.avatarColor, status: member?.status ?? (isCurrentUser ? "online" : "offline"), role: member?.role, bio: isCurrentUser ? profile.bio : undefined, isCurrentUser }}>
+  return <ProfilePreview side="right" wrapperClassName="ml-6 flex" triggerClassName="flex min-h-9 w-[224px] items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200" profile={{ displayName, avatar, banner: member?.banner ?? (isCurrentUser ? profile.banner : undefined), color: member?.avatarColor, status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"), role: member?.role, bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined), isCurrentUser }}>
     <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0e121b] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
     <span className="min-w-0 flex-1 truncate">{displayName}{isCurrentUser && " (вы)"}</span>
     {sharing && <span title={`Смотреть экран: ${displayName}`} aria-label={`Смотреть экран: ${displayName}`} onClick={(event) => { event.stopPropagation(); onViewScreenShare?.(participant.userId); }} className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-cyan-400/10 text-cyan-300 hover:bg-cyan-400/20"><MonitorUp className="size-3.5" /></span>}
@@ -519,16 +556,23 @@ interface VoiceChannelViewProps {
   profile: LocalProfile;
   participants: VoicePresence[];
   currentUserId: string;
+  currentUserRole?: MemberRole;
+  canModerateVoice: boolean;
   connectedChannelId: string | null;
   status: "idle" | "connecting" | "connected" | "reconnecting" | "error";
   muted: boolean;
   deafened: boolean;
+  locallyMutedParticipantIds: string[];
+  participantVolumes: Record<string, number>;
   activeSpeakerIds: string[];
   screenShares: ScreenShareStream[];
   viewingScreenShareId: string | null;
   isScreenSharing: boolean;
   onMuted: (value: boolean) => void;
   onDeafened: (value: boolean) => void;
+  onParticipantMuted: (participantIdentity: string, value: boolean) => void;
+  onParticipantVolume: (participantIdentity: string, value: number) => void;
+  onDisconnectParticipant: (participantIdentity: string) => void;
   onStartScreenShare: () => void;
   onStopScreenShare: () => void;
   onViewScreenShare: (participantIdentity: string) => void;
@@ -536,23 +580,29 @@ interface VoiceChannelViewProps {
   onLeaveVoice: () => void;
 }
 
-export function VoiceChannelView({ channel, server, profile, participants, currentUserId, connectedChannelId, status, muted, deafened, activeSpeakerIds, screenShares, viewingScreenShareId, isScreenSharing, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onExitScreenShare, onLeaveVoice }: VoiceChannelViewProps): React.ReactElement {
+export function VoiceChannelView({ channel, server, profile, participants, currentUserId, currentUserRole, canModerateVoice, connectedChannelId, status, muted, deafened, locallyMutedParticipantIds, participantVolumes, activeSpeakerIds, screenShares, viewingScreenShareId, isScreenSharing, onMuted, onDeafened, onParticipantMuted, onParticipantVolume, onDisconnectParticipant, onStartScreenShare, onStopScreenShare, onViewScreenShare, onExitScreenShare, onLeaveVoice }: VoiceChannelViewProps): React.ReactElement {
   const channelParticipants = participants.filter((participant) => participant.channelId === channel.id);
   const connectedHere = connectedChannelId === channel.id;
   const availableScreenShares = connectedHere ? screenShares : [];
   const viewedStream = screenShares.find((stream) => stream.participantIdentity === viewingScreenShareId);
   const statusLabel = status === "reconnecting" ? "Переподключение…" : status === "connecting" ? "Подключение…" : connectedHere && status === "connected" ? "Голос подключён" : status === "error" ? "Ошибка подключения" : "Не подключено";
-  const participantProfile = (identity: string, fallbackName?: string): { name: string; avatar: string | null; color?: string; status: "online" | "idle" | "offline" } => {
+  const participantProfile = (identity: string, fallbackName?: string): { name: string; avatar: string | null; banner?: string | null; color?: string; status: PublicMemberStatus; role?: string; bio?: string; isCurrentUser: boolean } => {
     const member = server.members.find((item) => item.id === identity);
     const isCurrentUser = identity === currentUserId;
     return {
       name: member?.displayName ?? (isCurrentUser ? profile.displayName : fallbackName ?? "Участник"),
       avatar: member?.avatar ?? (isCurrentUser ? profile.avatar : null),
+      banner: member?.banner ?? (isCurrentUser ? profile.banner : null),
       color: member?.avatarColor,
-      status: member?.status ?? (isCurrentUser ? "online" : "offline"),
+      status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
+      role: member?.role,
+      bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined),
+      isCurrentUser,
     };
   };
   const viewedProfile = viewingScreenShareId ? participantProfile(viewingScreenShareId, viewedStream?.participantName) : null;
+  const viewedLocallyMuted = viewingScreenShareId ? locallyMutedParticipantIds.includes(viewingScreenShareId) : false;
+  const viewedVolume = viewingScreenShareId ? participantVolumes[viewingScreenShareId] ?? 1 : 1;
 
   return <section aria-label={`Голосовой канал ${channel.name}`} className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0d111a]">
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[.06] px-5">
@@ -566,15 +616,42 @@ export function VoiceChannelView({ channel, server, profile, participants, curre
         <div className="flex shrink-0 items-center gap-3 rounded-2xl border border-cyan-400/15 bg-cyan-400/[.045] px-4 py-3">
           <span className="relative grid size-9 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300"><MonitorUp className="size-4" /><span className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-[#111824] bg-red-400" /></span>
           <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-100">{viewedStream?.local ? "Ваша демонстрация" : `${viewedProfile?.name ?? "Участник"} демонстрирует экран`}</p><p className="text-[11px] text-slate-500">Просмотр закреплён и завершится только по вашей команде</p></div>
-          <Button variant="secondary" onClick={onExitScreenShare} className="ml-auto shrink-0"><X className="size-4" />Выйти из просмотра</Button>
+          {viewingScreenShareId !== currentUserId && <label className="ml-auto flex w-44 shrink-0 items-center gap-2 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-[10px] text-slate-400"><Volume2 className="size-3.5 shrink-0" /><input type="range" min="0" max="100" step="1" aria-label={`Громкость у себя: ${viewedProfile?.name ?? "Участник"}`} value={Math.round(viewedVolume * 100)} onChange={(event) => onParticipantVolume(viewingScreenShareId, Number(event.target.value) / 100)} className="voice-limit-slider h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-slate-700 accent-violet-400" /><span className="w-8 text-right tabular-nums">{Math.round(viewedVolume * 100)}%</span></label>}
+          {viewingScreenShareId !== currentUserId && <Button variant="secondary" aria-pressed={viewedLocallyMuted} onClick={() => onParticipantMuted(viewingScreenShareId, !viewedLocallyMuted)} className={cn("shrink-0", viewedLocallyMuted && "text-red-300")}><VolumeX className="size-4" />{viewedLocallyMuted ? "Включить звук" : "Заглушить у себя"}</Button>}
+          <Button variant="secondary" onClick={onExitScreenShare} className={cn("shrink-0", viewingScreenShareId === currentUserId && "ml-auto")}><X className="size-4" />Выйти из просмотра</Button>
         </div>
-        {viewedStream ? <ScreenShareSurface stream={viewedStream} className="h-full min-h-[260px] flex-1" /> : <div className="grid min-h-[260px] flex-1 place-items-center rounded-2xl border border-dashed border-white/10 bg-black/25 px-6 text-center"><div><span className="mx-auto grid size-16 place-items-center rounded-3xl bg-white/[.045] text-slate-500"><MonitorUp className="size-7" /></span><h2 className="mt-4 text-lg font-bold text-slate-200">Трансляция временно недоступна</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">Она могла завершиться или переподключаться. Режим просмотра останется открытым, пока вы не нажмёте «Выйти из просмотра».</p></div></div>}
+        {viewedStream ? <ScreenShareSurface stream={viewedStream} className="min-h-[260px] flex-1" fullscreenControls={<div className="flex max-w-full items-center gap-2 rounded-2xl border border-white/10 bg-[#0a0e16]/90 p-2 shadow-[0_18px_60px_rgba(0,0,0,.65)] backdrop-blur-xl">
+          <div className="hidden min-w-0 items-center gap-2 border-r border-white/10 px-2 sm:flex"><Avatar name={viewedProfile?.name ?? "Участник"} image={viewedProfile?.avatar} color={viewedProfile?.color} size="sm" /><span className="max-w-32 truncate text-xs font-semibold text-slate-200">{viewedStream.local ? "Ваша демонстрация" : viewedProfile?.name ?? "Участник"}</span></div>
+          {viewingScreenShareId !== currentUserId && <><button type="button" aria-label={viewedLocallyMuted ? "Включить звук демонстрации" : "Заглушить демонстрацию"} title={viewedLocallyMuted ? "Включить звук демонстрации" : "Заглушить демонстрацию"} aria-pressed={viewedLocallyMuted} onClick={() => onParticipantMuted(viewingScreenShareId, !viewedLocallyMuted)} className={cn("grid size-10 place-items-center rounded-full border transition", viewedLocallyMuted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}><VolumeX className="size-4" /></button><label className="hidden w-36 items-center gap-2 px-1 text-[10px] text-slate-400 md:flex"><Volume2 className="size-3.5 shrink-0" /><input type="range" min="0" max="100" step="1" aria-label={`Громкость демонстрации: ${viewedProfile?.name ?? "Участник"}`} value={Math.round(viewedVolume * 100)} onChange={(event) => onParticipantVolume(viewingScreenShareId, Number(event.target.value) / 100)} className="voice-limit-slider h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-slate-700 accent-violet-400" /></label></>}
+          <button type="button" aria-label={muted ? "Включить микрофон" : "Выключить микрофон"} title={muted ? "Включить микрофон" : "Выключить микрофон"} onClick={() => onMuted(!muted)} className={cn("grid size-10 place-items-center rounded-full border transition", muted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}>{muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}</button>
+          <button type="button" aria-label={deafened ? "Включить звук" : "Отключить звук"} title={deafened ? "Включить звук" : "Отключить звук"} onClick={() => onDeafened(!deafened)} className={cn("grid size-10 place-items-center rounded-full border transition", deafened ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}><VolumeX className="size-4" /></button>
+          <button type="button" aria-label={isScreenSharing ? "Остановить демонстрацию" : "Начать демонстрацию"} title={isScreenSharing ? "Остановить демонстрацию" : "Начать демонстрацию"} disabled={status !== "connected"} onClick={isScreenSharing ? onStopScreenShare : onStartScreenShare} className={cn("grid size-10 place-items-center rounded-full border transition disabled:opacity-35", isScreenSharing ? "border-cyan-300/30 bg-cyan-400/15 text-cyan-300" : "border-white/10 bg-white/[.055] text-slate-300 hover:bg-white/10")}><MonitorUp className="size-4" /></button>
+          <button type="button" aria-label="Выйти из просмотра демонстрации" title="Выйти из просмотра демонстрации" onClick={onExitScreenShare} className="grid size-10 place-items-center rounded-full border border-amber-300/20 bg-amber-300/[.08] text-amber-200 transition hover:bg-amber-300/15"><X className="size-4" /></button>
+          <button type="button" aria-label="Выйти из голосового канала" title="Выйти из голосового канала" onClick={onLeaveVoice} className="grid h-10 w-14 place-items-center rounded-full bg-red-500 text-white shadow-[0_8px_24px_rgba(239,68,68,.25)] transition hover:bg-red-400"><PhoneOff className="size-4" /></button>
+        </div>} /> : <div className="grid min-h-[260px] flex-1 place-items-center rounded-2xl border border-dashed border-white/10 bg-black/25 px-6 text-center"><div><span className="mx-auto grid size-16 place-items-center rounded-3xl bg-white/[.045] text-slate-500"><MonitorUp className="size-7" /></span><h2 className="mt-4 text-lg font-bold text-slate-200">Трансляция временно недоступна</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">Она могла завершиться или переподключаться. Режим просмотра останется открытым, пока вы не нажмёте «Выйти из просмотра».</p></div></div>}
       </div> : <div className="scrollbar-thin h-full overflow-y-auto pr-1">
         <div className="mb-7"><div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-bold text-slate-200">Участники голосового канала</h2><p className="mt-1 text-xs text-slate-500">Говорите, запускайте демонстрацию или выберите активный экран ниже.</p></div><Users className="size-4 text-slate-600" /></div>
           {channelParticipants.length ? <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">{channelParticipants.map((participant) => {
             const participantData = participantProfile(participant.userId);
-            const speaking = activeSpeakerIds.includes(participant.userId) && !participant.muted && !participant.deafened;
-            return <div key={participant.userId} className={cn("relative flex min-h-40 flex-col items-center justify-center rounded-2xl border bg-[#141a26] p-5 text-center transition", speaking ? "border-emerald-400/55 shadow-[0_0_0_1px_rgba(52,211,153,.15),0_16px_45px_rgba(0,0,0,.25)]" : "border-white/[.07]")}><Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="xl" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-4 ring-offset-[#141a26]")} /><p className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100">{participantData.name}{participant.userId === currentUserId && " (вы)"}</p><p className={cn("mt-1 text-[10px] font-medium", speaking ? "text-emerald-300" : "text-slate-600")}>{speaking ? "Говорит" : participant.deafened ? "Звук отключён" : participant.muted ? "Микрофон выключен" : "В голосовом канале"}</p>{participant.deafened ? <VolumeX className="absolute right-3 top-3 size-4 text-red-300" /> : participant.muted ? <MicOff className="absolute right-3 top-3 size-4 text-red-300" /> : null}</div>;
+            const locallyMuted = locallyMutedParticipantIds.includes(participant.userId);
+            const participantVolume = participantVolumes[participant.userId] ?? 1;
+            const speaking = activeSpeakerIds.includes(participant.userId) && !participant.muted && !participant.deafened && !locallyMuted;
+            const targetRole = server.members.find((member) => member.id === participant.userId)?.serverRole;
+            const canDisconnect = canDisconnectVoiceParticipant(canModerateVoice, currentUserRole, targetRole, currentUserId, participant.userId);
+            return <div key={participant.userId} className={cn("relative flex min-h-52 flex-col items-center justify-center rounded-2xl border bg-[#141a26] p-5 text-center transition", speaking ? "border-emerald-400/55 shadow-[0_0_0_1px_rgba(52,211,153,.15),0_16px_45px_rgba(0,0,0,.25)]" : "border-white/[.07]", locallyMuted && "border-red-400/20")}>
+              {participant.userId !== currentUserId && <button type="button" aria-label={`${locallyMuted ? "Включить звук у себя" : "Заглушить у себя"}: ${participantData.name}`} aria-pressed={locallyMuted} onClick={() => onParticipantMuted(participant.userId, !locallyMuted)} className={cn("absolute left-3 top-3 grid size-8 place-items-center rounded-lg border transition", locallyMuted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-black/20 text-slate-500 hover:bg-white/[.06] hover:text-slate-200")}><VolumeX className="size-4" /></button>}
+              {canDisconnect && <button type="button" aria-label={`Отключить от голосового канала: ${participantData.name}`} title="Отключить от голосового канала" onClick={() => onDisconnectParticipant(participant.userId)} className="absolute right-3 top-3 grid size-8 place-items-center rounded-lg border border-red-400/20 bg-red-400/[.07] text-red-300 transition hover:bg-red-400/15"><UserMinus className="size-4" /></button>}
+              <ProfilePreview
+                profile={{ displayName: participantData.name, avatar: participantData.avatar, banner: participantData.banner, color: participantData.color, status: participantData.status, role: participantData.role, bio: participantData.bio, isCurrentUser: participantData.isCurrentUser }}
+                wrapperClassName="w-full justify-center"
+                triggerClassName="flex max-w-full flex-col items-center rounded-xl px-3 py-2 outline-none transition hover:bg-white/[.035] focus-visible:ring-2 focus-visible:ring-violet-400/70"
+              >
+                <Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="xl" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-4 ring-offset-[#141a26]")} />
+                <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100">{participantData.name}{participant.userId === currentUserId && " (вы)"}</span>
+                <span className={cn("mt-1 text-[10px] font-medium", speaking ? "text-emerald-300" : locallyMuted ? "text-red-300" : "text-slate-600")}>{locallyMuted ? "Заглушён у вас" : speaking ? "Говорит" : participant.deafened ? "Звук отключён" : participant.muted ? "Микрофон выключен" : "В голосовом канале"}</span>
+              </ProfilePreview>
+              {participant.userId !== currentUserId && <label className="mt-3 flex w-full max-w-48 items-center gap-2 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-[10px] text-slate-400"><Volume2 className="size-3.5 shrink-0" /><input type="range" min="0" max="100" step="1" aria-label={`Громкость у себя: ${participantData.name}`} value={Math.round(participantVolume * 100)} onChange={(event) => onParticipantVolume(participant.userId, Number(event.target.value) / 100)} className="voice-limit-slider h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-slate-700 accent-violet-400" /><span className="w-8 text-right tabular-nums">{Math.round(participantVolume * 100)}%</span></label>}{participant.deafened ? <VolumeX className={cn("absolute right-3 size-4 text-red-300", canDisconnect ? "top-12" : "top-3")} /> : participant.muted ? <MicOff className={cn("absolute right-3 size-4 text-red-300", canDisconnect ? "top-12" : "top-3")} /> : null}
+            </div>;
           })}</div> : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[.018] px-6 py-10 text-center text-sm text-slate-600">В канале пока никого нет.</div>}
         </div>
 
@@ -652,6 +729,7 @@ export function LeaveServerDialog({ server, canManageServer, canUpdate, canDelet
     if (!validLimit || name.length < 2) return;
     if (onSaveSettings({ name, maxAttachmentBytes: unlimited ? null : parsedLimit * MEBIBYTE, screenShareMaxResolution: maxResolution, screenShareMaxFrameRate: maxFrameRate })) onOpenChange(false);
   }
+
   function changeSlider(value: number): void {
     setLimitStep(value);
     setLimitInput(value > 2000 ? "2001" : String(value));
@@ -713,12 +791,12 @@ export function LeaveServerDialog({ server, canManageServer, canUpdate, canDelet
 
 function ChannelGroup({ title, canCreate, onCreate, children }: { title: string; canCreate: boolean; onCreate: () => void; children: React.ReactNode }): React.ReactElement { return <section className="mb-6"><div className="mb-1 flex items-center px-2 text-[10px] font-bold uppercase tracking-[.12em] text-slate-600">{title}{canCreate && <button aria-label={ru.channel.createTitle} onClick={onCreate} className="ml-auto rounded p-0.5 text-violet-300 hover:bg-violet-400/10 hover:text-violet-200"><Plus className="size-3.5" /></button>}</div>{children}</section>; }
 
-function NoTextChannelView({ server, profile, access, connectionStatus, showMembers, onCreate, onToggleMembers, onSetRole }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; connectionStatus: ConnectionStatus; showMembers: boolean; onCreate: () => void; onToggleMembers: () => void; onSetRole: (userId: string, role: "administrator" | "member") => void }): React.ReactElement {
+function NoTextChannelView({ server, profile, access, connectionStatus, showMembers, onCreate, onToggleMembers, onSetRole, onKickMember }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; connectionStatus: ConnectionStatus; showMembers: boolean; onCreate: () => void; onToggleMembers: () => void; onSetRole: (userId: string, role: "administrator" | "member") => void; onKickMember: (userId: string) => void }): React.ReactElement {
   const canManageChannels = access?.permissions.includes("MANAGE_CHANNELS") === true;
   return <section className="flex min-w-0 flex-1 flex-col bg-[#111520]">
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[.055] px-4 shadow-sm"><Hash className="size-5 text-slate-600" /><h2 className="font-semibold text-slate-300">{ru.channel.noneSelected}</h2><span className={cn("mr-auto rounded-full px-2 py-1 text-[10px] font-semibold", connectionStatus === "connected" ? "bg-emerald-400/10 text-emerald-300" : connectionStatus === "error" || isProtocolIncompatible(connectionStatus) ? "bg-red-400/10 text-red-300" : "bg-white/5 text-slate-500")}>{connectionLabel(connectionStatus)}</span><button aria-label={ru.chat.members} onClick={onToggleMembers} className={cn("text-slate-500 hover:text-slate-200", showMembers && "text-violet-300")}><Users className="size-5" /></button></header>
     <ProtocolNotice status={connectionStatus} />
-    <div className="flex min-h-0 flex-1"><div className="grid min-w-0 flex-1 place-items-center px-8"><div className="max-w-md text-center"><div className="mx-auto mb-4 grid size-16 place-items-center rounded-3xl bg-white/[.055] text-slate-500"><Hash className="size-8" /></div><h1 className="text-xl font-bold text-slate-200">{ru.channel.emptyTitle}</h1><p className="mt-2 text-sm leading-6 text-slate-500">{canManageChannels ? ru.channel.emptyManageDescription : ru.channel.emptyMemberDescription}</p>{canManageChannels && <Button onClick={onCreate} className="mt-5"><Plus className="size-4" />{ru.channel.createTitle}</Button>}</div></div>{showMembers && <MemberList server={server} profile={profile} access={access} onSetRole={onSetRole} />}</div>
+    <div className="flex min-h-0 flex-1"><div className="grid min-w-0 flex-1 place-items-center px-8"><div className="max-w-md text-center"><div className="mx-auto mb-4 grid size-16 place-items-center rounded-3xl bg-white/[.055] text-slate-500"><Hash className="size-8" /></div><h1 className="text-xl font-bold text-slate-200">{ru.channel.emptyTitle}</h1><p className="mt-2 text-sm leading-6 text-slate-500">{canManageChannels ? ru.channel.emptyManageDescription : ru.channel.emptyMemberDescription}</p>{canManageChannels && <Button onClick={onCreate} className="mt-5"><Plus className="size-4" />{ru.channel.createTitle}</Button>}</div></div>{showMembers && <MemberList server={server} profile={profile} access={access} onSetRole={onSetRole} onKickMember={onKickMember} />}</div>
   </section>;
 }
 
@@ -748,9 +826,31 @@ export function Message({ message, member, profile, compact, grouped, ownAvatar,
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(message.content);
   const [editAttachments, setEditAttachments] = useState<Attachment[]>(message.attachments ?? []);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const own = currentUserId === message.authorId;
   const canDelete = own || canManageMessages;
-  const previewProfile = { displayName: message.authorName, avatar: message.authorAvatar ?? ownAvatar, color: message.authorColor, status: member?.status ?? (own ? "online" as const : "offline" as const), role: member?.role, bio: own ? profile?.bio : undefined, isCurrentUser: own };
+  const previewProfile = { displayName: message.authorName, avatar: message.authorAvatar ?? ownAvatar, banner: member?.banner ?? (own ? profile?.banner : undefined), color: message.authorColor, status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : "offline" as const), role: member?.role, bio: member?.bio ?? (own ? profile?.bio : undefined), isCurrentUser: own };
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOutside = (event: PointerEvent): void => {
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || menuTriggerRef.current?.contains(target)) return;
+      setMenuOpen(false);
+      menuTriggerRef.current?.blur();
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      menuTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
   const saveEdit = (): void => {
     const content = editDraft.trim();
     const originalIds = (message.attachments ?? []).map((attachment) => attachment.id);
@@ -780,8 +880,8 @@ export function Message({ message, member, profile, compact, grouped, ownAvatar,
   return <article id={`message-${message.id}`} onContextMenu={(event) => { if (editing || (!own && !canDelete)) return; event.preventDefault(); setMenuOpen(true); }} className={cn("group relative flex gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0")}>
     {!grouped || compact ? <ProfilePreview profile={previewProfile} wrapperClassName="shrink-0 self-start" triggerClassName="rounded-[34%] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"><Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} /></ProfilePreview> : <span className="w-9 shrink-0 text-right text-[9px] text-transparent group-hover:text-slate-600">{time}</span>}
     <div className="min-w-0 flex-1">{(!grouped || compact) && <div className="flex items-baseline gap-2"><ProfilePreview profile={previewProfile} wrapperClassName="min-w-0" triggerClassName="truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">{message.authorName}</ProfilePreview><time className="text-[10px] text-slate-600">{time}</time>{message.editedAt && <span className="text-[10px] text-slate-600">(изменено)</span>}</div>}{editing ? <div className="mt-1 rounded-xl border border-violet-400/40 bg-[#0d111a] p-2 focus-within:border-violet-400">{editAttachments.length ? <div className="mb-2 flex flex-wrap gap-2">{editAttachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-lg border border-white/8 bg-[#171c29] px-2.5 py-1.5 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={`Открепить ${attachment.fileName}`} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className="flex items-start gap-2"><button type="button" title={`Прикрепить файл (${attachmentLimitLabel})`} aria-label="Прикрепить файл к редактируемому сообщению" onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#0d111a] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><textarea autoFocus aria-label="Редактирование сообщения" value={editDraft} maxLength={4000} onChange={(event) => setEditDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") cancelEdit(); else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); saveEdit(); } }} className="min-h-20 w-full resize-y bg-transparent px-1 py-1 text-sm text-slate-200 outline-none" /></div><div className="mt-1 pl-9 text-[10px] text-slate-500">Enter — сохранить · Shift+Enter — новая строка · Esc — отменить</div></div> : <>{message.content && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{message.content}{grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">(изменено)</span>}</p>}{message.attachments?.length ? <div className="mt-2 flex max-w-2xl flex-wrap gap-2">{message.attachments.map((attachment) => <AttachmentView key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onDownload={onDownload} onPreview={onPreview} />)}</div> : null}</>}</div>
-    {!editing && (own || canDelete) && <button type="button" aria-label={`Действия с сообщением ${message.authorName}`} onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-1 hidden rounded-md border border-white/7 bg-[#191e2b] p-1 text-slate-500 hover:text-slate-200 group-hover:block focus:block"><MoreHorizontal className="size-3.5" /></button>}
-    {!editing && menuOpen && <div role="menu" className="absolute right-2 top-8 z-30 min-w-40 rounded-xl border border-white/10 bg-[#171b27] p-1.5 text-xs shadow-2xl">
+    {!editing && (own || canDelete) && <button ref={menuTriggerRef} type="button" aria-label={`Действия с сообщением ${message.authorName}`} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-1 hidden rounded-md border border-white/7 bg-[#191e2b] p-1 text-slate-500 hover:text-slate-200 group-hover:block focus:block"><MoreHorizontal className="size-3.5" /></button>}
+    {!editing && menuOpen && <div ref={menuRef} role="menu" className="absolute right-2 top-8 z-30 min-w-40 rounded-xl border border-white/10 bg-[#171b27] p-1.5 text-xs shadow-2xl">
       {own && <button type="button" role="menuitem" onClick={startEditing} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-slate-300 hover:bg-white/5"><Pencil className="size-3.5" />Редактировать</button>}
       {canDelete && <button type="button" role="menuitem" onClick={() => { if (window.confirm("Удалить это сообщение?")) onDelete(message); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-red-300 hover:bg-red-400/10"><Trash2 className="size-3.5" />Удалить</button>}
     </div>}
@@ -877,19 +977,21 @@ function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
-function MemberList({ server, profile, access, onSetRole }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; onSetRole: (userId: string, role: "administrator" | "member") => void }): React.ReactElement {
+function MemberList({ server, profile, access, onSetRole, onKickMember }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; onSetRole: (userId: string, role: "administrator" | "member") => void; onKickMember: (userId: string) => void }): React.ReactElement {
   const members: MockMember[] = useMemo(() => server.address
     ? server.members.map((member) => member.id === access?.id ? { ...member, role: `Вы · ${member.role}` } : member)
-    : [{ id: profile.id, displayName: profile.displayName, role: "Вы", status: "online" as const, avatarColor: "#7c5cff", avatar: profile.avatar }, ...server.members], [access?.id, profile, server]);
+    : [{ id: profile.id, displayName: profile.displayName, role: "Вы", status: visibleProfileStatus(profile.status), avatarColor: "#7c5cff", avatar: profile.avatar }, ...server.members], [access?.id, profile, server]);
   return <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#0e121b] px-3 py-5"><h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">{ru.chat.members} — {members.length}</h3><div className="space-y-1">{members.map((member) => {
     const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
     const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
+    const canKick = canKickServerMember(access?.permissions.includes("KICK_MEMBERS") === true, access?.role, member.serverRole, access?.id ?? profile.id, member.id);
     return <div key={member.id} className="group flex w-full items-center rounded-lg hover:bg-white/[.045]">
-      <ProfilePreview side="left" wrapperClassName="min-w-0 flex-1" triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2" profile={{ displayName: member.displayName, avatar, color: member.avatarColor, status: member.status, role: member.role, bio: isCurrentUser ? profile.bio : undefined, isCurrentUser }}>
+      <ProfilePreview side="left" wrapperClassName="min-w-0 flex-1" triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2" profile={{ displayName: member.displayName, avatar, banner: member.banner ?? (isCurrentUser ? profile.banner : undefined), color: member.avatarColor, status: member.status, role: member.role, bio: member.bio ?? (isCurrentUser ? profile.bio : undefined), isCurrentUser }}>
         <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
         <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}><span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">{member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}{member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}{member.displayName}</span><span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span></span>
       </ProfilePreview>
       {access?.permissions.includes("MANAGE_ROLES") && member.id !== access.id && member.serverRole !== "owner" && <button title={member.serverRole === "administrator" ? ru.members.removeAdmin : ru.members.makeAdmin} aria-label={`${member.serverRole === "administrator" ? ru.members.removeAdmin : ru.members.makeAdmin}: ${member.displayName}`} onClick={() => onSetRole(member.id, member.serverRole === "administrator" ? "member" : "administrator")} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-violet-400/10 hover:text-violet-300 group-hover:opacity-100 focus:opacity-100"><UserCog className="size-3.5" /></button>}
+      {canKick && <button title="Исключить с сервера" aria-label={`Исключить с сервера: ${member.displayName}`} onClick={() => onKickMember(member.id)} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-red-400/10 hover:text-red-300 group-hover:opacity-100 focus:opacity-100"><UserMinus className="size-3.5" /></button>}
     </div>;
   })}</div></aside>;
 }
@@ -941,7 +1043,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
   const channels = snapshot.channels.map((channel) => ({ ...channel, serverId: targetId }));
   const currentChannelIds = new Set(channels.map((channel) => channel.id));
   const removedChannelIds = new Set(previousServer?.channels.filter((channel) => !currentChannelIds.has(channel.id)).map((channel) => channel.id) ?? []);
-  const members = snapshot.members.map((member) => ({ id: member.id, displayName: member.displayName, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar }));
+  const members = snapshot.members.map((member) => ({ id: member.id, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner }));
   return {
     ...current,
     servers: current.servers.map((server) => server.id === targetId ? { ...server, name: snapshot.name, avatar: snapshot.avatar, maxAttachmentBytes: snapshot.maxAttachmentBytes, screenShareMaxResolution: snapshot.screenShareMaxResolution, screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate, channels, members, ...(server.deployment ? { deployment: { ...server.deployment, serverName: snapshot.name } } : {}) } : server),

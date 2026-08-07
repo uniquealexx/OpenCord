@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, DEFAULT_ATTACHMENT_LIMIT_BYTES, screenShareFrameRateSchema, screenShareResolutionSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, DEFAULT_ATTACHMENT_LIMIT_BYTES, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema } from "@opencord/shared";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
 export const STATE_VERSION = 3 as const;
@@ -10,6 +10,8 @@ export const localProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(32),
   bio: z.string().max(160),
   avatar: z.string().max(2_000_000).nullable(),
+  banner: z.string().max(500_000).nullable().default(null),
+  status: userStatusSchema.optional(),
   createdAt: z.string().datetime(),
 });
 
@@ -25,11 +27,13 @@ export const mockChannelSchema = z.object({
 export const mockMemberSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1).max(32),
+  bio: z.string().max(160).optional(),
   role: z.string().max(32),
   serverRole: z.enum(["owner", "administrator", "member"]).optional(),
-  status: z.enum(["online", "idle", "offline"]),
+  status: publicMemberStatusSchema,
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   avatar: z.string().max(2_000_000).nullable().optional(),
+  banner: z.string().max(500_000).nullable().optional(),
 });
 
 export const mockServerSchema = z.object({
@@ -72,6 +76,7 @@ export const clientPreferencesSchema = z.object({
   echoCancellation: z.boolean(),
   noiseSuppression: z.boolean(),
   autoGainControl: z.boolean(),
+  voiceParticipantSettings: z.record(z.string().min(1).max(256), z.object({ muted: z.boolean(), volume: z.number().min(0).max(1) })).default({}),
 });
 const legacyClientPreferencesSchema = z.object({ compactMode: z.boolean(), showMemberList: z.boolean(), notifications: z.boolean() });
 
@@ -106,6 +111,7 @@ export type MockMember = z.infer<typeof mockMemberSchema>;
 export type MockServer = z.infer<typeof mockServerSchema>;
 export type MockMessage = z.infer<typeof mockMessageSchema>;
 export type ClientPreferences = z.infer<typeof clientPreferencesSchema>;
+export type VoiceParticipantSettings = ClientPreferences["voiceParticipantSettings"];
 export type PersistedClientState = z.infer<typeof persistedClientStateSchema>;
 
 export function createDefaultState(): PersistedClientState {
@@ -117,7 +123,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    preferences: { compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {} },
   };
 }
 
@@ -134,7 +140,7 @@ export function parsePersistedState(input: unknown): PersistedClientState {
   const activeChannelId = activeServerId === legacy.activeServerId && activeServer?.channels.some((channel) => channel.id === legacy.activeChannelId)
     ? legacy.activeChannelId
     : activeServer?.channels.find((channel) => channel.kind === "text")?.id ?? null;
-  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {} } });
 }
 
 export function safePersistedState(input: unknown): PersistedClientState {

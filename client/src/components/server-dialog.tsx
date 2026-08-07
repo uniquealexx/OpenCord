@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION } from "@opencord/shared";
-import { AlertTriangle, Globe2 } from "lucide-react";
+import { AlertTriangle, Globe2, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -15,15 +15,37 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [insecureConfirmed, setInsecureConfirmed] = useState(false);
+  const [checking, setChecking] = useState(false);
   const insecureHttp = requiresInsecureHttpConfirmation(address);
 
-  function submit(event: React.FormEvent): void {
+  async function submit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     let normalizedAddress: string | null = null;
     try {
       normalizedAddress = normalizeServerAddress(address, { allowInsecureHttp: insecureConfirmed });
     } catch {
       setError(ru.server.invalidAddress);
+      return;
+    }
+    const probe = window.openCord?.server;
+    if (!probe) {
+      setError(ru.server.checkUnavailable);
+      return;
+    }
+    setChecking(true);
+    let result: Awaited<ReturnType<typeof probe.probe>>;
+    try {
+      result = await probe.probe(normalizedAddress);
+    } catch {
+      setError(ru.server.unavailable);
+      setChecking(false);
+      return;
+    }
+    setChecking(false);
+    if (!result.ok) {
+      setError(result.code === "incompatible"
+        ? ru.server.incompatibleProtocol(result.protocolVersion)
+        : result.code === "not-opencord" ? ru.server.notOpenCord : ru.server.unavailable);
       return;
     }
     const id = createId("server");
@@ -55,9 +77,9 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
           <DialogDescription>{ru.server.connectDescription}</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
-          <label className="grid gap-2 text-sm font-medium text-slate-300">{ru.server.address}<Input value={address} onChange={(event) => { setAddress(event.target.value); setError(""); setInsecureConfirmed(false); }} placeholder={ru.server.addressPlaceholder} />{error && <span className="text-xs text-red-300">{error}</span>}</label>
+          <label className="grid gap-2 text-sm font-medium text-slate-300">{ru.server.address}<Input value={address} disabled={checking} onChange={(event) => { setAddress(event.target.value); setError(""); setInsecureConfirmed(false); }} placeholder={ru.server.addressPlaceholder} />{error && <span role="alert" className="text-xs text-red-300">{error}</span>}</label>
           {insecureHttp && <section className="space-y-3 rounded-2xl border border-red-400/25 bg-red-400/[.07] p-4"><div className="flex gap-3"><AlertTriangle className="mt-0.5 size-5 shrink-0 text-red-300" /><div><h4 className="text-sm font-semibold text-red-200">{ru.server.insecureTitle}</h4><p className="mt-1 text-xs leading-5 text-red-200/65">{ru.server.insecureWarning}</p></div></div><label className="flex cursor-pointer items-start gap-3 rounded-xl border border-red-300/15 bg-black/15 p-3 text-xs text-red-100"><input type="checkbox" checked={insecureConfirmed} onChange={(event) => setInsecureConfirmed(event.target.checked)} className="mt-0.5 size-4 accent-red-500" />{ru.server.insecureConfirm}</label></section>}
-          <Button type="submit" className="w-full" disabled={insecureHttp && !insecureConfirmed}>{ru.server.submitConnect}</Button>
+          <Button type="submit" className="w-full" disabled={checking || (insecureHttp && !insecureConfirmed)}>{checking ? <><LoaderCircle className="size-4 animate-spin" />{ru.server.checking}</> : ru.server.submitConnect}</Button>
         </form>
       </DialogContent>
     </Dialog>

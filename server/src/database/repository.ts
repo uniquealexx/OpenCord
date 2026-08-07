@@ -1,10 +1,10 @@
-import type { Attachment, Channel, ChatMessage, Member, MemberRole, MessageSearchFilters, MessageSearchResult, Permission, PublicProfile, ServerSettings } from "@opencord/shared";
+import type { Attachment, Channel, ChatMessage, Member, MemberRole, MessageSearchFilters, MessageSearchResult, Permission, PublicMemberStatus, PublicProfile, ServerSettings } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
-interface UserRow extends QueryRow { id: string; display_name: string; avatar: string | null; role: MemberRole }
+interface UserRow extends QueryRow { id: string; display_name: string; bio: string; avatar: string | null; banner: string | null; role: MemberRole }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null }
 interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
@@ -80,19 +80,19 @@ export class ChatRepository {
     return rows.length > 0;
   }
 
-  async upsertUser(userId: string, publicKey: string, profile: PublicProfile): Promise<void> {
+  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<void> {
     await this.database.query(
-      `INSERT INTO users (id, public_key, display_name, avatar) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, avatar = EXCLUDED.avatar, updated_at = now()
+      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, updated_at = now()
        WHERE users.public_key = EXCLUDED.public_key`,
-      [userId, publicKey, profile.displayName, profile.avatar],
+      [userId, publicKey, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null],
     );
   }
 
-  async updateUserProfile(userId: string, profile: PublicProfile): Promise<boolean> {
+  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<boolean> {
     const rows = await this.database.query<{ id: string }>(
-      "UPDATE users SET display_name = $2, avatar = $3, updated_at = now() WHERE id = $1 RETURNING id",
-      [userId, profile.displayName, profile.avatar],
+      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, updated_at = now() WHERE id = $1 RETURNING id",
+      [userId, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null],
     );
     return rows.length > 0;
   }
@@ -100,7 +100,7 @@ export class ChatRepository {
   async leaveServer(userId: string): Promise<MemberRole | null> {
     const role = await this.getOptionalMemberRole(userId);
     if (!role) return null;
-    await this.database.query("UPDATE users SET avatar = NULL, updated_at = now() WHERE id = $1", [userId]);
+    await this.database.query("UPDATE users SET bio = '', avatar = NULL, banner = NULL, updated_at = now() WHERE id = $1", [userId]);
     if (role !== "owner") await this.database.query("DELETE FROM server_members WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
     return role;
   }
@@ -137,24 +137,24 @@ export class ChatRepository {
     return "updated";
   }
 
-  async listMembers(onlineIds: ReadonlySet<string>): Promise<Member[]> {
+  async listMembers(statuses: ReadonlyMap<string, PublicMemberStatus>): Promise<Member[]> {
     const users = await this.database.query<UserRow>(
-      `SELECT u.id, u.display_name, u.avatar, sm.role FROM server_members sm
+      `SELECT u.id, u.display_name, u.bio, u.avatar, u.banner, sm.role FROM server_members sm
        JOIN users u ON u.id = sm.user_id WHERE sm.server_id = $1
        ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.display_name`,
       [DEFAULT_SERVER_ID],
     );
-    return users.map((user) => ({ id: user.id, displayName: user.display_name, avatar: user.avatar, status: onlineIds.has(user.id) ? "online" : "offline", role: user.role }));
+    return users.map((user) => ({ id: user.id, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status: statuses.get(user.id) ?? "offline", role: user.role }));
   }
 
-  async getMember(userId: string, online: boolean): Promise<Member> {
+  async getMember(userId: string, status: PublicMemberStatus): Promise<Member> {
     const [user] = await this.database.query<UserRow>(
-      `SELECT u.id, u.display_name, u.avatar, sm.role FROM users u
+      `SELECT u.id, u.display_name, u.bio, u.avatar, u.banner, sm.role FROM users u
        JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2 WHERE u.id = $1`,
       [userId, DEFAULT_SERVER_ID],
     );
     if (!user) throw new Error("User is missing");
-    return { id: user.id, displayName: user.display_name, avatar: user.avatar, status: online ? "online" : "offline", role: user.role };
+    return { id: user.id, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, role: user.role };
   }
 
   async createAttachment(id: string, uploaderId: string, storageKey: string, fileName: string, mimeType: string, sizeBytes: number, sha256: string): Promise<Attachment> {
@@ -371,8 +371,8 @@ export class ChatRepository {
 }
 
 export function permissionsForRole(role: MemberRole): Permission[] {
-  if (role === "owner") return ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
-  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+  if (role === "owner") return ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "KICK_MEMBERS", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
   return ["VOICE_CONNECT", "VOICE_SPEAK"];
 }
 

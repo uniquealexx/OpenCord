@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack, type RemoteVideoTrack } from "livekit-client";
-import type { ClientPreferences } from "@/shared/state";
+import type { ClientPreferences, VoiceParticipantSettings } from "@/shared/state";
 
 export type VoiceSessionStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface VoiceAuthorization { channelId: string; endpoint: string; token: string; expiresAt: string }
@@ -22,8 +22,12 @@ export interface VoiceSession {
   outputDevices: MediaDeviceInfo[];
   screenShares: ScreenShareStream[];
   isScreenSharing: boolean;
+  locallyMutedParticipantIds: string[];
+  participantVolumes: Record<string, number>;
   setMuted(value: boolean): Promise<void>;
   setDeafened(value: boolean): Promise<void>;
+  setParticipantMuted(participantIdentity: string, value: boolean): void;
+  setParticipantVolume(participantIdentity: string, value: number): void;
   setInputDevice(deviceId: string | null): Promise<void>;
   setOutputDevice(deviceId: string | null): Promise<void>;
   startScreenShare(settings: ScreenShareSettings): Promise<void>;
@@ -81,11 +85,17 @@ export function mergeResponsiveSpeakerIds(liveKitSpeakerIds: Iterable<string>, r
   return [...next].sort();
 }
 
-export function useVoiceSession(authorization: VoiceAuthorization | null, preferences: ClientPreferences, onError: (message: string) => void): VoiceSession {
+export function useVoiceSession(authorization: VoiceAuthorization | null, preferences: ClientPreferences, onError: (message: string) => void, onParticipantAudioSettingsChange?: (settings: VoiceParticipantSettings) => void): VoiceSession {
   const roomRef = useRef<Room | null>(null);
   const audioElementsRef = useRef<HTMLMediaElement[]>([]);
   const preferencesRef = useRef(preferences);
+  const onParticipantAudioSettingsChangeRef = useRef(onParticipantAudioSettingsChange);
   const muteBeforeDeafenRef = useRef(false);
+  const deafenedRef = useRef(false);
+  const participantAudioSettingsRef = useRef<VoiceParticipantSettings>(preferences.voiceParticipantSettings);
+  const appliedParticipantAudioSettingsRef = useRef("");
+  const locallyMutedParticipantIdsRef = useRef<Set<string>>(new Set(Object.entries(preferences.voiceParticipantSettings).filter(([, setting]) => setting.muted).map(([identity]) => identity)));
+  const participantVolumesRef = useRef<Map<string, number>>(new Map(Object.entries(preferences.voiceParticipantSettings).filter(([, setting]) => setting.volume !== 1).map(([identity, setting]) => [identity, setting.volume])));
   const liveKitSpeakerIdsRef = useRef<Set<string>>(new Set());
   const responsiveDetectorsRef = useRef<Map<LocalAudioTrack | RemoteAudioTrack, { identity: string; speaking: boolean; stop: () => void }>>(new Map());
   const [status, setStatus] = useState<VoiceSessionStatus>("idle");
@@ -97,6 +107,19 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [screenShares, setScreenShares] = useState<ScreenShareStream[]>([]);
+  const [locallyMutedParticipantIds, setLocallyMutedParticipantIds] = useState<string[]>(
+    Object.entries(preferences.voiceParticipantSettings)
+      .filter(([, setting]) => setting.muted)
+      .map(([identity]) => identity)
+      .sort(),
+  );
+  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>(
+    Object.fromEntries(
+      Object.entries(preferences.voiceParticipantSettings)
+        .filter(([, setting]) => setting.volume !== 1)
+        .map(([identity, setting]) => [identity, setting.volume]),
+    ),
+  );
 
   const publishActiveSpeakers = useCallback((): void => {
     const ids = mergeResponsiveSpeakerIds(liveKitSpeakerIdsRef.current, responsiveDetectorsRef.current.values());
@@ -137,6 +160,28 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [publishActiveSpeakers, stopResponsiveDetector]);
 
   useEffect(() => { preferencesRef.current = preferences; }, [preferences]);
+  useEffect(() => { onParticipantAudioSettingsChangeRef.current = onParticipantAudioSettingsChange; }, [onParticipantAudioSettingsChange]);
+  useEffect(() => {
+    const settings = preferences.voiceParticipantSettings;
+    const serialized = JSON.stringify(settings);
+    if (appliedParticipantAudioSettingsRef.current === serialized) return;
+    appliedParticipantAudioSettingsRef.current = serialized;
+    participantAudioSettingsRef.current = settings;
+    locallyMutedParticipantIdsRef.current = new Set(Object.entries(settings).filter(([, setting]) => setting.muted).map(([identity]) => identity));
+    participantVolumesRef.current = new Map(Object.entries(settings).filter(([, setting]) => setting.volume !== 1).map(([identity, setting]) => [identity, setting.volume]));
+    const mutedIds = [...locallyMutedParticipantIdsRef.current].sort();
+    const volumes = Object.fromEntries(participantVolumesRef.current);
+    setLocallyMutedParticipantIds((current) => current.length === mutedIds.length && current.every((identity, index) => identity === mutedIds[index]) ? current : mutedIds);
+    setParticipantVolumes((current) => {
+      const entries = Object.entries(volumes);
+      return Object.keys(current).length === entries.length && entries.every(([identity, volume]) => current[identity] === volume) ? current : volumes;
+    });
+    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
+      const setting = settings[element.dataset.opencordParticipantId ?? ""];
+      element.muted = deafenedRef.current || Boolean(setting?.muted);
+      element.volume = setting?.volume ?? 1;
+    }
+  }, [preferences.voiceParticipantSettings]);
 
   useEffect(() => {
     const room = roomRef.current;
@@ -213,6 +258,9 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         element.autoplay = true;
         element.hidden = true;
         element.dataset.opencordLivekit = "true";
+        element.dataset.opencordParticipantId = participant.identity;
+        element.muted = deafenedRef.current || locallyMutedParticipantIdsRef.current.has(participant.identity);
+        element.volume = participantVolumesRef.current.get(participant.identity) ?? 1;
         document.body.appendChild(element);
         audioElementsRef.current.push(element);
       });
@@ -250,6 +298,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         const microphonePublication = await room.localParticipant.setMicrophoneEnabled(!ptt);
         if (microphonePublication?.audioTrack) startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
         setMutedState(ptt);
+        deafenedRef.current = false;
         setDeafenedState(false);
         setChannelId(authorization.channelId);
         setStatus("connected");
@@ -263,13 +312,49 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [authorization, disposeRoom, onError, publishActiveSpeakers, refreshDevices, startResponsiveDetector, stopResponsiveDetector]);
 
   const setIncomingAudioMuted = useCallback((value: boolean): void => {
-    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) element.muted = value;
+    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
+      element.muted = value || locallyMutedParticipantIdsRef.current.has(element.dataset.opencordParticipantId ?? "");
+    }
+  }, []);
+
+  const setParticipantMuted = useCallback((participantIdentity: string, value: boolean): void => {
+    const next = new Set(locallyMutedParticipantIdsRef.current);
+    if (value) next.add(participantIdentity);
+    else next.delete(participantIdentity);
+    locallyMutedParticipantIdsRef.current = next;
+    setLocallyMutedParticipantIds([...next].sort());
+    const currentSetting = participantAudioSettingsRef.current[participantIdentity] ?? { muted: false, volume: 1 };
+    const nextSettings = { ...participantAudioSettingsRef.current, [participantIdentity]: { ...currentSetting, muted: value } };
+    if (!value && currentSetting.volume === 1) delete nextSettings[participantIdentity];
+    participantAudioSettingsRef.current = nextSettings;
+    onParticipantAudioSettingsChangeRef.current?.(nextSettings);
+    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
+      if (element.dataset.opencordParticipantId === participantIdentity) element.muted = deafenedRef.current || value;
+    }
+  }, []);
+
+  const setParticipantVolume = useCallback((participantIdentity: string, value: number): void => {
+    const normalized = Math.min(1, Math.max(0, value));
+    const next = new Map(participantVolumesRef.current);
+    if (normalized === 1) next.delete(participantIdentity);
+    else next.set(participantIdentity, normalized);
+    participantVolumesRef.current = next;
+    setParticipantVolumes(Object.fromEntries([...next.entries()].sort(([left], [right]) => left.localeCompare(right))));
+    const currentSetting = participantAudioSettingsRef.current[participantIdentity] ?? { muted: false, volume: 1 };
+    const nextSettings = { ...participantAudioSettingsRef.current, [participantIdentity]: { ...currentSetting, volume: normalized } };
+    if (!currentSetting.muted && normalized === 1) delete nextSettings[participantIdentity];
+    participantAudioSettingsRef.current = nextSettings;
+    onParticipantAudioSettingsChangeRef.current?.(nextSettings);
+    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
+      if (element.dataset.opencordParticipantId === participantIdentity) element.volume = normalized;
+    }
   }, []);
 
   const setMuted = useCallback(async (value: boolean): Promise<void> => {
     if (!value && deafened) {
       setIncomingAudioMuted(false);
       muteBeforeDeafenRef.current = false;
+      deafenedRef.current = false;
       setDeafenedState(false);
     }
     const room = roomRef.current;
@@ -303,6 +388,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [preferences.pushToTalkKey, preferences.voiceInputMode, setMuted, status]);
 
   const setDeafened = useCallback(async (value: boolean): Promise<void> => {
+    deafenedRef.current = value;
     setIncomingAudioMuted(value);
     if (value) {
       muteBeforeDeafenRef.current = muted;
@@ -382,5 +468,5 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [status]);
   const leave = useCallback(async (): Promise<void> => { setStatus("idle"); await disposeRoom(); }, [disposeRoom]);
 
-  return { status, channelId, muted, deafened, activeSpeakerIds, quality, inputDevices, outputDevices, screenShares, isScreenSharing: screenShares.some((item) => item.local), setMuted, setDeafened, setInputDevice, setOutputDevice, startScreenShare, stopScreenShare, leave };
+  return { status, channelId, muted, deafened, activeSpeakerIds, quality, inputDevices, outputDevices, screenShares, isScreenSharing: screenShares.some((item) => item.local), locallyMutedParticipantIds, participantVolumes, setMuted, setDeafened, setParticipantMuted, setParticipantVolume, setInputDevice, setOutputDevice, startScreenShare, stopScreenShare, leave };
 }

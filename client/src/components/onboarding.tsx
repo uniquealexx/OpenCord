@@ -16,7 +16,7 @@ export function Onboarding({ onComplete }: { onComplete: (profile: LocalProfile)
   function submit(event: React.FormEvent): void {
     event.preventDefault();
     if (!valid) return;
-    onComplete({ id: "local-user", displayName: name.trim(), bio: bio.trim(), avatar: null, createdAt: new Date().toISOString() });
+    onComplete({ id: "local-user", displayName: name.trim(), bio: bio.trim(), avatar: null, banner: null, createdAt: new Date().toISOString() });
   }
 
   return (

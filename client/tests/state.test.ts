@@ -9,6 +9,25 @@ describe("persisted client state", () => {
     expect(state.servers).toEqual([]);
     expect(state.messages).toEqual([]);
     expect(state.activeServerId).toBeNull();
+    expect(state.preferences.voiceParticipantSettings).toEqual({});
+  });
+
+  it("persists participant mute and volume settings while accepting older v3 state", () => {
+    const state = createDefaultState();
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.voiceParticipantSettings;
+    expect(parsePersistedState({ ...state, preferences: olderPreferences }).preferences.voiceParticipantSettings).toEqual({});
+
+    const settings = { "remote-user": { muted: true, volume: 0.35 } };
+    const restored = parsePersistedState({ ...state, preferences: { ...state.preferences, voiceParticipantSettings: settings } });
+    expect(restored.preferences.voiceParticipantSettings).toEqual(settings);
+  });
+
+  it("persists a selected user status and accepts profiles saved before statuses existed", () => {
+    const state = createDefaultState();
+    const profile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };
+    expect(parsePersistedState({ ...state, profile }).profile?.status).toBeUndefined();
+    expect(parsePersistedState({ ...state, profile: { ...profile, status: "invisible" } }).profile?.status).toBe("invisible");
   });
 
   it("rejects an active channel outside the active server", () => {

@@ -118,10 +118,15 @@ describe("WebSocket chat flow", () => {
     const member = await connectAndAuthenticate(url, "Участник");
     expect(await memberJoined).toMatchObject({ member: { id: member.userId, displayName: "Участник", avatar: null } });
     const avatar = "data:image/webp;base64,AA==";
+    const banner = "data:image/webp;base64,AQ==";
 
     const profileUpdated = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { displayName: "Новое имя", avatar } }));
-    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, displayName: "Новое имя", avatar } });
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } }));
+    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } });
+
+    const becameInvisible = waitForEvent(observer.socket, "member.updated");
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "invisible" } }));
+    expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, status: "offline" } });
 
     const memberRemoved = waitForEvent(observer.socket, "member.removed");
     const memberClosed = once(member.socket, "close");
@@ -207,6 +212,21 @@ describe("WebSocket chat flow", () => {
     const promotedSnapshot = waitForEvent(member.socket, "server.snapshot");
     owner.socket.send(JSON.stringify({ type: "member.role.set", requestId: randomUUID(), userId: member.userId, role: "administrator" }));
     expect((await promotedSnapshot).server.currentUser.role).toBe("administrator");
+
+    const regular = await connectAndAuthenticate(url, "Исключаемый участник");
+    const regularDenied = waitForEvent(regular.socket, "error");
+    regular.socket.send(JSON.stringify({ type: "member.kick", requestId: randomUUID(), userId: owner.userId }));
+    expect((await regularDenied).code).toBe("FORBIDDEN");
+
+    const removedForOwner = waitForEvent(owner.socket, "member.removed");
+    const removedForAdmin = waitForEvent(member.socket, "member.removed");
+    const removedForTarget = waitForEvent(regular.socket, "member.removed");
+    const regularClosed = once(regular.socket, "close");
+    member.socket.send(JSON.stringify({ type: "member.kick", requestId: randomUUID(), userId: regular.userId }));
+    expect(await removedForOwner).toEqual({ type: "member.removed", userId: regular.userId });
+    expect(await removedForAdmin).toEqual({ type: "member.removed", userId: regular.userId });
+    expect(await removedForTarget).toEqual({ type: "member.removed", userId: regular.userId });
+    await regularClosed;
 
     const adminDeletedMessage = waitForEvent(owner.socket, "message.deleted");
     member.socket.send(JSON.stringify({ type: "message.delete", requestId: randomUUID(), messageId: ownerMessage.message.id }));

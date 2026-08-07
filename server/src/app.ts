@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ClientEvent, type Permission, type ServerEvent } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
@@ -21,6 +21,7 @@ interface ConnectionState {
   challengeExpiresAt: number;
   userId: string | null;
   sessionToken: string | null;
+  presenceStatus: UserStatus | null;
 }
 
 export interface BuildAppOptions {
@@ -115,7 +116,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const challenge = randomBytes(32).toString("base64");
     const requestId = randomUUID();
     const expiresAt = Date.now() + 60_000;
-    const state: ConnectionState = { socket, challenge, challengeRequestId: requestId, challengeExpiresAt: expiresAt, userId: null, sessionToken: null };
+    const state: ConnectionState = { socket, challenge, challengeRequestId: requestId, challengeExpiresAt: expiresAt, userId: null, sessionToken: null, presenceStatus: null };
     connections.add(state);
     send(socket, { type: "auth.challenge", requestId, protocolVersion: PROTOCOL_VERSION, challenge, expiresAt: new Date(expiresAt).toISOString() });
 
@@ -129,7 +130,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     socket.on("close", () => {
       connections.delete(state);
       if (state.sessionToken) sessions.delete(state.sessionToken);
-      if (state.userId) void broadcastMember(state.userId, false);
+      if (state.userId) void broadcastMember(state.userId, publicUserStatuses().get(state.userId) ?? "offline");
     });
   });
 
@@ -159,7 +160,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "ping") return send(connection.socket, { type: "pong", requestId: event.requestId, serverTime: new Date().toISOString() });
     if (event.type === "profile.update") {
       if (!(await repository.updateUserProfile(connection.userId, event.profile))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Профиль пользователя не найден");
-      broadcast({ type: "member.updated", member: await repository.getMember(connection.userId, true) });
+      connection.presenceStatus = event.profile.status;
+      await broadcastMember(connection.userId, publicStatus(event.profile.status));
       return;
     }
     if (event.type === "server.leave") {
@@ -168,7 +170,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (voicePresence) broadcast({ type: "voice.participant.left", participant: voicePresence });
       const role = await repository.leaveServer(userId);
       if (!role) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник сервера не найден");
-      if (role === "owner") broadcast({ type: "member.updated", member: await repository.getMember(userId, false) });
+      if (role === "owner") broadcast({ type: "member.updated", member: await repository.getMember(userId, "offline") });
       else broadcast({ type: "member.removed", userId });
       connection.userId = null;
       connection.socket.close(1000, "Left server");
@@ -252,6 +254,27 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       broadcast({ type: "server.avatar.updated", serverId: server.id, avatar: server.avatar });
       return;
     }
+    if (event.type === "member.kick") {
+      if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для исключения участников");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя исключить самого себя");
+      let targetRole: import("@opencord/shared").MemberRole;
+      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      const actorRole = await repository.getMemberRole(connection.userId);
+      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя исключить этого участника");
+      const voicePresence = await voice.disconnect(event.userId, "moderated");
+      if (voicePresence) broadcast({ type: "voice.participant.disconnected", userId: voicePresence.userId, channelId: voicePresence.channelId, reason: "moderated" });
+      const removedRole = await repository.leaveServer(event.userId);
+      if (!removedRole || removedRole === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось исключить участника");
+      broadcast({ type: "member.removed", userId: event.userId });
+      for (const targetConnection of connections) {
+        if (targetConnection.userId !== event.userId) continue;
+        if (targetConnection.sessionToken) sessions.delete(targetConnection.sessionToken);
+        targetConnection.userId = null;
+        targetConnection.sessionToken = null;
+        targetConnection.socket.close(4003, "Kicked from server");
+      }
+      return;
+    }
     if (event.type === "server.settings.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения настроек сервера");
       await repository.updateServerSettings({ name: event.name, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate });
@@ -321,6 +344,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     await repository.upsertUser(userId, event.publicKey, event.profile);
     await repository.ensureMembership(userId, event.publicKey, options.bootstrapOwnerPublicKey, options.allowInsecureFirstUserOwner === true);
     connection.userId = userId;
+    connection.presenceStatus = event.profile.status;
     const server = await repository.getServer();
     const sessionToken = randomBytes(32).toString("base64url");
     const sessionExpiresAt = Date.now() + 15 * 60_000;
@@ -329,7 +353,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     connection.sessionToken = sessionToken;
     send(connection.socket, { type: "auth.ok", requestId: event.requestId, userId, serverId: server.id, sessionToken, sessionExpiresAt: new Date(sessionExpiresAt).toISOString() });
     await sendSnapshot(connection);
-    await broadcastMember(userId, true);
+    await broadcastMember(userId, publicStatus(event.profile.status));
   }
 
   async function hasPermission(userId: string, permission: Permission): Promise<boolean> {
@@ -342,7 +366,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const role = await repository.getMemberRole(connection.userId);
     send(connection.socket, {
       type: "server.snapshot",
-      server: { ...server, members: await repository.listMembers(onlineUserIds()), currentUser: { id: connection.userId, role, permissions: permissionsForRole(role) }, voice: await voice.capability(), voiceParticipants: voice.presence() },
+      server: { ...server, members: await repository.listMembers(publicUserStatuses()), currentUser: { id: connection.userId, role, permissions: permissionsForRole(role) }, voice: await voice.capability(), voiceParticipants: voice.presence() },
     });
   }
 
@@ -360,12 +384,18 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     } catch (error) { app.log.warn(error, "Voice presence reconciliation failed"); }
   }
 
-  function onlineUserIds(): Set<string> {
-    return new Set([...connections].flatMap((connection) => connection.userId ? [connection.userId] : []));
+  function publicStatus(status: UserStatus | null): PublicMemberStatus {
+    return status === "invisible" || status === null ? "offline" : status;
   }
 
-  async function broadcastMember(userId: string, online: boolean): Promise<void> {
-    try { broadcast({ type: "member.updated", member: await repository.getMember(userId, online) }); } catch (error) { app.log.error(error); }
+  function publicUserStatuses(): Map<string, PublicMemberStatus> {
+    const statuses = new Map<string, PublicMemberStatus>();
+    for (const connection of connections) if (connection.userId) statuses.set(connection.userId, publicStatus(connection.presenceStatus));
+    return statuses;
+  }
+
+  async function broadcastMember(userId: string, status: PublicMemberStatus): Promise<void> {
+    try { broadcast({ type: "member.updated", member: await repository.getMember(userId, status) }); } catch (error) { app.log.error(error); }
   }
 
   function broadcast(event: ServerEvent): void {

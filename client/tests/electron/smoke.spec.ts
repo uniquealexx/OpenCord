@@ -24,7 +24,7 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
     bridgeKeys: Object.keys(window.openCord ?? {}).sort(),
     hasNodeRequire: "require" in window,
   }));
-  expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "storage", "updates", "window"], hasNodeRequire: false });
+  expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "screenShare", "server", "storage", "updates", "window"], hasNodeRequire: false });
 
   const onboardingName = page.getByPlaceholder("Отображаемое имя");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);
@@ -47,6 +47,10 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   await expect(page.getByText("Первое сетевое сообщение")).toBeVisible();
   await page.screenshot({ path: "test-results/chat.png" });
   await page.evaluate(() => window.openCord?.storage.reset());
+  await page.evaluate(() => window.openCord?.window.close());
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((window) => window.isVisible()))).toBe(false);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.show());
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((window) => window.isVisible()))).toBe(true);
   await app.close();
   server.kill();
   await rm(userData, { recursive: true, force: true });

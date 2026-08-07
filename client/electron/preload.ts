@@ -5,6 +5,7 @@ import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProg
 import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
 import { clientUpdateStateSchema } from "../src/shared/updater";
 import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
+import { serverProbeAddressSchema, serverProbeResultSchema } from "../src/shared/server-probe";
 
 const bridge: OpenCordBridge = {
   window: {
@@ -52,6 +53,9 @@ const bridge: OpenCordBridge = {
     selectAndUpload: async (context) => attachmentUploadResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentSelectAndUpload, attachmentTransferContextSchema.parse(context))),
     download: async (request) => (await ipcRenderer.invoke(IPC.attachmentDownload, attachmentDownloadRequestSchema.parse(request))) === true,
     preview: async (request) => attachmentPreviewResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentPreview, attachmentDownloadRequestSchema.parse(request))),
+  },
+  server: {
+    probe: async (address) => serverProbeResultSchema.parse(await ipcRenderer.invoke(IPC.serverProbe, serverProbeAddressSchema.parse(address))),
   },
   screenShare: {
     listSources: async () => screenShareSourcesSchema.parse(await ipcRenderer.invoke(IPC.screenShareListSources)),

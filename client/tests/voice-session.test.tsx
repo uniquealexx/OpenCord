@@ -23,6 +23,75 @@ describe("voice session controls", () => {
     expect(remoteAudio.muted).toBe(false);
   });
 
+  it("mutes one remote participant locally and preserves it across deafen toggles", async () => {
+    const first = document.createElement("audio");
+    first.dataset.opencordLivekit = "true";
+    first.dataset.opencordParticipantId = "first-user";
+    const second = document.createElement("audio");
+    second.dataset.opencordLivekit = "true";
+    second.dataset.opencordParticipantId = "second-user";
+    document.body.append(first, second);
+    const { result } = renderHook(() => useVoiceSession(null, createDefaultState().preferences, vi.fn()));
+
+    act(() => result.current.setParticipantMuted("first-user", true));
+    expect(result.current.locallyMutedParticipantIds).toEqual(["first-user"]);
+    expect(first.muted).toBe(true);
+    expect(second.muted).toBe(false);
+
+    await act(async () => result.current.setDeafened(true));
+    expect(first.muted).toBe(true);
+    expect(second.muted).toBe(true);
+    await act(async () => result.current.setDeafened(false));
+    expect(first.muted).toBe(true);
+    expect(second.muted).toBe(false);
+
+    act(() => result.current.setParticipantMuted("first-user", false));
+    expect(result.current.locallyMutedParticipantIds).toEqual([]);
+    expect(first.muted).toBe(false);
+  });
+
+  it("changes only the selected participant volume and clamps the value", () => {
+    const first = document.createElement("audio");
+    first.dataset.opencordLivekit = "true";
+    first.dataset.opencordParticipantId = "first-user";
+    const second = document.createElement("audio");
+    second.dataset.opencordLivekit = "true";
+    second.dataset.opencordParticipantId = "second-user";
+    document.body.append(first, second);
+    const { result } = renderHook(() => useVoiceSession(null, createDefaultState().preferences, vi.fn()));
+
+    act(() => result.current.setParticipantVolume("first-user", 0.35));
+    expect(result.current.participantVolumes).toEqual({ "first-user": 0.35 });
+    expect(first.volume).toBe(0.35);
+    expect(second.volume).toBe(1);
+
+    act(() => result.current.setParticipantVolume("first-user", 2));
+    expect(result.current.participantVolumes).toEqual({});
+    expect(first.volume).toBe(1);
+  });
+
+  it("restores participant audio settings after a new hook instance", () => {
+    const onSettingsChange = vi.fn();
+    const firstHook = renderHook(() => useVoiceSession(null, createDefaultState().preferences, vi.fn(), onSettingsChange));
+    act(() => firstHook.result.current.setParticipantMuted("remote-user", true));
+    act(() => firstHook.result.current.setParticipantVolume("remote-user", 0.4));
+    const savedSettings = onSettingsChange.mock.calls.at(-1)?.[0] ?? {};
+    expect(savedSettings).toEqual({ "remote-user": { muted: true, volume: 0.4 } });
+    firstHook.unmount();
+
+    const remoteAudio = document.createElement("audio");
+    remoteAudio.dataset.opencordLivekit = "true";
+    remoteAudio.dataset.opencordParticipantId = "remote-user";
+    document.body.appendChild(remoteAudio);
+    const preferences = { ...createDefaultState().preferences, voiceParticipantSettings: savedSettings };
+    const secondHook = renderHook(() => useVoiceSession(null, preferences, vi.fn()));
+
+    expect(secondHook.result.current.locallyMutedParticipantIds).toEqual(["remote-user"]);
+    expect(secondHook.result.current.participantVolumes).toEqual({ "remote-user": 0.4 });
+    expect(remoteAudio.muted).toBe(true);
+    expect(remoteAudio.volume).toBe(0.4);
+  });
+
   it("activates responsive voice activity on the first loud sample and releases without a fade delay", () => {
     const changes: boolean[] = [];
     const gate = createResponsiveVoiceActivityGate((speaking) => changes.push(speaking));

@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Image from "next/image";
 import { DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type ScreenShareFrameRate, type ScreenShareResolution } from "@opencord/shared";
-import { LoaderCircle, Maximize2, MonitorUp, ScreenShare, Square, Volume2 } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, MonitorUp, ScreenShare, Square, Volume2 } from "lucide-react";
 import type { ScreenShareSettings, ScreenShareStream } from "@/hooks/use-voice-session";
 import type { ScreenShareSource } from "@/shared/screen-share";
 import { Button } from "@/components/ui/button";
@@ -22,8 +22,11 @@ const bitrates: Record<ScreenShareResolution, Record<ScreenShareFrameRate, numbe
   1080: { 15: 2_500_000, 30: 5_000_000, 60: 8_000_000 },
 };
 
+export const SCREEN_SHARE_SURFACE_CLASS_NAME = "relative grid min-h-0 w-full place-items-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl fullscreen:h-screen fullscreen:w-screen fullscreen:max-h-none fullscreen:rounded-none fullscreen:border-0";
+export const SCREEN_SHARE_CANVAS_CLASS_NAME = "block size-full min-h-0 min-w-0 bg-black object-contain";
+
 function reportScreenShare(stage: string, details: Record<string, unknown>): void {
-  void window.openCord?.screenShare?.report(`${stage} ${JSON.stringify(details)}`);
+  void window.openCord?.screenShare?.report?.(`${stage} ${JSON.stringify(details)}`);
 }
 
 export function screenShareSettings(resolution: ScreenShareResolution, frameRate: ScreenShareFrameRate, includeAudio: boolean, contentHint: "detail" | "motion"): ScreenShareSettings {
@@ -100,10 +103,12 @@ function OptionGroup({ label, values, value, format, onChange }: { label: string
   return <div><p className="mb-2 text-xs font-semibold text-slate-400">{label}</p><div className="grid gap-1 rounded-xl bg-black/25 p-1" style={{ gridTemplateColumns: `repeat(${values.length}, minmax(0, 1fr))` }}>{values.map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", value === option ? "bg-violet-500 text-white shadow" : "text-slate-500 hover:text-slate-300")}>{format(option)}</button>)}</div></div>;
 }
 
-export function ScreenShareSurface({ stream, className }: { stream: ScreenShareStream; className?: string }): React.ReactElement {
+export function ScreenShareSurface({ stream, className, fullscreenControls }: { stream: ScreenShareStream; className?: string; fullscreenControls?: ReactNode }): React.ReactElement {
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [portalReady, setPortalReady] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const attachVideo = useCallback((node: HTMLVideoElement | null): void => {
     videoRef.current = node;
     setPortalReady(Boolean(node && canvasRef.current));
@@ -111,6 +116,12 @@ export function ScreenShareSurface({ stream, className }: { stream: ScreenShareS
   const attachCanvas = useCallback((node: HTMLCanvasElement | null): void => {
     canvasRef.current = node;
     setPortalReady(Boolean(node && videoRef.current));
+  }, []);
+  useEffect(() => {
+    const handleFullscreenChange = (): void => setFullscreen(document.fullscreenElement === surfaceRef.current);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
   useEffect(() => {
     const video = videoRef.current;
@@ -196,9 +207,13 @@ export function ScreenShareSurface({ stream, className }: { stream: ScreenShareS
       context?.clearRect(0, 0, canvas.width, canvas.height);
     };
   }, [portalReady, stream]);
-  return <div className={cn("relative grid min-h-0 w-full place-items-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl", className)}><video ref={attachVideo} autoPlay playsInline muted className="pointer-events-none absolute size-px opacity-0" /><canvas ref={attachCanvas} aria-label="Демонстрация экрана" className="max-h-full max-w-full bg-black object-contain" /><button type="button" aria-label="На весь экран" onClick={() => void canvasRef.current?.parentElement?.requestFullscreen()} className="absolute bottom-3 right-3 rounded-xl bg-black/60 p-2 text-white backdrop-blur hover:bg-black/80"><Maximize2 className="size-5" /></button></div>;
+  async function toggleFullscreen(): Promise<void> {
+    if (document.fullscreenElement === surfaceRef.current) await document.exitFullscreen();
+    else await surfaceRef.current?.requestFullscreen();
+  }
+  return <div ref={surfaceRef} className={cn(SCREEN_SHARE_SURFACE_CLASS_NAME, className)}><video ref={attachVideo} autoPlay playsInline muted className="pointer-events-none absolute size-px opacity-0" /><canvas ref={attachCanvas} aria-label="Демонстрация экрана" className={SCREEN_SHARE_CANVAS_CLASS_NAME} />{fullscreen && fullscreenControls && <div data-testid="fullscreen-voice-controls" className="absolute inset-x-0 bottom-5 z-20 flex justify-center px-4">{fullscreenControls}</div>}<button type="button" aria-label={fullscreen ? "Выйти из полноэкранного режима" : "На весь экран"} onClick={() => void toggleFullscreen()} className={cn("absolute right-3 z-30 rounded-xl bg-black/60 p-2 text-white backdrop-blur transition hover:bg-black/80", fullscreen ? "top-3" : "bottom-3")} >{fullscreen ? <Minimize2 className="size-5" /> : <Maximize2 className="size-5" />}</button></div>;
 }
 
 export function ScreenShareViewer({ stream, open, onOpenChange }: { stream?: ScreenShareStream; open: boolean; onOpenChange: (open: boolean) => void }): React.ReactElement {
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-6xl"><DialogHeader><DialogTitle>{stream?.local ? "Ваша демонстрация" : `Экран: ${stream?.participantName ?? "участник"}`}</DialogTitle><DialogDescription>LiveKit автоматически адаптирует принимаемое качество под размер окна и соединение.</DialogDescription></DialogHeader>{stream && <ScreenShareSurface stream={stream} className="max-h-[68vh]" />}</DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-6xl"><DialogHeader><DialogTitle>{stream?.local ? "Ваша демонстрация" : `Экран: ${stream?.participantName ?? "участник"}`}</DialogTitle><DialogDescription>LiveKit автоматически адаптирует принимаемое качество под размер окна и соединение.</DialogDescription></DialogHeader>{stream && <ScreenShareSurface stream={stream} className="h-[68vh] max-h-[68vh]" />}</DialogContent></Dialog>;
 }

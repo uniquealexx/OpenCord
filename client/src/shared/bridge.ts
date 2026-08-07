@@ -4,6 +4,7 @@ import type { Attachment } from "@opencord/shared";
 import type { AttachmentDownloadRequest, AttachmentTransferContext } from "./attachments";
 import type { ClientUpdateState } from "./updater";
 import type { ScreenShareSelection, ScreenShareSource } from "./screen-share";
+import type { ServerProbeResult } from "./server-probe";
 
 export const IPC = {
   windowMinimize: "window:minimize",
@@ -17,6 +18,7 @@ export const IPC = {
   identityGetOrCreate: "identity:get-or-create",
   identitySignChallenge: "identity:sign-challenge",
   identityReset: "identity:reset",
+  serverProbe: "server:probe",
   deploymentSelectKey: "deployment:select-key",
   deploymentSelectBundle: "deployment:select-bundle",
   deploymentReleaseKey: "deployment:release-key",
@@ -75,6 +77,9 @@ export interface OpenCordBridge {
     selectAndUpload(context: AttachmentTransferContext): Promise<Attachment | null>;
     download(request: AttachmentDownloadRequest): Promise<boolean>;
     preview(request: AttachmentDownloadRequest): Promise<string>;
+  };
+  server?: {
+    probe(address: string): Promise<ServerProbeResult>;
   };
   screenShare?: {
     listSources(): Promise<ScreenShareSource[]>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, clientEventSchema, serverEventSchema, userAvatarSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, clientEventSchema, publicProfileSchema, serverEventSchema, userAvatarSchema, userBannerSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -31,6 +31,7 @@ describe("OpenCord protocol", () => {
     expect(() => clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "Гостиная", description: "", participantLimit: 26 })).toThrow();
     expect(clientEventSchema.parse({ type: "channel.delete", requestId: crypto.randomUUID(), channelId })).toMatchObject({ type: "channel.delete", channelId });
     expect(clientEventSchema.parse({ type: "member.role.set", requestId: crypto.randomUUID(), userId: "member-1", role: "administrator" })).toMatchObject({ role: "administrator" });
+    expect(clientEventSchema.parse({ type: "member.kick", requestId: crypto.randomUUID(), userId: "member-1" })).toMatchObject({ type: "member.kick", userId: "member-1" });
     expect(() => clientEventSchema.parse({ type: "member.role.set", requestId: crypto.randomUUID(), userId: "member-1", role: "owner" })).toThrow();
     expect(clientEventSchema.parse({ type: "server.delete", requestId: crypto.randomUUID() })).toMatchObject({ type: "server.delete" });
     expect(serverEventSchema.parse({ type: "server.deleted", serverId: crypto.randomUUID() })).toMatchObject({ type: "server.deleted" });
@@ -71,6 +72,20 @@ describe("OpenCord protocol", () => {
     expect(() => clientEventSchema.parse({ type: "message.update", requestId: crypto.randomUUID(), messageId, content: "Файл", attachmentIds: [attachmentId, attachmentId] })).toThrow();
     expect(clientEventSchema.parse({ type: "message.delete", requestId: crypto.randomUUID(), messageId })).toMatchObject({ type: "message.delete", messageId });
     expect(serverEventSchema.parse({ type: "message.deleted", messageId, channelId })).toEqual({ type: "message.deleted", messageId, channelId });
+  });
+
+  it("accepts only compact WebP user banners", () => {
+    expect(userBannerSchema.parse("data:image/webp;base64,AA==")).toBe("data:image/webp;base64,AA==");
+    expect(() => userBannerSchema.parse("data:image/jpeg;base64,AA==")).toThrow();
+    expect(() => userBannerSchema.parse(`data:image/webp;base64,${"A".repeat(Math.ceil(USER_BANNER_MAX_BYTES / 3) * 4 + 33)}`)).toThrow();
+  });
+
+  it("validates user presence and defaults older profiles to online", () => {
+    expect(publicProfileSchema.parse({ displayName: "Лина", avatar: null })).toMatchObject({ status: "online", bio: "", banner: null });
+    expect(publicProfileSchema.parse({ displayName: "Лина", bio: "  Пишу открытый код  ", avatar: null, status: "invisible" })).toMatchObject({ status: "invisible", bio: "Пишу открытый код" });
+    expect(() => publicProfileSchema.parse({ displayName: "Лина", avatar: null, status: "offline" })).toThrow();
+    expect(() => publicProfileSchema.parse({ displayName: "Лина", bio: "x".repeat(161), avatar: null })).toThrow();
+    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", displayName: "Лина", bio: "Пишу открытый код", avatar: null, banner: "data:image/webp;base64,AA==", status: "dnd", role: "member" } })).toMatchObject({ member: { status: "dnd", bio: "Пишу открытый код", banner: "data:image/webp;base64,AA==" } });
   });
 
   it("validates server identity, attachment and screen-share settings", () => {

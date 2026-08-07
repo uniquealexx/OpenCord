@@ -5,12 +5,14 @@ import { createPortal } from "react-dom";
 import { ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { cn } from "@/lib/utils";
+import type { PublicMemberStatus } from "@opencord/shared";
 
-type PreviewStatus = "online" | "idle" | "offline";
+type PreviewStatus = PublicMemberStatus;
 
 export interface PreviewProfile {
   displayName: string;
   avatar?: string | null;
+  banner?: string | null;
   color?: string;
   status?: PreviewStatus;
   role?: string;
@@ -20,13 +22,15 @@ export interface PreviewProfile {
 
 const statusLabels: Record<PreviewStatus, string> = {
   online: "В сети",
-  idle: "Неактивен",
+  idle: "Недоступен",
+  dnd: "Не беспокоить",
   offline: "Не в сети",
 };
 
 const statusColors: Record<PreviewStatus, string> = {
   online: "bg-emerald-400",
   idle: "bg-amber-300",
+  dnd: "bg-red-400",
   offline: "bg-slate-500",
 };
 
@@ -82,7 +86,11 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
     <button ref={triggerRef} type="button" aria-label={label ?? `Открыть профиль ${profile.displayName}`} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
     {open && typeof document !== "undefined" && createPortal(
       <div ref={cardRef} role="dialog" aria-label={`Профиль ${profile.displayName}`} className="fixed z-[100] w-[300px] overflow-hidden rounded-2xl border border-white/10 bg-[#151a27] shadow-[0_24px_80px_rgba(0,0,0,.72)]" style={position}>
-        <div className="h-[74px] bg-[radial-gradient(circle_at_18%_0%,rgba(139,92,246,.7),transparent_52%),linear-gradient(120deg,#312e81,#164e63)]" />
+        <div data-testid="profile-banner" className="relative h-[96px] overflow-hidden bg-[radial-gradient(circle_at_18%_0%,rgba(139,92,246,.7),transparent_52%),linear-gradient(120deg,#312e81,#164e63)]">
+          {/* Public profile banners are compact data URLs supplied by OpenCord Server. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {profile.banner && <img src={profile.banner} alt="" className="absolute inset-0 size-full object-cover" />}
+        </div>
         <div className="px-4 pb-4">
           <div className="-mt-9 flex items-end justify-between">
             <div data-testid="profile-avatar-frame" className="rounded-[28%] bg-[#151a27] p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>

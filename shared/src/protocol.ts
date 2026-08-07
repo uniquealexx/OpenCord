@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 18 as const;
+export const PROTOCOL_VERSION = 22 as const;
 
 export const MEBIBYTE = 1024 * 1024;
 export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
@@ -27,17 +27,26 @@ export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
 export const voiceParticipantLimitSchema = z.number().int().min(VOICE_PARTICIPANT_LIMIT_UNLIMITED).max(VOICE_PARTICIPANT_LIMIT_MAX);
 
 export const memberRoleSchema = z.enum(["owner", "administrator", "member"]);
-export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
+export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
 
 export const serverAvatarSchema = z.string().max(1_500_000).regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/u).nullable();
 
 export const USER_AVATAR_MAX_BYTES = 96 * 1024;
 const USER_AVATAR_MAX_DATA_URL_LENGTH = Math.ceil(USER_AVATAR_MAX_BYTES / 3) * 4 + 32;
 export const userAvatarSchema = z.string().max(USER_AVATAR_MAX_DATA_URL_LENGTH).regex(/^data:image\/webp;base64,[A-Za-z0-9+/]+=*$/u).nullable();
+export const USER_BANNER_MAX_BYTES = 256 * 1024;
+const USER_BANNER_MAX_DATA_URL_LENGTH = Math.ceil(USER_BANNER_MAX_BYTES / 3) * 4 + 32;
+export const userBannerSchema = z.string().max(USER_BANNER_MAX_DATA_URL_LENGTH).regex(/^data:image\/webp;base64,[A-Za-z0-9+/]+=*$/u).nullable();
+
+export const userStatusSchema = z.enum(["online", "idle", "dnd", "invisible"]);
+export const publicMemberStatusSchema = z.enum(["online", "idle", "dnd", "offline"]);
 
 export const publicProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(32),
+  bio: z.string().trim().max(160).default(""),
   avatar: userAvatarSchema.default(null),
+  banner: userBannerSchema.default(null),
+  status: userStatusSchema.default("online"),
 });
 
 export const channelSchema = z.object({
@@ -65,8 +74,10 @@ export const voicePresenceSchema = z.object({
 export const memberSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1).max(32),
+  bio: z.string().max(160),
   avatar: userAvatarSchema,
-  status: z.enum(["online", "offline"]),
+  banner: userBannerSchema,
+  status: publicMemberStatusSchema,
   role: memberRoleSchema,
 });
 
@@ -132,6 +143,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("channel.update"), requestId: requestIdSchema, channelId: z.string().uuid(), name: z.string().trim().min(1).max(48), description: z.string().trim().max(120).default(""), participantLimit: voiceParticipantLimitSchema.nullable() }),
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
+  z.object({ type: z.literal("member.kick"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape }),
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
@@ -167,6 +179,8 @@ export const serverEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
+export type UserStatus = z.infer<typeof userStatusSchema>;
+export type PublicMemberStatus = z.infer<typeof publicMemberStatusSchema>;
 export type Channel = z.infer<typeof channelSchema>;
 export type Member = z.infer<typeof memberSchema>;
 export type MemberRole = z.infer<typeof memberRoleSchema>;

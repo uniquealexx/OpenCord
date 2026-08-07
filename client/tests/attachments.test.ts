@@ -15,4 +15,9 @@ describe("attachment preview validation", () => {
   it("rejects executable or unrelated data URLs", () => {
     expect(() => attachmentPreviewResultSchema.parse("data:text/html;base64,AA==")).toThrow();
   });
+
+  it("accepts a local cached-video URL but rejects remote media URLs", () => {
+    expect(attachmentPreviewResultSchema.parse("file:///C:/Temp/opencord-media-previews/video.mp4")).toBe("file:///C:/Temp/opencord-media-previews/video.mp4");
+    expect(() => attachmentPreviewResultSchema.parse("https://example.com/video.mp4")).toThrow();
+  });
 });

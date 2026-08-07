@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell, type DesktopCapturerSource, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeImage, session, shell, Tray, type DesktopCapturerSource, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { IPC } from "../src/shared/bridge";
@@ -9,26 +9,33 @@ import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
 import { GitHubReleaseBundleProvider, githubReleaseManifestUrl, LocalServerBundleProvider, ReleaseAwareServerBundleProvider } from "./server-bundle";
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
-import { downloadAttachment, previewAttachment, uploadAttachment } from "./attachments";
+import { downloadAttachment, prepareAttachmentPreviewDirectory, previewAttachment, uploadAttachment } from "./attachments";
 import { autoUpdater } from "electron-updater";
 import { ClientUpdateManager, runRequiredStartupUpdate } from "./client-updater";
 import type { ClientUpdateState } from "../src/shared/updater";
 import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 import { isAllowedRendererPermission } from "./permissions";
+import { probeOpenCordServer } from "./server-probe";
+import { shouldHideWindowOnClose } from "./window-lifecycle";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
 let updateWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let store: ClientStateStore;
 let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
 let serverBundleProvider: ReleaseAwareServerBundleProvider;
 let clientUpdateManager: ClientUpdateManager;
+let attachmentPreviewDirectory: string;
 let bundleCleanupStarted = false;
 let clientUpdateInstalling = false;
 let startupGateCompleted = false;
+let quitting = false;
+let trayNoticeShown = false;
 const selectedSshKeys = new Map<string, string>();
 let pendingScreenShare: { source: DesktopCapturerSource; includeAudio: boolean; expiresAt: number } | null = null;
+const TRAY_ICON_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACuSURBVFhH7c5LCsMwEARRHzRHyd0dBFmYl9FIY0NwiBpqNZ+ubVt55/nY929i/xL4PYEo7mTYPyVQibdi/1DgTPxxWiCKO5W9hv1dAeM8wjhv2B8KGOcZxrn9QwFnM2T39t9PIDuu0Ptj/xJYAh8C2fEs2b399xeInmQY5/aHAjOPIozzhv1dgehhizuVvYb9qUDv+Sj+uCRQlfBW7J8SOBLFnQz7ywJXsX8J/G9ebgdsQL8M5kwAAAAASUVORK5CYII=";
 
 function isTrustedRenderer(url: string): boolean {
   if (developmentUrl) {
@@ -99,9 +106,16 @@ function createWindow(): void {
   });
 
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("close", (event) => {
+    if (!shouldHideWindowOnClose(quitting, clientUpdateInstalling)) return;
+    event.preventDefault();
+    mainWindow?.hide();
+    showTrayNotice();
+  });
   mainWindow.on("maximize", () => mainWindow?.webContents.send(IPC.windowMaximizedChanged, true));
   mainWindow.on("unmaximize", () => mainWindow?.webContents.send(IPC.windowMaximizedChanged, false));
   mainWindow.on("closed", () => { mainWindow = null; });
+  createTray();
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) void shell.openExternal(url);
@@ -123,6 +137,34 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(path.join(__dirname, "..", "out", "index.html"));
   }
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray(): void {
+  if (tray && !tray.isDestroyed()) return;
+  const icon = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL).resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.setToolTip("OpenCord");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Открыть OpenCord", click: showMainWindow },
+    { type: "separator" },
+    { label: "Выйти", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("click", showMainWindow);
+  tray.on("double-click", showMainWindow);
+}
+
+function showTrayNotice(): void {
+  if (trayNoticeShown || process.platform !== "win32" || !tray || tray.isDestroyed()) return;
+  trayNoticeShown = true;
+  tray.displayBalloon({ iconType: "info", title: "OpenCord продолжает работать", content: "Приложение скрыто в системном трее. Для полного выхода используйте меню значка OpenCord." });
 }
 
 function createUpdateWindow(): void {
@@ -234,6 +276,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.identityGetOrCreate, () => identityStore.getOrCreate());
   ipcMain.handle(IPC.identitySignChallenge, (_event, challenge: unknown) => identityStore.signChallenge(challenge));
   ipcMain.handle(IPC.identityReset, () => identityStore.reset());
+  ipcMain.handle(IPC.serverProbe, (event, input: unknown) => {
+    requireMainRenderer(event);
+    return probeOpenCordServer(input);
+  });
   ipcMain.handle(IPC.deploymentSelectBundle, () => serverBundleProvider.select());
   ipcMain.handle(IPC.deploymentSelectKey, async () => {
     const options: OpenDialogOptions = {
@@ -273,7 +319,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.attachmentPreview, async (_event, input: unknown) => {
     const request = attachmentDownloadRequestSchema.parse(input);
-    return previewAttachment(request.serverAddress, request.sessionToken, request.attachment);
+    return previewAttachment(request.serverAddress, request.sessionToken, request.attachment, attachmentPreviewDirectory);
   });
   ipcMain.handle(IPC.updateGetState, () => clientUpdateManager.getState());
   ipcMain.handle(IPC.updateCheck, () => clientUpdateManager.check());
@@ -289,6 +335,7 @@ app.setAppUserModelId("org.opencord.desktop");
 
 void app.whenReady().then(async () => {
   configureMediaPermissions();
+  attachmentPreviewDirectory = await prepareAttachmentPreviewDirectory(app.getPath("temp"));
   store = new ClientStateStore(app.getPath("userData"));
   identityStore = new IdentityStore(app.getPath("userData"));
   const releaseDirectory = app.isPackaged ? path.join(process.resourcesPath, "server-bundles") : path.resolve(app.getAppPath(), "..", "release");
@@ -345,14 +392,17 @@ void app.whenReady().then(async () => {
   });
   registerIpc();
   await passStartupUpdateGate();
-  app.on("activate", () => { if (startupGateCompleted && BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on("activate", () => { if (startupGateCompleted) showMainWindow(); });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" && (quitting || !tray || tray.isDestroyed())) app.quit();
 });
 
 app.on("before-quit", (event) => {
+  quitting = true;
+  if (tray && !tray.isDestroyed()) tray.destroy();
+  tray = null;
   if (clientUpdateInstalling) return;
   if (!serverBundleProvider || bundleCleanupStarted) return;
   event.preventDefault();

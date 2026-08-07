@@ -1,13 +1,17 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { stat, rename, rm } from "node:fs/promises";
+import { mkdir, stat, rename, rm } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { attachmentSchema, type Attachment } from "@opencord/shared";
 
-const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
+const MAX_INLINE_PREVIEW_BYTES = 10 * 1024 * 1024;
+const IMAGE_PREVIEW_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const VIDEO_PREVIEW_EXTENSIONS = new Map<string, string>([["video/mp4", ".mp4"], ["video/webm", ".webm"], ["video/ogg", ".ogv"]]);
+const pendingVideoPreviews = new Map<string, Promise<void>>();
 
 export async function uploadAttachment(filePath: string, serverAddress: string, sessionToken: string, maxAttachmentBytes: number | null): Promise<Attachment> {
   const info = await stat(filePath);
@@ -63,9 +67,21 @@ export async function downloadAttachment(serverAddress: string, sessionToken: st
   }
 }
 
-export async function previewAttachment(serverAddress: string, sessionToken: string, attachment: Attachment): Promise<string> {
-  if (!new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/webm", "video/ogg"]).has(attachment.mimeType)) throw new Error("Предпросмотр этого типа файла недоступен");
-  if (attachment.sizeBytes > MAX_PREVIEW_BYTES) throw new Error("Предпросмотр файлов больше 10 МБ недоступен — скачайте файл");
+export async function previewAttachment(serverAddress: string, sessionToken: string, attachment: Attachment, videoPreviewDirectory?: string): Promise<string> {
+  const videoExtension = VIDEO_PREVIEW_EXTENSIONS.get(attachment.mimeType);
+  if (videoExtension) {
+    if (!videoPreviewDirectory) throw new Error("Каталог предпросмотра видео не настроен");
+    const target = path.join(videoPreviewDirectory, `${attachment.sha256}${videoExtension}`);
+    let pending = pendingVideoPreviews.get(target);
+    if (!pending) {
+      pending = ensureCachedVideo(serverAddress, sessionToken, attachment, target).finally(() => pendingVideoPreviews.delete(target));
+      pendingVideoPreviews.set(target, pending);
+    }
+    await pending;
+    return pathToFileURL(target).toString();
+  }
+  if (!IMAGE_PREVIEW_TYPES.has(attachment.mimeType)) throw new Error("Предпросмотр этого типа файла недоступен");
+  if (attachment.sizeBytes > MAX_INLINE_PREVIEW_BYTES) throw new Error("Предпросмотр изображений больше 10 МБ недоступен — скачайте файл");
   const endpoint = attachmentUrl(serverAddress, attachment.id);
   const { response, outgoing } = openRequest(endpoint, "GET", { authorization: `Bearer ${sessionToken}` });
   outgoing.end();
@@ -75,6 +91,24 @@ export async function previewAttachment(serverAddress: string, sessionToken: str
   if (contents.length !== attachment.sizeBytes) throw new Error("Размер медиафайла не совпадает с метаданными");
   if (createHash("sha256").update(contents).digest("hex") !== attachment.sha256) throw new Error("Контрольная сумма медиафайла не совпадает");
   return `data:${attachment.mimeType};base64,${contents.toString("base64")}`;
+}
+
+export async function prepareAttachmentPreviewDirectory(parentDirectory: string): Promise<string> {
+  const directory = path.join(parentDirectory, "opencord-media-previews");
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  return directory;
+}
+
+async function ensureCachedVideo(serverAddress: string, sessionToken: string, attachment: Attachment, target: string): Promise<void> {
+  try {
+    const existing = await stat(target);
+    if (existing.isFile() && existing.size === attachment.sizeBytes) return;
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
+  await rm(target, { force: true });
+  await downloadAttachment(serverAddress, sessionToken, attachment, target);
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -118,7 +152,7 @@ async function readBinaryResponse(response: IncomingMessage): Promise<Buffer> {
   for await (const chunk of response) {
     const buffer = Buffer.from(chunk as Uint8Array);
     size += buffer.length;
-    if (size > MAX_PREVIEW_BYTES) throw new Error("Сервер прислал слишком большой медиафайл");
+    if (size > MAX_INLINE_PREVIEW_BYTES) throw new Error("Сервер прислал слишком большой медиафайл");
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
