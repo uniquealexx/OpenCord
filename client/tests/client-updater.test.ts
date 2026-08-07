@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,12 +66,21 @@ const temporaryDirectories: string[] = [];
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
 describe("Electron client updater", () => {
+  it("forces updater-invoked assisted installers into silent mode", async () => {
+    const packageConfig = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+    const installerInclude = await readFile(path.join(process.cwd(), "build", "installer.nsh"), "utf8");
+
+    expect(packageConfig.build.nsis.include).toBe("build/installer.nsh");
+    expect(installerInclude).toContain("${isUpdated}");
+    expect(installerInclude).toContain("SetSilent silent");
+  });
+
   it("selects a newer beta release and keeps stable clients off prereleases", async () => {
     await expect(resolveClientRelease(fetcher, "0.1.0-beta.1", "beta")).resolves.toMatchObject({ version, releaseChannel: "beta" });
     await expect(resolveClientRelease(fetcher, "0.1.0", "stable")).resolves.toBeNull();
   });
 
-  it("checks metadata and verifies the downloaded NSIS installer before installation", async () => {
+  it("checks the downloaded NSIS installer, installs silently, and forces an app restart", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "opencord-updater-test-"));
     temporaryDirectories.push(directory);
     const installerPath = path.join(directory, installerName);
@@ -89,7 +98,7 @@ describe("Electron client updater", () => {
     expect(updater.autoInstallOnAppQuit).toBe(false);
     expect(updater.channel).toBe("beta");
     expect(states).toEqual(expect.arrayContaining(["checking", "available", "downloading", "downloaded"]));
-    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
   it("rejects a downloaded installer that does not match the manifest", async () => {

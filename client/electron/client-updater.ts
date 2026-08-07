@@ -106,7 +106,7 @@ export class ClientUpdateManager {
 
   install(): void {
     if (this.state.status !== "downloaded") throw new Error("Обновление клиента ещё не загружено");
-    this.updater.quitAndInstall(false, true);
+    this.updater.quitAndInstall(true, true);
   }
 
   private async performCheck(): Promise<ClientUpdateState> {

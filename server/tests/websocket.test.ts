@@ -42,6 +42,12 @@ describe("WebSocket chat flow", () => {
     const result = await history;
     expect(result.type === "history.result" && result.messages.some((message) => message.content === "Сообщение между двумя клиентами")).toBe(true);
 
+    const search = waitForEvent(second.socket, "message.search.result");
+    second.socket.send(JSON.stringify({ type: "message.search", requestId: randomUUID(), filters: { query: "двумя", authorId: first.userId, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 } }));
+    const searchResult = await search;
+    expect(searchResult.type === "message.search.result" && searchResult.result).toMatchObject({ total: 1, offset: 0, hasMore: false });
+    expect(searchResult.type === "message.search.result" && searchResult.result.messages[0]?.content).toBe("Сообщение между двумя клиентами");
+
     const closed = [once(first.socket, "close"), once(second.socket, "close")];
     first.socket.close();
     second.socket.close();

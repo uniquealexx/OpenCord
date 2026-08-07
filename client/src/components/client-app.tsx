@@ -2,14 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import type { Attachment, MemberRole, Permission, ServerEvent, VoiceCapability, VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Smile, Trash2, UserCog, Users, Volume2, VolumeX, X } from "lucide-react";
+import type { Attachment, MemberRole, MessageSearchFilters, MessageSearchResult, Permission, ServerEvent, VoiceCapability, VoicePresence } from "@opencord/shared";
+import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, MessageCircle, Mic, MicOff, Minimize2, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
+import { EmojiPicker } from "@/components/emoji-picker";
 import { Onboarding } from "@/components/onboarding";
 import { ProfileDialog } from "@/components/profile-dialog";
+import { ProfilePreview } from "@/components/profile-preview";
 import { ServerDialog } from "@/components/server-dialog";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
+import { ServerSearchPanel } from "@/components/server-search-panel";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -40,6 +43,11 @@ export function ClientApp(): React.ReactElement {
   const [voicePresenceByServer, setVoicePresenceByServer] = useState<Record<string, VoicePresence[]>>({});
   const [voiceAuthorization, setVoiceAuthorization] = useState<VoiceAuthorization | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResult, setSearchResult] = useState<MessageSearchResult | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const searchRequestRef = useRef<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
   const connection = useServerConnection(connectionServer, state?.profile, {
@@ -62,6 +70,12 @@ export function ClientApp(): React.ReactElement {
     onMessage: (message) => commit((current) => current.messages.some((item) => item.id === message.id) ? current : { ...current, messages: [...current.messages, toLocalMessage(message)] }),
     onMessageUpdated: (message) => commit((current) => ({ ...current, messages: current.messages.map((item) => item.id === message.id ? toLocalMessage(message) : item) })),
     onMessageDeleted: (messageId) => commit((current) => ({ ...current, messages: current.messages.filter((message) => message.id !== messageId) })),
+    onSearchResult: (requestId, result) => {
+      if (requestId !== searchRequestRef.current) return;
+      setSearchLoading(false);
+      setSearchResult((current) => result.offset > 0 && current ? { ...result, offset: 0, messages: [...current.messages, ...result.messages] } : result);
+      commit((current) => ({ ...current, messages: [...current.messages.filter((message) => !result.messages.some((found) => found.id === message.id)), ...result.messages.map(toLocalMessage)] }));
+    },
     onMember: (member) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: [...server.members.filter((item) => item.id !== member.id), { id: member.id, displayName: member.displayName, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar }] }), messages: current.messages.map((message) => message.authorId === member.id ? { ...message, authorName: member.displayName, authorAvatar: member.avatar } : message) })),
     onMemberRemoved: (userId) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: server.members.filter((member) => member.id !== userId) }), messages: current.messages.map((message) => message.authorId === userId ? { ...message, authorAvatar: null } : message) })),
     onServerDeleted: () => {
@@ -83,7 +97,7 @@ export function ClientApp(): React.ReactElement {
       if (connectionServer) setVoicePresenceByServer((current) => ({ ...current, [connectionServer.id]: (current[connectionServer.id] ?? []).filter((item) => item.userId !== userId || item.channelId !== channelId) }));
       if (userId === currentAccess?.id) { setVoiceAuthorization(null); setNotice("Вы отключены от голосового канала"); }
     },
-    onError: setNotice,
+    onError: (message) => { setSearchLoading(false); setNotice(message); },
   }, connectionRevision);
   const voice = useVoiceSession(voiceAuthorization, state?.preferences ?? createDefaultState().preferences, setNotice);
   const updateVoiceState = connection.updateVoiceState;
@@ -106,6 +120,16 @@ export function ClientApp(): React.ReactElement {
   }, []);
 
   useEffect(() => { messageEndRef.current?.scrollIntoView?.({ block: "end" }); }, [state?.messages, state?.activeChannelId]);
+  useEffect(() => {
+    if (!highlightedMessageId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const element = document.getElementById(`message-${highlightedMessageId}`);
+      element?.scrollIntoView({ block: "center", behavior: "smooth" });
+      element?.animate([{ backgroundColor: "rgba(139,92,246,.28)" }, { backgroundColor: "rgba(139,92,246,0)" }], { duration: 2_200, easing: "ease-out" });
+    });
+    const timer = window.setTimeout(() => setHighlightedMessageId(null), 2_500);
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, [highlightedMessageId, state?.activeChannelId]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(null), 2800); return () => window.clearTimeout(timer); }, [notice]);
 
   function commit(update: (current: PersistedClientState) => PersistedClientState): void {
@@ -131,6 +155,9 @@ export function ClientApp(): React.ReactElement {
   const updatePreset = activeServer ? activeServer.deployment ?? deploymentPresetFromServer(activeServer) : undefined;
   const activeChannel = activeServer?.channels.find((channel) => channel.id === state.activeChannelId) ?? activeServer?.channels.find((channel) => channel.kind === "text");
   const messages = activeChannel ? state.messages.filter((message) => message.channelId === activeChannel.id) : [];
+  const searchMembers = activeServer && !activeServer.members.some((member) => member.id === (currentAccess?.id ?? profile.id))
+    ? [{ id: currentAccess?.id ?? profile.id, displayName: profile.displayName, role: "Вы", serverRole: currentAccess?.role, status: "online" as const, avatarColor: "#7c5cff", avatar: profile.avatar }, ...activeServer.members]
+    : activeServer?.members ?? [];
 
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
@@ -148,6 +175,27 @@ export function ClientApp(): React.ReactElement {
     commit((current) => ({ ...current, activeChannelId: channelId }));
     setDraft("");
     setPendingAttachments([]);
+  }
+
+  function searchServer(filters: MessageSearchFilters): void {
+    if (!activeServer || !state) return;
+    setSearchLoading(true);
+    if (!activeServer.address) {
+      const result = searchLocalMessages(state.messages.filter((message) => activeServer.channels.some((channel) => channel.id === message.channelId)), filters);
+      setSearchResult((current) => result.offset > 0 && current ? { ...result, offset: 0, messages: [...current.messages, ...result.messages] } : result);
+      setSearchLoading(false);
+      return;
+    }
+    const requestId = connection.searchMessages(filters);
+    if (!requestId) { setSearchLoading(false); setNotice("Поиск станет доступен после подключения к серверу"); return; }
+    searchRequestRef.current = requestId;
+    if (filters.offset === 0) setSearchResult(null);
+  }
+
+  function openSearchMessage(message: MockMessage): void {
+    commit((current) => ({ ...current, activeChannelId: message.channelId, messages: current.messages.some((item) => item.id === message.id) ? current.messages : [...current.messages, message] }));
+    setSearchOpen(false);
+    setHighlightedMessageId(message.id);
   }
 
   function joinVoiceChannel(channel: MockChannel): void {
@@ -319,20 +367,21 @@ export function ClientApp(): React.ReactElement {
       <ServerRail servers={state.servers} activeId={activeServer?.id} onHome={openHome} onSelect={selectServer} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} />
       {activeServer ? <>
         <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={voice.muted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => void voice.setMuted(value)} onDeafened={(value) => void voice.setDeafened(value)} />
-        {activeChannel ? <section className="flex min-w-0 flex-1 flex-col bg-[#111520]">
-          <ChatHeader channelName={activeChannel?.name ?? "канал"} description={activeChannel?.description ?? ""} connectionStatus={activeServer.address ? connection.status : "demo"} memberList={state.preferences.showMemberList} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} />
+        {activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#111520]">
+          <ChatHeader channelName={activeChannel?.name ?? "канал"} description={activeChannel?.description ?? ""} connectionStatus={activeServer.address ? connection.status : "demo"} memberList={state.preferences.showMemberList} searchOpen={searchOpen} onSearch={() => setSearchOpen(true)} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} />
           <ProtocolNotice status={connection.status} />
           <div className="flex min-h-0 flex-1">
             <div className="flex min-w-0 flex-1 flex-col">
               <div className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5", state.preferences.compactMode && "py-3")}>
                 <ChannelIntro name={activeChannel?.name ?? "канал"} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
-                {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} />) : <p className="py-8 text-center text-sm text-slate-600">{ru.chat.empty}</p>}
+                {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} member={activeServer.members.find((member) => member.id === message.authorId)} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} />) : <p className="py-8 text-center text-sm text-slate-600">{ru.chat.empty}</p>}
                 <div ref={messageEndRef} />
               </div>
               <Composer draft={draft} channelName={activeChannel?.name ?? "канал"} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} />
             </div>
             {state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} />}
           </div>
+          <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => setSearchOpen(false)} onSearch={searchServer} onOpenMessage={openSearchMessage} />
         </section> : <NoTextChannelView server={activeServer} profile={state.profile} access={currentAccess} connectionStatus={activeServer.address ? connection.status : "demo"} showMembers={state.preferences.showMemberList} onCreate={() => setModal("channel")} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} onSetRole={setServerMemberRole} />}
       </> : <HomeScreen serverCount={state.servers.length} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} />}
       {notice && <div role="status" className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 rounded-xl border border-white/10 bg-[#191e2b] px-4 py-2.5 text-xs font-medium text-slate-200 shadow-2xl">{notice}</div>}
@@ -419,7 +468,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const displayName = member?.displayName ?? (isCurrentUser ? profile.displayName : "Участник");
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
-  return <div className="ml-6 flex min-h-9 items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200">
+  return <ProfilePreview side="right" wrapperClassName="ml-6 flex" triggerClassName="flex min-h-9 w-[224px] items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200" profile={{ displayName, avatar, color: member?.avatarColor, status: member?.status ?? (isCurrentUser ? "online" : "offline"), role: member?.role, bio: isCurrentUser ? profile.bio : undefined, isCurrentUser }}>
     <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0e121b] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
     <span className="min-w-0 flex-1 truncate">{displayName}{isCurrentUser && " (вы)"}</span>
     {participant.deafened
@@ -427,7 +476,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
       : participant.muted
         ? <span aria-label={`Микрофон выключен: ${displayName}`} title="Микрофон выключен" className="grid size-6 shrink-0 place-items-center text-red-300"><MicOff className="size-3.5" /></span>
         : null}
-  </div>;
+  </ProfilePreview>;
 }
 
 function VoicePanel({ channel, status, muted, deafened, onMuted, onDeafened, onLeave }: { channel?: MockChannel; status: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted: boolean; deafened: boolean; onMuted: (value: boolean) => void; onDeafened: (value: boolean) => void; onLeave: () => void }): React.ReactElement {
@@ -498,8 +547,8 @@ function NoTextChannelView({ server, profile, access, connectionStatus, showMemb
   </section>;
 }
 
-function ChatHeader({ channelName, description, connectionStatus, memberList, onToggleMembers }: { channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; onToggleMembers: () => void }): React.ReactElement {
-  return <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[.055] px-4 shadow-sm"><Hash className="size-5 text-slate-500" /><h2 className="font-semibold text-slate-100">{channelName}</h2><span className="h-5 w-px bg-white/8" /><p className="min-w-0 truncate text-xs text-slate-500">{description}</p><span className={cn("mr-auto rounded-full px-2 py-1 text-[10px] font-semibold", connectionStatus === "connected" ? "bg-emerald-400/10 text-emerald-300" : connectionStatus === "error" || isProtocolIncompatible(connectionStatus) ? "bg-red-400/10 text-red-300" : "bg-white/5 text-slate-500")}>{connectionLabel(connectionStatus)}</span><button className="text-slate-500 hover:text-slate-200"><Bell className="size-4" /></button><button aria-label={ru.chat.members} onClick={onToggleMembers} className={cn("text-slate-500 hover:text-slate-200", memberList && "text-violet-300")}><Users className="size-5" /></button><div className="flex h-8 w-44 items-center gap-2 rounded-lg bg-black/20 px-2.5 text-xs text-slate-600"><Search className="size-3.5" />Поиск</div><HelpCircle className="size-4 text-slate-600" /></header>;
+function ChatHeader({ channelName, description, connectionStatus, memberList, searchOpen, onSearch, onToggleMembers }: { channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; searchOpen: boolean; onSearch: () => void; onToggleMembers: () => void }): React.ReactElement {
+  return <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[.055] px-4 shadow-sm"><Hash className="size-5 text-slate-500" /><h2 className="font-semibold text-slate-100">{channelName}</h2><span className="h-5 w-px bg-white/8" /><p className="min-w-0 truncate text-xs text-slate-500">{description}</p><span className={cn("mr-auto rounded-full px-2 py-1 text-[10px] font-semibold", connectionStatus === "connected" ? "bg-emerald-400/10 text-emerald-300" : connectionStatus === "error" || isProtocolIncompatible(connectionStatus) ? "bg-red-400/10 text-red-300" : "bg-white/5 text-slate-500")}>{connectionLabel(connectionStatus)}</span><button className="text-slate-500 hover:text-slate-200"><Bell className="size-4" /></button><button aria-label={ru.chat.members} onClick={onToggleMembers} className={cn("text-slate-500 hover:text-slate-200", memberList && "text-violet-300")}><Users className="size-5" /></button><button type="button" aria-label="Открыть поиск по серверу" onClick={onSearch} className={cn("flex h-8 w-44 items-center gap-2 rounded-lg bg-black/20 px-2.5 text-left text-xs text-slate-600 hover:bg-black/30 hover:text-slate-300", searchOpen && "text-violet-300")}><Search className="size-3.5" />Поиск</button><HelpCircle className="size-4 text-slate-600" /></header>;
 }
 
 function connectionLabel(status: ConnectionStatus): string {
@@ -518,7 +567,7 @@ export function ProtocolNotice({ status }: { status: ConnectionStatus }): React.
 
 function ChannelIntro({ name, description, networked }: { name: string; description: string; networked: boolean }): React.ReactElement { return <div className="mb-6 mt-auto pt-8"><div className="mb-3 grid size-14 place-items-center rounded-2xl bg-white/7 text-slate-300"><Hash className="size-7" /></div><h1 className="text-2xl font-bold tracking-tight text-white">Добро пожаловать в #{name}</h1><p className="mt-1 text-sm text-slate-500">{description}</p><p className="mt-3 inline-flex items-center gap-2 rounded-lg bg-violet-400/6 px-2.5 py-1.5 text-[11px] text-violet-200/60"><MessageCircle className="size-3.5" />{networked ? ru.chat.serverNotice : ru.chat.mockNotice}</p></div>; }
 
-export function Message({ message, compact, grouped, ownAvatar, currentUserId, canManageMessages, previewAvailable, canAttach, uploading, onAttach, onEdit, onDelete, onDownload, onPreview }: { message: MockMessage; compact: boolean; grouped: boolean; ownAvatar: string | null; currentUserId?: string; canManageMessages: boolean; previewAvailable: boolean; canAttach: boolean; uploading: boolean; onAttach: () => Promise<Attachment | null>; onEdit: (message: MockMessage, content: string, attachments: Attachment[]) => boolean; onDelete: (message: MockMessage) => boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string> }): React.ReactElement {
+export function Message({ message, member, profile, compact, grouped, ownAvatar, currentUserId, canManageMessages, previewAvailable, canAttach, uploading, onAttach, onEdit, onDelete, onDownload, onPreview }: { message: MockMessage; member?: MockMember; profile?: LocalProfile | null; compact: boolean; grouped: boolean; ownAvatar: string | null; currentUserId?: string; canManageMessages: boolean; previewAvailable: boolean; canAttach: boolean; uploading: boolean; onAttach: () => Promise<Attachment | null>; onEdit: (message: MockMessage, content: string, attachments: Attachment[]) => boolean; onDelete: (message: MockMessage) => boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string> }): React.ReactElement {
   const time = new Intl.DateTimeFormat("ru", { hour: "2-digit", minute: "2-digit" }).format(new Date(message.createdAt));
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -526,6 +575,7 @@ export function Message({ message, compact, grouped, ownAvatar, currentUserId, c
   const [editAttachments, setEditAttachments] = useState<Attachment[]>(message.attachments ?? []);
   const own = currentUserId === message.authorId;
   const canDelete = own || canManageMessages;
+  const previewProfile = { displayName: message.authorName, avatar: message.authorAvatar ?? ownAvatar, color: message.authorColor, status: member?.status ?? (own ? "online" as const : "offline" as const), role: member?.role, bio: own ? profile?.bio : undefined, isCurrentUser: own };
   const saveEdit = (): void => {
     const content = editDraft.trim();
     const originalIds = (message.attachments ?? []).map((attachment) => attachment.id);
@@ -552,9 +602,9 @@ export function Message({ message, compact, grouped, ownAvatar, currentUserId, c
     const attachment = await onAttach();
     if (attachment) setEditAttachments((current) => current.some((item) => item.id === attachment.id) ? current : [...current, attachment].slice(0, 5));
   };
-  return <article onContextMenu={(event) => { if (editing || (!own && !canDelete)) return; event.preventDefault(); setMenuOpen(true); }} className={cn("group relative flex gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0")}>
-    {!grouped || compact ? <Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} /> : <span className="w-9 shrink-0 text-right text-[9px] text-transparent group-hover:text-slate-600">{time}</span>}
-    <div className="min-w-0 flex-1">{(!grouped || compact) && <div className="flex items-baseline gap-2"><span className="text-sm font-semibold text-slate-200">{message.authorName}</span><time className="text-[10px] text-slate-600">{time}</time>{message.editedAt && <span className="text-[10px] text-slate-600">(изменено)</span>}</div>}{editing ? <div className="mt-1 rounded-xl border border-violet-400/40 bg-[#0d111a] p-2 focus-within:border-violet-400">{editAttachments.length ? <div className="mb-2 flex flex-wrap gap-2">{editAttachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-lg border border-white/8 bg-[#171c29] px-2.5 py-1.5 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={`Открепить ${attachment.fileName}`} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className="flex items-start gap-2"><button type="button" title="Прикрепить файл (до 10 МБ)" aria-label="Прикрепить файл к редактируемому сообщению" onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#0d111a] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><textarea autoFocus aria-label="Редактирование сообщения" value={editDraft} maxLength={4000} onChange={(event) => setEditDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") cancelEdit(); else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); saveEdit(); } }} className="min-h-20 w-full resize-y bg-transparent px-1 py-1 text-sm text-slate-200 outline-none" /></div><div className="mt-1 pl-9 text-[10px] text-slate-500">Enter — сохранить · Shift+Enter — новая строка · Esc — отменить</div></div> : <>{message.content && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{message.content}{grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">(изменено)</span>}</p>}{message.attachments?.length ? <div className="mt-2 flex max-w-2xl flex-wrap gap-2">{message.attachments.map((attachment) => <AttachmentView key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onDownload={onDownload} onPreview={onPreview} />)}</div> : null}</>}</div>
+  return <article id={`message-${message.id}`} onContextMenu={(event) => { if (editing || (!own && !canDelete)) return; event.preventDefault(); setMenuOpen(true); }} className={cn("group relative flex gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0")}>
+    {!grouped || compact ? <ProfilePreview profile={previewProfile} wrapperClassName="shrink-0 self-start" triggerClassName="rounded-full focus:outline-none focus:ring-2 focus:ring-violet-400/50"><Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} /></ProfilePreview> : <span className="w-9 shrink-0 text-right text-[9px] text-transparent group-hover:text-slate-600">{time}</span>}
+    <div className="min-w-0 flex-1">{(!grouped || compact) && <div className="flex items-baseline gap-2"><ProfilePreview profile={previewProfile} wrapperClassName="min-w-0" triggerClassName="truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus:ring-2 focus:ring-violet-400/50">{message.authorName}</ProfilePreview><time className="text-[10px] text-slate-600">{time}</time>{message.editedAt && <span className="text-[10px] text-slate-600">(изменено)</span>}</div>}{editing ? <div className="mt-1 rounded-xl border border-violet-400/40 bg-[#0d111a] p-2 focus-within:border-violet-400">{editAttachments.length ? <div className="mb-2 flex flex-wrap gap-2">{editAttachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-lg border border-white/8 bg-[#171c29] px-2.5 py-1.5 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={`Открепить ${attachment.fileName}`} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className="flex items-start gap-2"><button type="button" title="Прикрепить файл (до 10 МБ)" aria-label="Прикрепить файл к редактируемому сообщению" onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#0d111a] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><textarea autoFocus aria-label="Редактирование сообщения" value={editDraft} maxLength={4000} onChange={(event) => setEditDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") cancelEdit(); else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); saveEdit(); } }} className="min-h-20 w-full resize-y bg-transparent px-1 py-1 text-sm text-slate-200 outline-none" /></div><div className="mt-1 pl-9 text-[10px] text-slate-500">Enter — сохранить · Shift+Enter — новая строка · Esc — отменить</div></div> : <>{message.content && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{message.content}{grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">(изменено)</span>}</p>}{message.attachments?.length ? <div className="mt-2 flex max-w-2xl flex-wrap gap-2">{message.attachments.map((attachment) => <AttachmentView key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onDownload={onDownload} onPreview={onPreview} />)}</div> : null}</>}</div>
     {!editing && (own || canDelete) && <button type="button" aria-label={`Действия с сообщением ${message.authorName}`} onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-1 hidden rounded-md border border-white/7 bg-[#191e2b] p-1 text-slate-500 hover:text-slate-200 group-hover:block focus:block"><MoreHorizontal className="size-3.5" /></button>}
     {!editing && menuOpen && <div role="menu" className="absolute right-2 top-8 z-30 min-w-40 rounded-xl border border-white/10 bg-[#171b27] p-1.5 text-xs shadow-2xl">
       {own && <button type="button" role="menuitem" onClick={startEditing} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-slate-300 hover:bg-white/5"><Pencil className="size-3.5" />Редактировать</button>}
@@ -564,7 +614,18 @@ export function Message({ message, compact, grouped, ownAvatar, currentUserId, c
 }
 
 export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, onAttach, onRemoveAttachment, onDraft, onSubmit }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; onAttach: () => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void }): React.ReactElement {
-  return <form onSubmit={onSubmit} className="shrink-0 px-5 pb-5">{attachments.length ? <div className="mb-2 flex flex-wrap gap-2">{attachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-xl border border-white/8 bg-[#171c29] px-2.5 py-2 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={`Убрать ${attachment.fileName}`} onClick={() => onRemoveAttachment(attachment.id)} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-[#1a1f2d] px-3 shadow-lg focus-within:border-violet-400/30", disabled && "opacity-55")}><button type="button" title={canAttach ? "Прикрепить файл (до 10 МБ)" : "Вложения доступны после подключения"} aria-label="Прикрепить файл" onClick={onAttach} disabled={disabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 place-items-center rounded-full bg-slate-500 text-[#1a1f2d] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><input aria-label={`${ru.chat.placeholder} #${channelName}`} disabled={disabled} value={draft} onChange={(event) => onDraft(event.target.value)} maxLength={4000} placeholder={disabled ? "Ожидаем подключение к серверу…" : `${ru.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" /><Smile className="size-5 text-slate-500" /><button type="submit" disabled={disabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label="Отправить" className="rounded-lg p-2 text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30"><Send className="size-4" /></button></div></form>;
+  const inputRef = useRef<HTMLInputElement>(null);
+  function insertEmoji(emoji: string): void {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? start;
+    const next = `${draft.slice(0, start)}${emoji}${draft.slice(end)}`;
+    if (next.length > 4000) return;
+    onDraft(next);
+    const cursor = start + emoji.length;
+    window.requestAnimationFrame(() => { input?.focus(); input?.setSelectionRange(cursor, cursor); });
+  }
+  return <form onSubmit={onSubmit} className="shrink-0 px-5 pb-5">{attachments.length ? <div className="mb-2 flex flex-wrap gap-2">{attachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-xl border border-white/8 bg-[#171c29] px-2.5 py-2 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={`Убрать ${attachment.fileName}`} onClick={() => onRemoveAttachment(attachment.id)} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-[#1a1f2d] px-3 shadow-lg focus-within:border-violet-400/30", disabled && "opacity-55")}><button type="button" title={canAttach ? "Прикрепить файл (до 10 МБ)" : "Вложения доступны после подключения"} aria-label="Прикрепить файл" onClick={onAttach} disabled={disabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 place-items-center rounded-full bg-slate-500 text-[#1a1f2d] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><input ref={inputRef} aria-label={`${ru.chat.placeholder} #${channelName}`} disabled={disabled} value={draft} onChange={(event) => onDraft(event.target.value)} maxLength={4000} placeholder={disabled ? "Ожидаем подключение к серверу…" : `${ru.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" /><EmojiPicker disabled={disabled} onSelect={insertEmoji} /><button type="submit" disabled={disabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label="Отправить" className="rounded-lg p-2 text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30"><Send className="size-4" /></button></div></form>;
 }
 
 export function AttachmentView({ attachment, previewAvailable = true, onDownload, onPreview }: { attachment: Attachment; previewAvailable?: boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string> }): React.ReactElement {
@@ -645,7 +706,17 @@ function MemberList({ server, profile, access, onSetRole }: { server: MockServer
   const members: MockMember[] = useMemo(() => server.address
     ? server.members.map((member) => member.id === access?.id ? { ...member, role: `Вы · ${member.role}` } : member)
     : [{ id: profile.id, displayName: profile.displayName, role: "Вы", status: "online" as const, avatarColor: "#7c5cff", avatar: profile.avatar }, ...server.members], [access?.id, profile, server]);
-  return <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#0e121b] px-3 py-5"><h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">{ru.chat.members} — {members.length}</h3><div className="space-y-1">{members.map((member) => <div key={member.id} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-white/[.045]"><Avatar name={member.displayName} image={member.avatar ?? (member.id === access?.id ? profile.avatar : null)} color={member.avatarColor} size="sm" status={member.status} /><span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}><span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">{member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}{member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}{member.displayName}</span><span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span></span>{access?.permissions.includes("MANAGE_ROLES") && member.id !== access.id && member.serverRole !== "owner" && <button title={member.serverRole === "administrator" ? ru.members.removeAdmin : ru.members.makeAdmin} aria-label={`${member.serverRole === "administrator" ? ru.members.removeAdmin : ru.members.makeAdmin}: ${member.displayName}`} onClick={() => onSetRole(member.id, member.serverRole === "administrator" ? "member" : "administrator")} className="rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-violet-400/10 hover:text-violet-300 group-hover:opacity-100 focus:opacity-100"><UserCog className="size-3.5" /></button>}</div>)}</div></aside>;
+  return <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#0e121b] px-3 py-5"><h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">{ru.chat.members} — {members.length}</h3><div className="space-y-1">{members.map((member) => {
+    const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
+    const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
+    return <div key={member.id} className="group flex w-full items-center rounded-lg hover:bg-white/[.045]">
+      <ProfilePreview side="left" wrapperClassName="min-w-0 flex-1" triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2" profile={{ displayName: member.displayName, avatar, color: member.avatarColor, status: member.status, role: member.role, bio: isCurrentUser ? profile.bio : undefined, isCurrentUser }}>
+        <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
+        <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}><span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">{member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}{member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}{member.displayName}</span><span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span></span>
+      </ProfilePreview>
+      {access?.permissions.includes("MANAGE_ROLES") && member.id !== access.id && member.serverRole !== "owner" && <button title={member.serverRole === "administrator" ? ru.members.removeAdmin : ru.members.makeAdmin} aria-label={`${member.serverRole === "administrator" ? ru.members.removeAdmin : ru.members.makeAdmin}: ${member.displayName}`} onClick={() => onSetRole(member.id, member.serverRole === "administrator" ? "member" : "administrator")} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-violet-400/10 hover:text-violet-300 group-hover:opacity-100 focus:opacity-100"><UserCog className="size-3.5" /></button>}
+    </div>;
+  })}</div></aside>;
 }
 
 function colorFromId(id: string): string {
@@ -653,6 +724,29 @@ function colorFromId(id: string): string {
   let hash = 0;
   for (const character of id) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
   return colors[Math.abs(hash) % colors.length] ?? "#7c5cff";
+}
+
+function searchLocalMessages(messages: MockMessage[], filters: MessageSearchFilters): MessageSearchResult {
+  const query = filters.query.toLocaleLowerCase("ru");
+  const filtered = messages.filter((message) => {
+    if (filters.authorId && message.authorId !== filters.authorId) return false;
+    if (filters.channelId && message.channelId !== filters.channelId) return false;
+    if (query && !message.content.toLocaleLowerCase("ru").includes(query) && !(message.attachments ?? []).some((attachment) => attachment.fileName.toLocaleLowerCase("ru").includes(query))) return false;
+    if (!filters.contentTypes.length) return true;
+    return filters.contentTypes.some((type) => {
+      if (type === "text") return Boolean(message.content);
+      if (type === "image") return (message.attachments ?? []).some((attachment) => attachment.mimeType.startsWith("image/"));
+      if (type === "video") return (message.attachments ?? []).some((attachment) => attachment.mimeType.startsWith("video/"));
+      return (message.attachments ?? []).some((attachment) => !attachment.mimeType.startsWith("image/") && !attachment.mimeType.startsWith("video/"));
+    });
+  }).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const page = filtered.slice(filters.offset, filters.offset + filters.limit);
+  return {
+    messages: page.map((message) => ({ id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar ?? null, content: message.content, createdAt: message.createdAt, editedAt: message.editedAt ?? null, attachments: message.attachments ?? [] })),
+    total: filtered.length,
+    offset: filters.offset,
+    hasMore: filters.offset + page.length < filtered.length,
+  };
 }
 
 type ServerSnapshot = Extract<ServerEvent, { type: "server.snapshot" }>["server"];

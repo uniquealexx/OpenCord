@@ -72,4 +72,12 @@ describe("OpenCord protocol", () => {
     expect(clientEventSchema.parse({ type: "message.delete", requestId: crypto.randomUUID(), messageId })).toMatchObject({ type: "message.delete", messageId });
     expect(serverEventSchema.parse({ type: "message.deleted", messageId, channelId })).toEqual({ type: "message.deleted", messageId, channelId });
   });
+
+  it("validates paginated message search filters", () => {
+    const requestId = crypto.randomUUID();
+    const channelId = crypto.randomUUID();
+    expect(clientEventSchema.parse({ type: "message.search", requestId, filters: { query: "котик", authorId: "user-1", channelId, contentTypes: ["text", "image"], offset: 0, limit: 25 } })).toMatchObject({ type: "message.search", filters: { query: "котик", contentTypes: ["text", "image"] } });
+    expect(() => clientEventSchema.parse({ type: "message.search", requestId, filters: { query: "", authorId: null, channelId: null, contentTypes: [] } })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "message.search", requestId, filters: { query: "котик", contentTypes: ["image", "image"] } })).toThrow();
+  });
 });

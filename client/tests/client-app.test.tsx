@@ -124,6 +124,30 @@ describe("ClientApp", () => {
     expect(save).toHaveBeenCalled();
   });
 
+  it("opens a profile preview from both the message avatar and author name", async () => {
+    const user = userEvent.setup();
+    const message = readyState().messages[0]!;
+    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+
+    const profileButtons = screen.getAllByRole("button", { name: `Открыть профиль ${message.authorName}` });
+    expect(profileButtons).toHaveLength(2);
+    await user.click(profileButtons[0]!);
+    expect(screen.getByRole("dialog", { name: `Профиль ${message.authorName}` })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await user.click(profileButtons[1]!);
+    expect(screen.getByRole("dialog", { name: `Профиль ${message.authorName}` })).toBeInTheDocument();
+  });
+
+  it("opens a profile preview from the member list", async () => {
+    const user = userEvent.setup();
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    await user.click(screen.getByRole("button", { name: "Открыть профиль Лина" }));
+    expect(screen.getByRole("dialog", { name: "Профиль Лина" })).toBeInTheDocument();
+    expect(screen.getByText("Это вы")).toBeInTheDocument();
+  });
+
   it("shows uploaded attachments in the composer and allows removing them", async () => {
     const user = userEvent.setup();
     const onAttach = vi.fn();
@@ -134,6 +158,23 @@ describe("ClientApp", () => {
     expect(onAttach).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Убрать план.pdf" }));
     expect(onRemoveAttachment).toHaveBeenCalledWith("12959e6f-7ea9-41d9-8be3-f412354d3e95");
+  });
+
+  it("opens the emoji panel and inserts an emoji at the text cursor", async () => {
+    const user = userEvent.setup();
+    const onDraft = vi.fn();
+    render(<Composer draft="Привет мир" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={onDraft} onSubmit={vi.fn()} />);
+
+    const input = screen.getByRole("textbox", { name: "Написать в #общий" }) as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(7, 7);
+    await user.click(screen.getByRole("button", { name: "Открыть панель эмодзи" }));
+
+    expect(screen.getByRole("dialog", { name: "Панель эмодзи" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Вставить 😀" }));
+    expect(onDraft).toHaveBeenLastCalledWith("Привет 😀мир");
+    await user.click(screen.getByRole("button", { name: "Недавние эмодзи" }));
+    expect(screen.getByRole("button", { name: "Вставить 😀" })).toBeInTheDocument();
   });
 
   it("allows submitting an attachment without message text", async () => {
@@ -298,7 +339,7 @@ describe("ClientApp", () => {
     expect(onDeleteChannel).toHaveBeenCalledWith(channel);
   });
 
-  it("shows a voice avatar ring only while speaking and renders mute states", () => {
+  it("shows a voice avatar ring, mute states and a profile preview", () => {
     const profile = readyState().profile!;
     const member = { id: "voice-member", displayName: "Марина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==" };
     const participant = { userId: member.id, channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false };
@@ -309,6 +350,9 @@ describe("ClientApp", () => {
     expect(avatar).not.toHaveClass("transition-[box-shadow]", "duration-150");
     expect(avatar.querySelector("img")).toHaveAttribute("src", member.avatar);
     expect(screen.queryByLabelText(/выключен/u)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Открыть профиль Марина" }));
+    expect(screen.getByRole("dialog", { name: "Профиль Марина" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
 
     rerender(<VoiceParticipantRow participant={{ ...participant, muted: true }} member={member} profile={profile} currentUserId="local-user" speaking />);
     expect(screen.getByLabelText("Марина")).not.toHaveClass("ring-2");

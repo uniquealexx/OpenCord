@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 14 as const;
+export const PROTOCOL_VERSION = 15 as const;
 
 export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
 export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
@@ -72,6 +72,23 @@ export const chatMessageSchema = z.object({
   if (!message.content && message.attachments.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
 
+export const messageContentTypeSchema = z.enum(["text", "image", "video", "file"]);
+export const messageSearchFiltersSchema = z.object({
+  query: z.string().trim().max(200).default(""),
+  authorId: z.string().min(1).max(200).nullable().default(null),
+  channelId: z.string().uuid().nullable().default(null),
+  contentTypes: z.array(messageContentTypeSchema).max(4).refine((types) => new Set(types).size === types.length, "Content types must be unique").default([]),
+  offset: z.number().int().min(0).max(10_000).default(0),
+  limit: z.number().int().min(1).max(50).default(25),
+}).refine((filters) => Boolean(filters.query || filters.authorId || filters.channelId || filters.contentTypes.length), "At least one search filter is required");
+
+export const messageSearchResultSchema = z.object({
+  messages: z.array(chatMessageSchema).max(50),
+  total: z.number().int().min(0),
+  offset: z.number().int().min(0),
+  hasMore: z.boolean(),
+});
+
 const requestIdSchema = z.string().uuid();
 const attachmentIdsSchema = z.array(z.string().uuid()).max(5).refine((ids) => new Set(ids).size === ids.length, "Attachment IDs must be unique");
 
@@ -85,6 +102,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
     profile: publicProfileSchema,
   }),
   z.object({ type: z.literal("history.request"), requestId: requestIdSchema, channelId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }),
+  z.object({ type: z.literal("message.search"), requestId: requestIdSchema, filters: messageSearchFiltersSchema }),
   z.object({ type: z.literal("chat.send"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]) }),
   z.object({ type: z.literal("message.update"), requestId: requestIdSchema, messageId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]) }),
   z.object({ type: z.literal("message.delete"), requestId: requestIdSchema, messageId: z.string().uuid() }),
@@ -112,6 +130,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
   z.object({ type: z.literal("history.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema) }),
+  z.object({ type: z.literal("message.search.result"), requestId: requestIdSchema, result: messageSearchResultSchema }),
   z.object({ type: z.literal("message.created"), message: chatMessageSchema }),
   z.object({ type: z.literal("message.updated"), message: chatMessageSchema }),
   z.object({ type: z.literal("message.deleted"), messageId: z.string().uuid(), channelId: z.string().uuid() }),
@@ -135,6 +154,9 @@ export type VoiceCapability = z.infer<typeof voiceCapabilitySchema>;
 export type VoicePresence = z.infer<typeof voicePresenceSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
+export type MessageContentType = z.infer<typeof messageContentTypeSchema>;
+export type MessageSearchFilters = z.infer<typeof messageSearchFiltersSchema>;
+export type MessageSearchResult = z.infer<typeof messageSearchResultSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 export type ServerEvent = z.infer<typeof serverEventSchema>;
 

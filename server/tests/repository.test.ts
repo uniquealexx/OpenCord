@@ -49,6 +49,40 @@ describe("ChatRepository", () => {
     expect(await repository.getAccessibleAttachment(firstId, "user-1")).toBeNull();
   });
 
+  it("searches server messages by query, author, channel and content type", async () => {
+    const server = await repository.getServer();
+    const channel = server.channels.find((item) => item.kind === "text")!;
+    const secondChannel = await repository.createChannel(randomUUID(), "поиск", "text", "Результаты поиска");
+    await repository.upsertUser("user-1", "public-key-1", { displayName: "Лина", avatar: null });
+    await repository.upsertUser("user-2", "public-key-2", { displayName: "Марк", avatar: null });
+    await repository.createMessage(randomUUID(), channel.id, "user-1", "Текст про космос");
+
+    const imageId = randomUUID();
+    await repository.createAttachment(imageId, "user-2", randomUUID(), "галактика.png", "image/png", 10, "a".repeat(64));
+    await repository.createMessage(randomUUID(), channel.id, "user-2", "", [imageId]);
+
+    const videoId = randomUUID();
+    await repository.createAttachment(videoId, "user-1", randomUUID(), "демо.mp4", "video/mp4", 20, "b".repeat(64));
+    await repository.createMessage(randomUUID(), secondChannel.id, "user-1", "Космическое видео", [videoId]);
+
+    const fileId = randomUUID();
+    await repository.createAttachment(fileId, "user-1", randomUUID(), "отчёт.pdf", "application/pdf", 30, "c".repeat(64));
+    await repository.createMessage(randomUUID(), channel.id, "user-1", "", [fileId]);
+
+    const images = await repository.searchMessages({ query: "галактика", authorId: null, channelId: null, contentTypes: ["image"], offset: 0, limit: 25 });
+    expect(images).toMatchObject({ total: 1, offset: 0, hasMore: false });
+    expect(images.messages[0]?.attachments[0]?.fileName).toBe("галактика.png");
+
+    const authoredTextAndVideo = await repository.searchMessages({ query: "кос", authorId: "user-1", channelId: null, contentTypes: ["text", "video"], offset: 0, limit: 1 });
+    expect(authoredTextAndVideo.total).toBe(2);
+    expect(authoredTextAndVideo.messages).toHaveLength(1);
+    expect(authoredTextAndVideo.hasMore).toBe(true);
+
+    const filesInChannel = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: ["file"], offset: 0, limit: 25 });
+    expect(filesInChannel.messages).toHaveLength(1);
+    expect(filesInChannel.messages[0]?.attachments[0]?.fileName).toBe("отчёт.pdf");
+  });
+
   it("updates channels and deletes their message history", async () => {
     const created = await repository.createChannel(randomUUID(), "черновик", "text", "Старое описание");
     expect(await repository.updateChannel(created.id, "анонсы", "Новое описание", null)).toMatchObject({ name: "анонсы", description: "Новое описание", kind: "text", participantLimit: null });

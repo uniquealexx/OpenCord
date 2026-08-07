@@ -61,7 +61,7 @@ describe("server connection", () => {
 
   it("stops reconnecting and requests an update for an outdated server", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onError: vi.fn() };
     const { result, rerender, unmount } = renderHook(({ reconnectToken }) => useServerConnection(server, profile, callbacks, reconnectToken), { initialProps: { reconnectToken: 0 } });
     const socket = FakeWebSocket.instances[0];
     act(() => socket?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "old", expiresAt: new Date().toISOString() }));
@@ -77,7 +77,7 @@ describe("server connection", () => {
 
   it("authenticates and reconnects after the socket closes", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onError: vi.fn() };
     const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const first = FakeWebSocket.instances[0];
     expect(first?.url).toBe("ws://127.0.0.1:3210/ws");
@@ -106,6 +106,7 @@ describe("server connection", () => {
     expect(result.current.sessionToken).toBe("A".repeat(43));
 
     const channelId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
+    let searchRequestId: string | null = null;
     act(() => {
       expect(result.current.updateChannel(channelId, "анонсы", "Важные новости", null)).toBe(true);
       expect(result.current.deleteChannel(channelId)).toBe(true);
@@ -115,6 +116,7 @@ describe("server connection", () => {
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
       expect(result.current.updateVoiceState(true, false)).toBe(true);
+      searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
     });
     const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[] }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
@@ -126,6 +128,11 @@ describe("server connection", () => {
     expect(sentEvents.some((event) => event.type === "server.leave")).toBe(true);
     expect(sentEvents.some((event) => event.type === "server.avatar.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "voice.state.update")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "message.search")).toBe(true);
+
+    const searchResult = { messages: [], total: 0, offset: 0, hasMore: false };
+    act(() => first?.receive({ type: "message.search.result", requestId: searchRequestId, result: searchResult }));
+    expect(callbacks.onSearchResult).toHaveBeenCalledWith(searchRequestId, searchResult);
 
     act(() => first?.receive({ type: "server.avatar.updated", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", avatar: "data:image/webp;base64,AA==" }));
     expect(callbacks.onServerAvatarUpdated).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253", "data:image/webp;base64,AA==");

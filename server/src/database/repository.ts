@@ -1,4 +1,4 @@
-import type { Attachment, Channel, ChatMessage, Member, MemberRole, Permission, PublicProfile } from "@opencord/shared";
+import type { Attachment, Channel, ChatMessage, Member, MemberRole, MessageSearchFilters, MessageSearchResult, Permission, PublicProfile } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
@@ -299,6 +299,49 @@ export class ChatRepository {
     const ordered = rows.reverse();
     const attachments = await this.getAttachmentsForMessages(ordered.map((message) => message.id));
     return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? []));
+  }
+
+  async searchMessages(filters: MessageSearchFilters): Promise<MessageSearchResult> {
+    const conditions = `c.server_id = $1
+      AND ($2::text = '' OR m.content ILIKE '%' || $2 || '%' OR EXISTS (
+        SELECT 1 FROM message_attachments search_ma JOIN attachments search_a ON search_a.id = search_ma.attachment_id
+        WHERE search_ma.message_id = m.id AND search_a.original_name ILIKE '%' || $2 || '%'
+      ))
+      AND ($3::text IS NULL OR m.author_id = $3)
+      AND ($4::uuid IS NULL OR m.channel_id = $4)
+      AND (cardinality($5::text[]) = 0
+        OR ('text' = ANY($5::text[]) AND m.content <> '')
+        OR ('image' = ANY($5::text[]) AND EXISTS (
+          SELECT 1 FROM message_attachments image_ma JOIN attachments image_a ON image_a.id = image_ma.attachment_id
+          WHERE image_ma.message_id = m.id AND image_a.mime_type LIKE 'image/%'
+        ))
+        OR ('video' = ANY($5::text[]) AND EXISTS (
+          SELECT 1 FROM message_attachments video_ma JOIN attachments video_a ON video_a.id = video_ma.attachment_id
+          WHERE video_ma.message_id = m.id AND video_a.mime_type LIKE 'video/%'
+        ))
+        OR ('file' = ANY($5::text[]) AND EXISTS (
+          SELECT 1 FROM message_attachments file_ma JOIN attachments file_a ON file_a.id = file_ma.attachment_id
+          WHERE file_ma.message_id = m.id AND file_a.mime_type NOT LIKE 'image/%' AND file_a.mime_type NOT LIKE 'video/%'
+        )))`;
+    const parameters = [DEFAULT_SERVER_ID, filters.query, filters.authorId, filters.channelId, filters.contentTypes];
+    const [countRow] = await this.database.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM messages m JOIN channels c ON c.id = m.channel_id WHERE ${conditions}`,
+      parameters,
+    );
+    const rows = await this.database.query<MessageRow>(
+      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at
+       FROM messages m JOIN users u ON u.id = m.author_id JOIN channels c ON c.id = m.channel_id
+       WHERE ${conditions} ORDER BY m.created_at DESC, m.id DESC LIMIT $6 OFFSET $7`,
+      [...parameters, filters.limit, filters.offset],
+    );
+    const attachments = await this.getAttachmentsForMessages(rows.map((message) => message.id));
+    const total = Number(countRow?.count ?? 0);
+    return {
+      messages: rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [])),
+      total,
+      offset: filters.offset,
+      hasMore: filters.offset + rows.length < total,
+    };
   }
 
   private async getAttachmentsForMessages(messageIds: string[]): Promise<Map<string, Attachment[]>> {

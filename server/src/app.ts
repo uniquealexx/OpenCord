@@ -178,6 +178,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const messages = await repository.getHistory(event.channelId, event.limit);
       return send(connection.socket, { type: "history.result", requestId: event.requestId, channelId: event.channelId, messages });
     }
+    if (event.type === "message.search") {
+      const result = await repository.searchMessages(event.filters);
+      return send(connection.socket, { type: "message.search.result", requestId: event.requestId, result });
+    }
     if (event.type === "chat.send") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds);

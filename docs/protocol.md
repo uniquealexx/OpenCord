@@ -1,4 +1,4 @@
-# OpenCord Protocol v14
+# OpenCord Protocol v15
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
 
@@ -38,10 +38,23 @@ Challenge одноразовый в рамках соединения. Прив�
 
 ## Основные события
 
+### Поиск сообщений
+
+Аутентифицированный клиент отправляет `message.search` с объектом `filters`. Поиск выполняется сервером по всем текстовым каналам текущего сервера и возвращается только запросившему клиенту через `message.search.result` с тем же `requestId`.
+
+- `query` ищет без учёта регистра в тексте сообщения и имени вложения;
+- `authorId` ограничивает результаты одним автором;
+- `channelId` ограничивает результаты одним текстовым каналом;
+- `contentTypes` принимает `text`, `image`, `video` и `file`; выбранные типы объединяются условием OR, а `file` означает вложение, которое не является изображением или видео;
+- `offset` и `limit` задают страницу, ответ содержит `total` и `hasMore`.
+
+Пустой запрос без единого фильтра отклоняется общей Zod-схемой. Поиск по изображениям классифицирует MIME-тип вложения и не выполняет распознавание объектов или текста внутри файла.
+
 Клиент отправляет:
 
 - `auth.respond`;
 - `history.request`;
+- `message.search`;
 - `chat.send`;
 - `message.update`;
 - `message.delete`;
@@ -62,6 +75,7 @@ Challenge одноразовый в рамках соединения. Прив�
 - `server.snapshot`, `server.avatar.updated`;
 - `server.deleted`;
 - `history.result`;
+- `message.search.result`;
 - `message.created`, `message.updated`, `message.deleted`;
 - `member.updated`, `member.removed`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
