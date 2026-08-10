@@ -36,7 +36,7 @@ describe("server connection", () => {
         reset: vi.fn(),
       },
       deployment: { selectServerBundle: vi.fn(async () => null), selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
-      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
   });
 
@@ -61,19 +61,31 @@ describe("server connection", () => {
     expect(protocolCompatibility({ type: "auth.challenge", protocolVersion: PROTOCOL_VERSION })).toBeNull();
   });
 
-  it("stops reconnecting and requests an update for an outdated server", async () => {
+  it("automatically reconnects and refreshes data after an outdated server is updated", async () => {
     vi.useFakeTimers();
     const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
-    const { result, rerender, unmount } = renderHook(({ reconnectToken }) => useServerConnection(server, profile, callbacks, reconnectToken), { initialProps: { reconnectToken: 0 } });
+    const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const socket = FakeWebSocket.instances[0];
     act(() => socket?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "old", expiresAt: new Date().toISOString() }));
     expect(result.current.status).toBe("server-outdated");
-    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining("Переразверните сервер"));
-    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining("подключимся автоматически"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
     expect(FakeWebSocket.instances).toHaveLength(1);
-    rerender({ reconnectToken: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(result.current.status).toBe("connecting");
+    expect(result.current.status).toBe("reconnecting");
+    const refreshed = FakeWebSocket.instances[1];
+    const requestId = crypto.randomUUID();
+    await act(async () => {
+      refreshed?.receive({ type: "auth.challenge", requestId, protocolVersion: PROTOCOL_VERSION, challenge: "updated", expiresAt: new Date().toISOString() });
+      await Promise.resolve();
+    });
+    act(() => {
+      refreshed?.receive({ type: "auth.ok", requestId, userId: "local-user", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", sessionToken: "A".repeat(43), sessionExpiresAt: new Date(Date.now() + 60_000).toISOString() });
+      refreshed?.receive({ type: "server.snapshot", server: { id: "5a07aa54-16ef-46ec-a193-9d72a624c253", name: "Обновлённый сервер", avatar: null, maxAttachmentBytes: null, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60, channels: [], members: [], currentUser: { id: "local-user", role: "owner", permissions: [] } } });
+    });
+    expect(result.current.status).toBe("connected");
+    expect(callbacks.onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ name: "Обновлённый сервер", screenShareMaxResolution: 1440 }));
     unmount();
   });
 
@@ -119,12 +131,13 @@ describe("server connection", () => {
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
       expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 })).toBe(true);
-      expect(result.current.updateVoiceState(true, false)).toBe(true);
+      expect(result.current.updateVoiceState(true, false, "screen-owner")).toBe(true);
       expect(result.current.disconnectVoiceMember("voice-member")).toBe(true);
+      expect(result.current.setVoiceMemberMuted("voice-member", true)).toBe(true);
       expect(result.current.kickMember("server-member")).toBe(true);
       searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
     });
-    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; name?: string; userId?: string; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
+    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; name?: string; userId?: string; muted?: boolean; viewingScreenShareUserId?: string | null; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
     expect(sentEvents.some((event) => event.type === "message.update")).toBe(true);
@@ -134,8 +147,9 @@ describe("server connection", () => {
     expect(sentEvents.some((event) => event.type === "server.leave")).toBe(true);
     expect(sentEvents.some((event) => event.type === "server.avatar.update")).toBe(true);
     expect(sentEvents.find((event) => event.type === "server.settings.update")).toMatchObject({ name: "Новая команда", screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
-    expect(sentEvents.some((event) => event.type === "voice.state.update")).toBe(true);
+    expect(sentEvents.find((event) => event.type === "voice.state.update")?.viewingScreenShareUserId).toBe("screen-owner");
     expect(sentEvents.find((event) => event.type === "voice.member.disconnect")?.userId).toBe("voice-member");
+    expect(sentEvents.find((event) => event.type === "voice.member.mute")).toMatchObject({ userId: "voice-member", muted: true });
     expect(sentEvents.find((event) => event.type === "member.kick")?.userId).toBe("server-member");
     expect(sentEvents.some((event) => event.type === "message.search")).toBe(true);
 
@@ -146,7 +160,7 @@ describe("server connection", () => {
     act(() => first?.receive({ type: "server.avatar.updated", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", avatar: "data:image/webp;base64,AA==" }));
     expect(callbacks.onServerAvatarUpdated).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253", "data:image/webp;base64,AA==");
 
-    const voiceParticipant = { userId: "voice-member", channelId, muted: true, deafened: false };
+    const voiceParticipant = { userId: "voice-member", channelId, muted: true, deafened: false, serverMuted: true, viewingScreenShareUserId: "screen-owner" };
     act(() => first?.receive({ type: "voice.participant.updated", participant: voiceParticipant }));
     expect(callbacks.onVoicePresence).toHaveBeenCalledWith(voiceParticipant, true);
     act(() => first?.receive({ type: "voice.participant.disconnected", userId: "voice-member", channelId, reason: "moderated" }));

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
@@ -41,11 +41,11 @@ describe("ClientApp", () => {
       storage: { load: vi.fn(async () => readyState()), save, reset: vi.fn(async () => createDefaultState()) },
       identity: { getOrCreate: vi.fn(async () => ({ publicKey: "test-public-key", fingerprint: "test" })), signChallenge: vi.fn(async () => "test-signature"), reset: vi.fn(async () => ({ publicKey: "new-test-public-key", fingerprint: "new-test" })) },
       deployment: { selectServerBundle: vi.fn(async () => null), selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
-      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
   });
 
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
   it("does not request another voice join when opening the current room", () => {
     expect(shouldRequestVoiceJoin("connected", "voice", "voice", "voice")).toBe(false);
@@ -194,8 +194,10 @@ describe("ClientApp", () => {
     const input = screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" });
     await user.clear(input);
     await user.type(input, "1500");
+    fireEvent.change(screen.getByRole("slider", { name: "Максимальное качество демонстрации экрана" }), { target: { value: "3" } });
+    expect(screen.getAllByText("Источник")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
   });
 
   it("opens a profile preview from both the message avatar and author name", async () => {
@@ -312,6 +314,29 @@ describe("ClientApp", () => {
     expect(requestFullscreen).toHaveBeenCalledOnce();
   });
 
+  it("defers heavy media previews until their message is near the viewport", async () => {
+    let intersectionCallback!: IntersectionObserverCallback;
+    class TestIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) { intersectionCallback = callback; }
+      observe(): void { /* controlled by the test */ }
+      disconnect(): void { /* no-op */ }
+      unobserve(): void { /* no-op */ }
+      takeRecords(): IntersectionObserverEntry[] { return []; }
+      readonly root = null;
+      readonly rootMargin = "360px 0px";
+      readonly thresholds = [0];
+    }
+    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    const onPreview = vi.fn(async () => "file:///C:/Temp/opencord-media-previews/video.mp4");
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "тяжёлый-ролик.mp4", mimeType: "video/mp4", sizeBytes: 500 * 1024 * 1024, sha256: "a".repeat(64) };
+    render(<AttachmentView attachment={attachment} onDownload={vi.fn()} onPreview={onPreview} />);
+
+    expect(onPreview).not.toHaveBeenCalled();
+    act(() => intersectionCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    await waitFor(() => expect(onPreview).toHaveBeenCalledOnce());
+    expect(await screen.findByLabelText("Видео: тяжёлый-ролик.mp4")).toBeInTheDocument();
+  });
+
   it("waits for authentication before loading a cached media preview", async () => {
     const onPreview = vi.fn(async () => "data:image/png;base64,AA==");
     const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "после-входа.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) };
@@ -327,7 +352,7 @@ describe("ClientApp", () => {
   it("shows a persistent instruction when the server protocol is outdated", () => {
     render(<ProtocolNotice status="server-outdated" />);
     expect(screen.getByRole("alert")).toHaveTextContent("OpenCord Server необходимо обновить");
-    expect(screen.getByRole("alert")).toHaveTextContent("Повторно разверните сервер");
+    expect(screen.getByRole("alert")).toHaveTextContent("проверяет его каждые 2 секунды");
   });
 
   it("shows an empty-server state instead of a fake channel when no text channels exist", async () => {
@@ -442,7 +467,7 @@ describe("ClientApp", () => {
   it("shows a voice avatar ring, mute states and a profile preview", () => {
     const profile = readyState().profile!;
     const member = { id: "voice-member", displayName: "Марина", bio: "Люблю голосовые разговоры", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==" };
-    const participant = { userId: member.id, channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false };
+    const participant = { userId: member.id, channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
     const { rerender } = render(<VoiceParticipantRow participant={participant} member={member} profile={profile} currentUserId="local-user" speaking />);
 
     const avatar = screen.getByLabelText("Марина");
@@ -465,21 +490,40 @@ describe("ClientApp", () => {
     expect(screen.queryByLabelText("Микрофон выключен: Марина")).not.toBeInTheDocument();
   });
 
+  it("uses the full voice panel control cell as the microphone hitbox", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    const voiceChannel = state.servers[0]!.channels[2]!;
+    const onMuted = vi.fn();
+    render(<ChannelSidebar server={state.servers[0]!} activeChannelId={voiceChannel.id} profile={state.profile!} canManageChannels={false} voiceChannelId={voiceChannel.id} voiceStatus="connected" muted={false} deafened={false} isScreenSharing={false} onCreateChannel={vi.fn()} onEditChannel={vi.fn()} onDeleteChannel={vi.fn()} onSelectChannel={vi.fn()} onServerMenu={vi.fn()} onProfile={vi.fn()} onSettings={vi.fn()} onLeaveVoice={vi.fn()} onMuted={onMuted} onDeafened={vi.fn()} />);
+
+    const muteButton = screen.getByRole("button", { name: "Выключить микрофон" });
+    expect(muteButton).toHaveClass("h-11", "w-full");
+    expect(muteButton).toHaveAttribute("aria-pressed", "false");
+    await user.click(muteButton);
+    expect(onMuted).toHaveBeenCalledWith(true);
+  });
+
   it("lets the user choose a screen share and keeps the viewer until explicit exit", async () => {
     const user = userEvent.setup();
     const state = readyState();
     const profile = state.profile!;
     const voiceChannel = state.servers[0]!.channels[2]!;
     const server = { ...state.servers[0]!, members: [{ id: "voice-member", displayName: "Марина", bio: "Профиль из голосовой комнаты", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null, banner: "data:image/webp;base64,AQ==" }] };
-    const participant = { userId: "voice-member", channelId: voiceChannel.id, muted: false, deafened: false };
+    const participant = { userId: "voice-member", channelId: voiceChannel.id, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+    const viewer = { userId: "local-user", channelId: voiceChannel.id, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: "voice-member" };
     const stream = { participantIdentity: "voice-member", participantName: "Марина", local: false, track: {} } as unknown as ScreenShareStream;
     const onViewScreenShare = vi.fn();
     const onExitScreenShare = vi.fn();
     const onParticipantMuted = vi.fn();
     const onParticipantVolume = vi.fn();
+    const onServerMuted = vi.fn();
     const onDisconnectParticipant = vi.fn();
-    const commonProps = { channel: voiceChannel, server, profile, participants: [participant], currentUserId: "local-user", currentUserRole: "owner" as const, canModerateVoice: true, connectedChannelId: voiceChannel.id, status: "connected" as const, muted: false, deafened: false, locallyMutedParticipantIds: [], participantVolumes: {}, activeSpeakerIds: [], isScreenSharing: false, onMuted: vi.fn(), onDeafened: vi.fn(), onParticipantMuted, onParticipantVolume, onDisconnectParticipant, onStartScreenShare: vi.fn(), onStopScreenShare: vi.fn(), onViewScreenShare, onExitScreenShare, onLeaveVoice: vi.fn() };
+    const commonProps = { channel: voiceChannel, server, profile, participants: [participant, viewer], currentUserId: "local-user", currentUserRole: "owner" as const, canModerateVoice: true, connectedChannelId: voiceChannel.id, status: "connected" as const, muted: false, serverMuted: false, deafened: false, locallyMutedParticipantIds: [], participantVolumes: {}, activeSpeakerIds: [], isScreenSharing: false, onMuted: vi.fn(), onDeafened: vi.fn(), onParticipantMuted, onParticipantVolume, onServerMuted, onDisconnectParticipant, onStartScreenShare: vi.fn(), onStopScreenShare: vi.fn(), onViewScreenShare, onExitScreenShare, onLeaveVoice: vi.fn() };
     const { rerender } = render(<VoiceChannelView {...commonProps} screenShares={[stream]} viewingScreenShareId={null} />);
+
+    expect(screen.getByRole("button", { name: "Выключить микрофон" })).toHaveClass("size-11");
+    expect(screen.getByLabelText("Смотрят: Лина")).toHaveTextContent("1");
 
     await user.click(screen.getByRole("button", { name: "Открыть профиль Марина" }));
     expect(screen.getByRole("dialog", { name: "Профиль Марина" })).toBeInTheDocument();
@@ -488,9 +532,15 @@ describe("ClientApp", () => {
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("dialog", { name: "Профиль Марина" })).not.toBeInTheDocument();
 
+    expect(screen.getByRole("button", { name: "Заглушить у себя: Марина" })).toHaveClass("size-11");
     await user.click(screen.getByRole("button", { name: "Заглушить у себя: Марина" }));
     expect(onParticipantMuted).toHaveBeenCalledWith("voice-member", true);
-    rerender(<VoiceChannelView {...commonProps} locallyMutedParticipantIds={["voice-member"]} screenShares={[stream]} viewingScreenShareId={null} />);
+    await user.click(screen.getByRole("button", { name: "Заглушить для всех: Марина" }));
+    expect(onServerMuted).toHaveBeenCalledWith("voice-member", true);
+    rerender(<VoiceChannelView {...commonProps} participants={[{ ...participant, muted: true, serverMuted: true }, viewer]} screenShares={[stream]} viewingScreenShareId={null} />);
+    expect(screen.getByText("Заглушён администрацией")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Снять серверный мут: Марина" })).toHaveAttribute("aria-pressed", "true");
+    rerender(<VoiceChannelView {...commonProps} participants={[participant, viewer]} locallyMutedParticipantIds={["voice-member"]} screenShares={[stream]} viewingScreenShareId={null} />);
     expect(screen.getByText("Заглушён у вас")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Включить звук у себя: Марина" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.change(screen.getByRole("slider", { name: "Громкость у себя: Марина" }), { target: { value: "35" } });

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack, type RemoteVideoTrack } from "livekit-client";
+import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, VideoQuality, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication, type RemoteVideoTrack } from "livekit-client";
 import type { ClientPreferences, VoiceParticipantSettings } from "@/shared/state";
+import { RnnoiseAudioProcessor } from "@/shared/rnnoise-processor";
 
 export type VoiceSessionStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface VoiceAuthorization { channelId: string; endpoint: string; token: string; expiresAt: string }
@@ -35,24 +36,82 @@ export interface VoiceSession {
   leave(): Promise<void>;
 }
 
-const VOICE_ACTIVITY_ON_THRESHOLD = 0.012;
-const VOICE_ACTIVITY_OFF_THRESHOLD = 0.007;
-const VOICE_ACTIVITY_RELEASE_SAMPLES = 3;
+const VOICE_ACTIVITY_INITIAL_NOISE_FLOOR = 0.0015;
+const VOICE_ACTIVITY_MIN_NOISE_FLOOR = 0.0005;
+const VOICE_ACTIVITY_MAX_NOISE_FLOOR = 0.04;
+const VOICE_ACTIVITY_MIN_ON_THRESHOLD = 0.0045;
+const VOICE_ACTIVITY_MAX_ON_THRESHOLD = 0.08;
+const VOICE_ACTIVITY_ON_NOISE_MULTIPLIER = 2.5;
+const VOICE_ACTIVITY_ON_MARGIN = 0.003;
+const VOICE_ACTIVITY_OFF_NOISE_MULTIPLIER = 1.6;
+const VOICE_ACTIVITY_OFF_MARGIN = 0.0015;
+const VOICE_ACTIVITY_RELEASE_SAMPLES = 4;
 const VOICE_ACTIVITY_SAMPLE_INTERVAL_MS = 20;
 
-export function createResponsiveVoiceActivityGate(onChange: (speaking: boolean) => void): { sample(volume: number): void; reset(): void } {
+export interface VoiceActivityCalibration {
+  noiseFloor: number;
+  openThreshold: number;
+  closeThreshold: number;
+}
+
+export interface VoiceActivityGateOptions {
+  automatic?: boolean;
+  manualThresholdDb?: number;
+}
+
+export function decibelsToRms(decibels: number): number {
+  return 10 ** (Math.min(-10, Math.max(-80, decibels)) / 20);
+}
+
+export function createResponsiveVoiceActivityGate(onChange: (speaking: boolean) => void, onCalibration?: (calibration: VoiceActivityCalibration) => void, options: VoiceActivityGateOptions = {}): { sample(volume: number): void; reset(): void; calibration(): VoiceActivityCalibration } {
   let speaking = false;
   let quietSamples = 0;
+  let noiseFloor = VOICE_ACTIVITY_INITIAL_NOISE_FLOOR;
+  let lastCalibration: VoiceActivityCalibration | null = null;
+  const automatic = options.automatic ?? true;
+
+  const calibration = (): VoiceActivityCalibration => {
+    if (!automatic) {
+      const openThreshold = decibelsToRms(options.manualThresholdDb ?? -45);
+      return { noiseFloor: 0, openThreshold, closeThreshold: openThreshold * 0.72 };
+    }
+    const openThreshold = Math.min(VOICE_ACTIVITY_MAX_ON_THRESHOLD, Math.max(VOICE_ACTIVITY_MIN_ON_THRESHOLD, noiseFloor * VOICE_ACTIVITY_ON_NOISE_MULTIPLIER + VOICE_ACTIVITY_ON_MARGIN));
+    return {
+      noiseFloor,
+      openThreshold,
+      closeThreshold: Math.min(openThreshold * 0.78, Math.max(VOICE_ACTIVITY_MIN_ON_THRESHOLD * 0.55, noiseFloor * VOICE_ACTIVITY_OFF_NOISE_MULTIPLIER + VOICE_ACTIVITY_OFF_MARGIN)),
+    };
+  };
+
+  const publishCalibration = (): VoiceActivityCalibration => {
+    const next = calibration();
+    if (!lastCalibration || Math.abs(lastCalibration.noiseFloor - next.noiseFloor) >= 0.0001 || Math.abs(lastCalibration.openThreshold - next.openThreshold) >= 0.0001) {
+      lastCalibration = next;
+      onCalibration?.(next);
+    }
+    return next;
+  };
+
+  const calibrateNoiseFloor = (volume: number, openThreshold: number): void => {
+    if (volume > openThreshold) return;
+    const boundedVolume = Math.min(VOICE_ACTIVITY_MAX_NOISE_FLOOR, Math.max(VOICE_ACTIVITY_MIN_NOISE_FLOOR, volume));
+    const rate = boundedVolume < noiseFloor ? 0.14 : 0.025;
+    noiseFloor += (boundedVolume - noiseFloor) * rate;
+  };
+
   return {
     sample(volume): void {
+      const current = publishCalibration();
       if (!speaking) {
-        if (volume < VOICE_ACTIVITY_ON_THRESHOLD) return;
+        if (automatic) calibrateNoiseFloor(volume, current.openThreshold);
+        const calibrated = publishCalibration();
+        if (volume < calibrated.openThreshold) return;
         speaking = true;
         quietSamples = 0;
         onChange(true);
         return;
       }
-      if (volume >= VOICE_ACTIVITY_OFF_THRESHOLD) {
+      if (volume >= current.closeThreshold) {
         quietSamples = 0;
         return;
       }
@@ -61,6 +120,8 @@ export function createResponsiveVoiceActivityGate(onChange: (speaking: boolean) 
       speaking = false;
       quietSamples = 0;
       onChange(false);
+      if (automatic) calibrateNoiseFloor(volume, current.openThreshold);
+      publishCalibration();
     },
     reset(): void {
       quietSamples = 0;
@@ -68,6 +129,7 @@ export function createResponsiveVoiceActivityGate(onChange: (speaking: boolean) 
       speaking = false;
       onChange(false);
     },
+    calibration,
   };
 }
 
@@ -83,6 +145,30 @@ export function mergeResponsiveSpeakerIds(liveKitSpeakerIds: Iterable<string>, r
   const next = new Set([...liveKitSpeakerIds].filter((identity) => !responsiveIdentities.has(identity)));
   for (const state of states) if (state.speaking) next.add(state.identity);
   return [...next].sort();
+}
+
+export function requestHighestScreenShareQuality(publication: Pick<RemoteTrackPublication, "setEnabled" | "setVideoQuality">): void {
+  publication.setEnabled(true);
+  publication.setVideoQuality(VideoQuality.HIGH);
+}
+
+export async function configureMicrophoneNoiseSuppression(track: LocalAudioTrack, enabled: boolean): Promise<"enhanced" | "standard" | "off"> {
+  const currentProcessor = track.getProcessor();
+  if (!enabled) {
+    if (currentProcessor?.name === "opencord-rnnoise") await track.stopProcessor();
+    try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* The device may not expose this constraint. */ }
+    return "off";
+  }
+  if (currentProcessor?.name === "opencord-rnnoise") return "enhanced";
+  try {
+    try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* Avoid stacking two suppressors where supported. */ }
+    await track.setProcessor(new RnnoiseAudioProcessor());
+    return "enhanced";
+  } catch (error) {
+    console.warn("OpenCord RNNoise processor is unavailable; using standard WebRTC noise suppression", error);
+    try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: true }); } catch { /* Capture defaults remain the fallback. */ }
+    return "standard";
+  }
 }
 
 export function useVoiceSession(authorization: VoiceAuthorization | null, preferences: ClientPreferences, onError: (message: string) => void, onParticipantAudioSettingsChange?: (settings: VoiceParticipantSettings) => void): VoiceSession {
@@ -140,10 +226,11 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       const { analyser, cleanup } = createAudioAnalyser(track, { fftSize: 256, smoothingTimeConstant: 0 });
       const samples = new Float32Array(analyser.fftSize);
       const detector = { identity, speaking: false, stop: (): void => undefined };
+      const localPreferences = identity === roomRef.current?.localParticipant.identity ? preferencesRef.current : null;
       const gate = createResponsiveVoiceActivityGate((speaking) => {
         detector.speaking = speaking;
         publishActiveSpeakers();
-      });
+      }, undefined, localPreferences ? { automatic: localPreferences.automaticInputSensitivity, manualThresholdDb: localPreferences.manualInputSensitivityDb } : undefined);
       const interval = window.setInterval(() => {
         analyser.getFloatTimeDomainData(samples);
         gate.sample(calculateRms(samples));
@@ -158,6 +245,10 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       // ActiveSpeakersChanged remains the fallback where Web Audio is unavailable.
     }
   }, [publishActiveSpeakers, stopResponsiveDetector]);
+
+  const configureLocalMicrophone = useCallback(async (track: LocalAudioTrack): Promise<void> => {
+    await configureMicrophoneNoiseSuppression(track, preferencesRef.current.noiseSuppression);
+  }, []);
 
   useEffect(() => { preferencesRef.current = preferences; }, [preferences]);
   useEffect(() => { onParticipantAudioSettingsChangeRef.current = onParticipantAudioSettingsChange; }, [onParticipantAudioSettingsChange]);
@@ -198,6 +289,17 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     };
     void apply();
   }, [onError, preferences.voiceInputDeviceId, preferences.voiceOutputDeviceId]);
+
+  useEffect(() => {
+    const track = roomRef.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
+    if (track) void configureLocalMicrophone(track);
+  }, [configureLocalMicrophone, preferences.noiseSuppression]);
+
+  useEffect(() => {
+    const room = roomRef.current;
+    const track = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
+    if (room && track) startResponsiveDetector(track, room.localParticipant.identity);
+  }, [preferences.automaticInputSensitivity, preferences.manualInputSensitivityDb, startResponsiveDetector]);
 
   const refreshDevices = useCallback(async (): Promise<void> => {
     try {
@@ -242,13 +344,15 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       const room = new Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: {
         deviceId: currentPreferences.voiceInputDeviceId ?? undefined,
         channelCount: 1,
+        sampleRate: 48_000,
         echoCancellation: currentPreferences.echoCancellation,
-        noiseSuppression: currentPreferences.noiseSuppression,
+        noiseSuppression: false,
         autoGainControl: currentPreferences.autoGainControl,
       } });
       roomRef.current = room;
       room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, publication, participant: RemoteParticipant) => {
         if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+          requestHighestScreenShareQuality(publication);
           setScreenShares((current) => [...current.filter((item) => item.participantIdentity !== participant.identity), { participantIdentity: participant.identity, participantName: participant.name || participant.identity, local: false, track: track as RemoteVideoTrack }]);
           return;
         }
@@ -296,7 +400,10 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         if (currentPreferences.voiceOutputDeviceId) await room.switchActiveDevice("audiooutput", currentPreferences.voiceOutputDeviceId);
         const ptt = currentPreferences.voiceInputMode === "push-to-talk";
         const microphonePublication = await room.localParticipant.setMicrophoneEnabled(!ptt);
-        if (microphonePublication?.audioTrack) startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
+        if (microphonePublication?.audioTrack) {
+          await configureLocalMicrophone(microphonePublication.audioTrack);
+          startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
+        }
         setMutedState(ptt);
         deafenedRef.current = false;
         setDeafenedState(false);
@@ -309,7 +416,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     };
     void connect();
     return () => { cancelled = true; };
-  }, [authorization, disposeRoom, onError, publishActiveSpeakers, refreshDevices, startResponsiveDetector, stopResponsiveDetector]);
+  }, [authorization, configureLocalMicrophone, disposeRoom, onError, publishActiveSpeakers, refreshDevices, startResponsiveDetector, stopResponsiveDetector]);
 
   const setIncomingAudioMuted = useCallback((value: boolean): void => {
     for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
@@ -359,7 +466,10 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     }
     const room = roomRef.current;
     const microphonePublication = await room?.localParticipant.setMicrophoneEnabled(!value);
-    if (!value && microphonePublication?.audioTrack && room) startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
+    if (!value && microphonePublication?.audioTrack && room) {
+      await configureLocalMicrophone(microphonePublication.audioTrack);
+      startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
+    }
     if (value) {
       const microphoneTrack = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
       if (microphoneTrack) {
@@ -368,7 +478,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       }
     }
     setMutedState(value);
-  }, [deafened, publishActiveSpeakers, setIncomingAudioMuted, startResponsiveDetector]);
+  }, [configureLocalMicrophone, deafened, publishActiveSpeakers, setIncomingAudioMuted, startResponsiveDetector]);
 
   useEffect(() => {
     if (preferences.voiceInputMode !== "push-to-talk" || status !== "connected") return;
@@ -403,8 +513,11 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     if (!room || !deviceId) return;
     await room.switchActiveDevice("audioinput", deviceId);
     const microphoneTrack = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
-    if (microphoneTrack) startResponsiveDetector(microphoneTrack, room.localParticipant.identity);
-  }, [startResponsiveDetector]);
+    if (microphoneTrack) {
+      await configureLocalMicrophone(microphoneTrack);
+      startResponsiveDetector(microphoneTrack, room.localParticipant.identity);
+    }
+  }, [configureLocalMicrophone, startResponsiveDetector]);
   const setOutputDevice = useCallback(async (deviceId: string | null): Promise<void> => {
     const room = roomRef.current;
     if (!room || !deviceId) return;

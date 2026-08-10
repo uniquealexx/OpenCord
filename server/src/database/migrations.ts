@@ -204,6 +204,15 @@ const migrations = [
     id: "013_user_profile_banner",
     sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS banner text NULL;`,
   },
+  {
+    id: "014_server_screen_share_source_quality",
+    sql: `
+      ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_screen_share_max_resolution_check;
+      ALTER TABLE servers ADD CONSTRAINT servers_screen_share_max_resolution_check CHECK (
+        screen_share_max_resolution IN (480, 720, 1080, 1440)
+      );
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

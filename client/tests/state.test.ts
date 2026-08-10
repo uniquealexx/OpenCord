@@ -23,6 +23,19 @@ describe("persisted client state", () => {
     expect(restored.preferences.voiceParticipantSettings).toEqual(settings);
   });
 
+  it("adds automatic sensitivity defaults to older v3 state and persists manual calibration", () => {
+    const state = createDefaultState();
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.automaticInputSensitivity;
+    delete olderPreferences.manualInputSensitivityDb;
+    const upgraded = parsePersistedState({ ...state, preferences: olderPreferences });
+    expect(upgraded.preferences.automaticInputSensitivity).toBe(true);
+    expect(upgraded.preferences.manualInputSensitivityDb).toBe(-45);
+
+    const restored = parsePersistedState({ ...state, preferences: { ...state.preferences, automaticInputSensitivity: false, manualInputSensitivityDb: -37 } });
+    expect(restored.preferences).toMatchObject({ automaticInputSensitivity: false, manualInputSensitivityDb: -37 });
+  });
+
   it("persists a selected user status and accepts profiles saved before statuses existed", () => {
     const state = createDefaultState();
     const profile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };

@@ -304,7 +304,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "voice.state.update") {
-      const presence = voice.updateState(connection.userId, { muted: event.muted, deafened: event.deafened });
+      const presence = voice.updateState(connection.userId, { muted: event.muted, deafened: event.deafened, viewingScreenShareUserId: event.viewingScreenShareUserId });
       if (!presence) return sendError(connection.socket, event.requestId, "CONFLICT", "Сначала подключитесь к голосовому каналу");
       broadcast({ type: "voice.participant.updated", participant: presence });
       return;
@@ -318,6 +318,23 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя отключить этого участника");
       const presence = await voice.disconnect(event.userId, "moderated");
       if (presence) broadcast({ type: "voice.participant.disconnected", userId: presence.userId, channelId: presence.channelId, reason: "moderated" });
+      return;
+    }
+    if (event.type === "voice.member.mute") {
+      if (!(await hasPermission(connection.userId, "VOICE_MODERATE"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для управления голосовым каналом");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Используйте собственную кнопку микрофона");
+      let targetRole: import("@opencord/shared").MemberRole;
+      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      const actorRole = await repository.getMemberRole(connection.userId);
+      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить серверный мут этого участника");
+      try {
+        const presence = await voice.setModeratorMuted(event.userId, event.muted);
+        if (!presence) return sendError(connection.socket, event.requestId, "CONFLICT", "Участник не подключён к голосовому каналу");
+        broadcast({ type: "voice.participant.updated", participant: presence });
+      } catch (error) {
+        app.log.error(error);
+        return sendError(connection.socket, event.requestId, "INTERNAL_ERROR", "Не удалось изменить серверный мут участника");
+      }
       return;
     }
     if (event.type === "server.delete") {

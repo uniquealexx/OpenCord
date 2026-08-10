@@ -30,6 +30,7 @@ export const IPC = {
   attachmentSelectAndUpload: "attachment:select-and-upload",
   attachmentDownload: "attachment:download",
   attachmentPreview: "attachment:preview",
+  attachmentSetLatencySensitive: "attachment:set-latency-sensitive",
   screenShareListSources: "screen-share:list-sources",
   screenShareSelectSource: "screen-share:select-source",
   screenShareDiagnostic: "screen-share:diagnostic",
@@ -77,6 +78,7 @@ export interface OpenCordBridge {
     selectAndUpload(context: AttachmentTransferContext): Promise<Attachment | null>;
     download(request: AttachmentDownloadRequest): Promise<boolean>;
     preview(request: AttachmentDownloadRequest): Promise<string>;
+    setLatencySensitive(value: boolean): Promise<void>;
   };
   server?: {
     probe(address: string): Promise<ServerProbeResult>;

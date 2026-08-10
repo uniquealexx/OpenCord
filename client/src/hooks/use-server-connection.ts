@@ -28,7 +28,7 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean): boolean; disconnectVoiceMember(userId: string): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -50,6 +50,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     let failureReported = false;
+    let waitingForServerUpdate = false;
 
     const clearHeartbeat = (): void => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -59,11 +60,12 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     const scheduleReconnect = (): void => {
       if (stopped || fatal || reconnectTimer) return;
       clearHeartbeat();
-      setConnectionState({ key: connectionKey, status: "reconnecting" });
-      const delay = reconnectDelay(retryCount);
+      if (!waitingForServerUpdate) setConnectionState({ key: connectionKey, status: "reconnecting" });
+      const delay = waitingForServerUpdate ? 2_000 : reconnectDelay(retryCount);
       retryCount += 1;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
+        waitingForServerUpdate = false;
         connect();
       }, delay);
     };
@@ -88,12 +90,14 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
         try { decoded = JSON.parse(String(messageEvent.data)) as unknown; } catch { return callbacksRef.current.onError("Сервер отправил некорректный JSON"); }
         const incompatible = protocolCompatibility(decoded);
         if (incompatible) {
-          fatal = true;
+          fatal = incompatible === "client-outdated";
+          waitingForServerUpdate = incompatible === "server-outdated";
           clearHeartbeat();
           setConnectionState({ key: connectionKey, status: incompatible });
-          callbacksRef.current.onError(incompatible === "server-outdated"
-            ? "Версия OpenCord Server устарела. Переразверните сервер через клиент, чтобы обновить его"
+          if (!failureReported) callbacksRef.current.onError(incompatible === "server-outdated"
+            ? "Версия OpenCord Server устарела. Ожидаем обновление и подключимся автоматически"
             : "Этот сервер использует более новый протокол. Обновите приложение OpenCord Client");
+          failureReported = true;
           socket.close(4002, "Protocol mismatch");
           return;
         }
@@ -160,7 +164,8 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           socket.close(1000, "Server deleted");
         } else if (event.type === "error") {
           if (event.code === "AUTH_FAILED" || event.code === "PROTOCOL_MISMATCH") {
-            fatal = true;
+            fatal = event.code === "AUTH_FAILED";
+            waitingForServerUpdate = event.code === "PROTOCOL_MISMATCH";
             setConnectionState({ key: connectionKey, status: event.code === "PROTOCOL_MISMATCH" ? "server-outdated" : "error" });
             socket.close(1000, "Authentication rejected");
           }
@@ -303,10 +308,10 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  const updateVoiceState = useCallback((muted: boolean, deafened: boolean): boolean => {
+  const updateVoiceState = useCallback((muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
-    sendEvent(socket, { type: "voice.state.update", requestId: crypto.randomUUID(), muted, deafened });
+    sendEvent(socket, { type: "voice.state.update", requestId: crypto.randomUUID(), muted, deafened, viewingScreenShareUserId });
     return true;
   }, [status]);
 
@@ -317,7 +322,14 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sessionToken, sendMessage, updateMessage, deleteMessage, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember };
+  const setVoiceMemberMuted = useCallback((userId: string, muted: boolean): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "voice.member.mute", requestId: crypto.randomUUID(), userId, muted });
+    return true;
+  }, [status]);
+
+  return { status, sessionToken, sendMessage, updateMessage, deleteMessage, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {

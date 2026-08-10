@@ -53,6 +53,7 @@ const bridge: OpenCordBridge = {
     selectAndUpload: async (context) => attachmentUploadResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentSelectAndUpload, attachmentTransferContextSchema.parse(context))),
     download: async (request) => (await ipcRenderer.invoke(IPC.attachmentDownload, attachmentDownloadRequestSchema.parse(request))) === true,
     preview: async (request) => attachmentPreviewResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentPreview, attachmentDownloadRequestSchema.parse(request))),
+    setLatencySensitive: async (value) => { await ipcRenderer.invoke(IPC.attachmentSetLatencySensitive, value === true); },
   },
   server: {
     probe: async (address) => serverProbeResultSchema.parse(await ipcRenderer.invoke(IPC.serverProbe, serverProbeAddressSchema.parse(address))),

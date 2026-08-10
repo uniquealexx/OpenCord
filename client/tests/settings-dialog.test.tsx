@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -55,6 +55,24 @@ describe("SettingsDialog microphone test", () => {
     await user.click(screen.getByRole("button", { name: "Остановить" }));
     await waitFor(() => expect(stopTrack).toHaveBeenCalledOnce());
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("shows and saves a manual microphone threshold when automatic sensitivity is disabled", async () => {
+    const user = userEvent.setup();
+    const onPreferences = vi.fn();
+    const preferences = createDefaultState().preferences;
+    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences, onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const view = render(<SettingsDialog preferences={preferences} {...props} />);
+
+    await user.click(screen.getByRole("switch", { name: "Автоматическая чувствительность" }));
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ automaticInputSensitivity: false }));
+
+    const manualPreferences = { ...preferences, automaticInputSensitivity: false };
+    view.rerender(<SettingsDialog preferences={manualPreferences} {...props} />);
+    const slider = screen.getByRole("slider", { name: "Ручная чувствительность микрофона" });
+    expect(slider).toHaveValue("-45");
+    fireEvent.change(slider, { target: { value: "-42" } });
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ automaticInputSensitivity: false, manualInputSensitivityDb: -42 }));
   });
 
   it("shows an available client update and starts download explicitly", async () => {

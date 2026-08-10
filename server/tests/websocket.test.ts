@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
 import { PGliteDatabase } from "../src/database/database";
+import type { VoiceService } from "../src/voice";
 
 const openApps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const temporaryDirectories: string[] = [];
@@ -254,6 +255,58 @@ describe("WebSocket chat flow", () => {
 
     const offlineClientDeletion = await connectToDeletedServer(url, "Вернувшийся участник");
     expect(offlineClientDeletion.serverId).toBe(owner.snapshot.server.id);
+  }, 15_000);
+
+  it("allows only the owner and role-superior administrators to server-mute voice members", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    const voiceChannelId = randomUUID();
+    const moderationCalls: Array<{ userId: string; muted: boolean }> = [];
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async () => ({ endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null }),
+      leave: async () => null,
+      updateState: () => null,
+      disconnect: async () => null,
+      setModeratorMuted: async (userId, muted) => {
+        moderationCalls.push({ userId, muted });
+        return { userId, channelId: voiceChannelId, muted, deafened: false, serverMuted: muted, viewingScreenShareUserId: null };
+      },
+      removeChannel: async () => [],
+      presence: () => [],
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const administrator = await connectAndAuthenticate(url, "Administrator");
+    const target = await connectAndAuthenticate(url, "Target member");
+
+    const promoted = waitForEvent(administrator.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "member.role.set", requestId: randomUUID(), userId: administrator.userId, role: "administrator" }));
+    expect((await promoted).server.currentUser.role).toBe("administrator");
+
+    const memberDenied = waitForEvent(target.socket, "error");
+    target.socket.send(JSON.stringify({ type: "voice.member.mute", requestId: randomUUID(), userId: administrator.userId, muted: true }));
+    expect((await memberDenied).code).toBe("FORBIDDEN");
+
+    const hierarchyDenied = waitForEvent(administrator.socket, "error");
+    administrator.socket.send(JSON.stringify({ type: "voice.member.mute", requestId: randomUUID(), userId: owner.userId, muted: true }));
+    expect((await hierarchyDenied).code).toBe("FORBIDDEN");
+
+    const serverMuted = waitForEvent(owner.socket, "voice.participant.updated");
+    administrator.socket.send(JSON.stringify({ type: "voice.member.mute", requestId: randomUUID(), userId: target.userId, muted: true }));
+    expect((await serverMuted).participant).toMatchObject({ userId: target.userId, muted: true, serverMuted: true });
+
+    const serverUnmuted = waitForEvent(owner.socket, "voice.participant.updated");
+    administrator.socket.send(JSON.stringify({ type: "voice.member.mute", requestId: randomUUID(), userId: target.userId, muted: false }));
+    expect((await serverUnmuted).participant).toMatchObject({ userId: target.userId, muted: false, serverMuted: false });
+    expect(moderationCalls).toEqual([{ userId: target.userId, muted: true }, { userId: target.userId, muted: false }]);
   }, 15_000);
 });
 

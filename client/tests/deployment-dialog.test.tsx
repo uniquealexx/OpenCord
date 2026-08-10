@@ -34,7 +34,7 @@ describe("DeploymentDialog", () => {
         cancel: vi.fn(),
         onProgress: vi.fn((listener) => { progressListener = listener; return () => undefined; }),
       },
-      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
 
     render(<DeploymentDialog open onOpenChange={vi.fn()} onDeployed={onDeployed} />);
@@ -97,7 +97,7 @@ describe("DeploymentDialog", () => {
         cancel: vi.fn(),
         onProgress: vi.fn(() => () => undefined),
       },
-      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA==") },
+      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
 
     render(<DeploymentDialog open onOpenChange={vi.fn()} onDeployed={vi.fn()} />);

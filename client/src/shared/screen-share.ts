@@ -4,6 +4,8 @@ export const screenShareSourceSchema = z.object({
   id: z.string().min(1).max(500),
   name: z.string().min(1).max(240),
   kind: z.enum(["screen", "window"]),
+  width: z.number().int().min(1).max(16_384),
+  height: z.number().int().min(1).max(16_384),
   thumbnail: z.string().max(2_000_000).regex(/^data:image\/png;base64,/u),
   appIcon: z.string().max(500_000).regex(/^data:image\/png;base64,/u).nullable(),
 });

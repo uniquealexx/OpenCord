@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 22 as const;
+export const PROTOCOL_VERSION = 25 as const;
 
 export const MEBIBYTE = 1024 * 1024;
 export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
@@ -8,11 +8,11 @@ export const ATTACHMENT_LIMIT_MAX_BYTES = 2000 * MEBIBYTE;
 export const DEFAULT_ATTACHMENT_LIMIT_BYTES = 10 * MEBIBYTE;
 export const attachmentUploadLimitSchema = z.number().int().min(ATTACHMENT_LIMIT_MIN_BYTES).max(ATTACHMENT_LIMIT_MAX_BYTES).nullable();
 
-export const SCREEN_SHARE_RESOLUTIONS = [480, 720, 1080] as const;
+export const SCREEN_SHARE_RESOLUTIONS = [480, 720, 1080, 1440] as const;
 export const SCREEN_SHARE_FRAME_RATES = [15, 30, 60] as const;
 export const DEFAULT_SCREEN_SHARE_MAX_RESOLUTION = 1080 as const;
 export const DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE = 60 as const;
-export const screenShareResolutionSchema = z.union([z.literal(480), z.literal(720), z.literal(1080)]);
+export const screenShareResolutionSchema = z.union([z.literal(480), z.literal(720), z.literal(1080), z.literal(1440)]);
 export const screenShareFrameRateSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
 export const serverNameSchema = z.string().trim().min(2).max(48);
 export const serverSettingsSchema = z.object({
@@ -69,6 +69,8 @@ export const voicePresenceSchema = z.object({
   channelId: z.string().uuid(),
   muted: z.boolean(),
   deafened: z.boolean(),
+  serverMuted: z.boolean().default(false),
+  viewingScreenShareUserId: z.string().min(1).nullable().default(null),
 });
 
 export const memberSchema = z.object({
@@ -149,8 +151,9 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
   z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
-  z.object({ type: z.literal("voice.state.update"), requestId: requestIdSchema, muted: z.boolean(), deafened: z.boolean() }),
+  z.object({ type: z.literal("voice.state.update"), requestId: requestIdSchema, muted: z.boolean(), deafened: z.boolean(), viewingScreenShareUserId: z.string().min(1).nullable() }),
   z.object({ type: z.literal("voice.member.disconnect"), requestId: requestIdSchema, userId: z.string().min(1) }),
+  z.object({ type: z.literal("voice.member.mute"), requestId: requestIdSchema, userId: z.string().min(1), muted: z.boolean() }),
   z.object({ type: z.literal("ping"), requestId: requestIdSchema }),
 ]).superRefine((event, context) => {
   if ((event.type === "chat.send" || event.type === "message.update") && !event.content && event.attachmentIds.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });

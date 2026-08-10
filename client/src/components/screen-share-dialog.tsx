@@ -14,13 +14,19 @@ const resolutions: Record<ScreenShareResolution, { width: number; height: number
   480: { width: 854, height: 480 },
   720: { width: 1280, height: 720 },
   1080: { width: 1920, height: 1080 },
+  1440: { width: 2560, height: 1440 },
 };
 
 const bitrates: Record<ScreenShareResolution, Record<ScreenShareFrameRate, number>> = {
   480: { 15: 800_000, 30: 1_500_000, 60: 2_500_000 },
   720: { 15: 1_500_000, 30: 3_000_000, 60: 5_000_000 },
   1080: { 15: 2_500_000, 30: 5_000_000, 60: 8_000_000 },
+  1440: { 15: 5_000_000, 30: 10_000_000, 60: 16_000_000 },
 };
+
+export function screenShareResolutionLabel(resolution: ScreenShareResolution): string {
+  return resolution === 1440 ? "Источник" : `${resolution}p`;
+}
 
 export const SCREEN_SHARE_SURFACE_CLASS_NAME = "relative grid min-h-0 w-full place-items-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl fullscreen:h-screen fullscreen:w-screen fullscreen:max-h-none fullscreen:rounded-none fullscreen:border-0";
 export const SCREEN_SHARE_CANVAS_CLASS_NAME = "block size-full min-h-0 min-w-0 bg-black object-contain";
@@ -29,8 +35,16 @@ function reportScreenShare(stage: string, details: Record<string, unknown>): voi
   void window.openCord?.screenShare?.report?.(`${stage} ${JSON.stringify(details)}`);
 }
 
-export function screenShareSettings(resolution: ScreenShareResolution, frameRate: ScreenShareFrameRate, includeAudio: boolean, contentHint: "detail" | "motion"): ScreenShareSettings {
-  return { ...resolutions[resolution], frameRate, maxBitrate: bitrates[resolution][frameRate], includeAudio, contentHint };
+export function screenShareSettings(resolution: ScreenShareResolution, frameRate: ScreenShareFrameRate, includeAudio: boolean, contentHint: "detail" | "motion", sourceWidth = resolutions[resolution].width, sourceHeight = resolutions[resolution].height): ScreenShareSettings {
+  const safeWidth = Math.max(1, sourceWidth);
+  const safeHeight = Math.max(1, sourceHeight);
+  const sourceScale = resolution === 1440 ? Math.min(1, resolutions[1440].width / safeWidth, resolutions[1440].height / safeHeight) : Math.min(1, resolution / safeHeight);
+  const width = Math.max(2, Math.round((safeWidth * sourceScale) / 2) * 2);
+  const height = Math.max(2, Math.round((safeHeight * sourceScale) / 2) * 2);
+  const baselinePixels = resolutions[resolution].width * resolutions[resolution].height;
+  const actualPixels = width * height;
+  const scaledBitrate = Math.ceil((bitrates[resolution][frameRate] * actualPixels / baselinePixels) / 100_000) * 100_000;
+  return { width, height, frameRate, maxBitrate: Math.min(20_000_000, scaledBitrate), includeAudio, contentHint };
 }
 
 export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, maxFrameRate = DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, onOpenChange, onStart }: { open: boolean; maxResolution?: ScreenShareResolution; maxFrameRate?: ScreenShareFrameRate; onOpenChange: (open: boolean) => void; onStart: (settings: ScreenShareSettings) => Promise<void> }): React.ReactElement {
@@ -76,13 +90,14 @@ export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_M
   }, [open]);
 
   const selected = useMemo(() => sources.find((source) => source.id === selectedId), [selectedId, sources]);
+  const selectedSettings = screenShareSettings(selectedResolution, selectedFrameRate, includeAudio, contentHint, selected?.width, selected?.height);
   async function start(): Promise<void> {
     const bridge = window.openCord?.screenShare;
     if (!bridge || !selected) return;
     setStarting(true); setError("");
     try {
       await bridge.selectSource({ sourceId: selected.id, includeAudio });
-      await onStart(screenShareSettings(selectedResolution, selectedFrameRate, includeAudio, contentHint));
+      await onStart(selectedSettings);
       onOpenChange(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось запустить демонстрацию экрана");
@@ -92,7 +107,7 @@ export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_M
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-4xl"><DialogHeader><div className="mb-2 grid size-11 place-items-center rounded-2xl bg-cyan-400/10 text-cyan-300"><MonitorUp className="size-5" /></div><DialogTitle>Демонстрация экрана</DialogTitle><DialogDescription>Выберите экран или приложение, затем настройте качество трансляции.</DialogDescription></DialogHeader>
     {loading ? <div className="grid min-h-52 place-items-center text-sm text-slate-500"><LoaderCircle className="mb-2 size-6 animate-spin text-violet-300" />Получаем доступные окна…</div> : <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
       <section><div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Что показать</h3><span className="text-[10px] text-slate-600">{sources.length} источников</span></div><div className="scrollbar-thin grid max-h-[360px] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">{sources.map((source) => <button key={source.id} type="button" onClick={() => setSelectedId(source.id)} className={cn("group overflow-hidden rounded-2xl border bg-black/20 p-1.5 text-left transition", selectedId === source.id ? "border-violet-400/70 ring-2 ring-violet-400/20" : "border-white/8 hover:border-white/20")}><div className="relative aspect-video overflow-hidden rounded-xl bg-[#090c13]"><Image unoptimized fill sizes="240px" src={source.thumbnail} alt="" className="object-cover" /></div><div className="flex items-center gap-2 px-1.5 pb-1 pt-2">{source.appIcon ? <Image unoptimized width={16} height={16} src={source.appIcon} alt="" className="size-4 rounded" /> : source.kind === "screen" ? <MonitorUp className="size-4 text-cyan-300" /> : <Square className="size-4 text-violet-300" />}<span className="min-w-0 truncate text-xs font-medium text-slate-300">{source.name}</span></div></button>)}</div>{!sources.length && !error && <p className="rounded-2xl border border-white/8 bg-black/15 p-5 text-sm text-slate-500">Не найдено доступных экранов или окон.</p>}</section>
-      <aside className="space-y-4 rounded-2xl border border-white/8 bg-black/15 p-4"><OptionGroup label="Качество" values={availableResolutions} value={selectedResolution} format={(value) => `${value}p`} onChange={(value) => setResolution(value as ScreenShareResolution)} /><OptionGroup label="Кадров в секунду" values={availableFrameRates} value={selectedFrameRate} format={String} onChange={(value) => { const next = value as ScreenShareFrameRate; setFrameRate(next); if (next === 60) setContentHint("motion"); }} /><div><p className="mb-2 text-xs font-semibold text-slate-400">Содержимое</p><div className="grid grid-cols-2 gap-1 rounded-xl bg-black/25 p-1"><button type="button" onClick={() => setContentHint("detail")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "detail" ? "bg-violet-500 text-white" : "text-slate-500")}>Текст</button><button type="button" onClick={() => setContentHint("motion")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "motion" ? "bg-violet-500 text-white" : "text-slate-500")}>Движение</button></div></div><label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/8 bg-white/[.025] p-3 text-xs text-slate-300"><input type="checkbox" checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} className="size-4 accent-violet-500" /><Volume2 className="size-4 text-cyan-300" /><span>Системный звук</span></label><div className="rounded-xl bg-violet-400/[.06] p-3 text-[11px] leading-5 text-violet-100/65"><strong className="block text-violet-200">{selectedResolution}p · {selectedFrameRate} FPS</strong>До {(bitrates[selectedResolution][selectedFrameRate] / 1_000_000).toFixed(1)} Мбит/с · {contentHint === "motion" ? "приоритет плавности" : "приоритет чёткости"}<span className="mt-1 block text-[10px] text-slate-500">Лимит сервера: {maxResolution}p · {maxFrameRate} FPS</span></div></aside>
+      <aside className="space-y-4 rounded-2xl border border-white/8 bg-black/15 p-4"><OptionGroup label="Качество" values={availableResolutions} value={selectedResolution} format={(value) => screenShareResolutionLabel(value as ScreenShareResolution)} onChange={(value) => setResolution(value as ScreenShareResolution)} /><OptionGroup label="Кадров в секунду" values={availableFrameRates} value={selectedFrameRate} format={String} onChange={(value) => { const next = value as ScreenShareFrameRate; setFrameRate(next); if (next === 60) setContentHint("motion"); }} /><div><p className="mb-2 text-xs font-semibold text-slate-400">Содержимое</p><div className="grid grid-cols-2 gap-1 rounded-xl bg-black/25 p-1"><button type="button" onClick={() => setContentHint("detail")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "detail" ? "bg-violet-500 text-white" : "text-slate-500")}>Текст</button><button type="button" onClick={() => setContentHint("motion")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "motion" ? "bg-violet-500 text-white" : "text-slate-500")}>Движение</button></div></div><label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/8 bg-white/[.025] p-3 text-xs text-slate-300"><input type="checkbox" checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} className="size-4 accent-violet-500" /><Volume2 className="size-4 text-cyan-300" /><span>Системный звук</span></label><div className="rounded-xl bg-violet-400/[.06] p-3 text-[11px] leading-5 text-violet-100/65"><strong className="block text-violet-200">{screenShareResolutionLabel(selectedResolution)} · {selectedFrameRate} FPS</strong>Кадр {selectedSettings.width}×{selectedSettings.height} · до {(selectedSettings.maxBitrate / 1_000_000).toFixed(1)} Мбит/с<span className="block">{contentHint === "motion" ? "Приоритет плавности" : "Приоритет чёткости"}</span><span className="mt-1 block text-[10px] text-slate-500">Лимит сервера: {screenShareResolutionLabel(maxResolution)} · {maxFrameRate} FPS</span></div></aside>
     </div>}
     {error && <p role="alert" className="rounded-xl border border-red-400/20 bg-red-400/[.07] px-4 py-3 text-xs text-red-200">{error}</p>}
     <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)}>Отмена</Button><Button onClick={() => void start()} disabled={!selected || loading || starting}>{starting ? <LoaderCircle className="size-4 animate-spin" /> : <ScreenShare className="size-4" />}Начать демонстрацию</Button></div>
@@ -142,8 +157,8 @@ export function ScreenShareSurface({ stream, className, fullscreenControls }: { 
           try {
             const sourceWidth = frame.displayWidth || frame.codedWidth;
             const sourceHeight = frame.displayHeight || frame.codedHeight;
-            const width = Math.min(sourceWidth, 1920);
-            const height = Math.round(width * sourceHeight / sourceWidth);
+            const width = sourceWidth;
+            const height = sourceHeight;
             if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
             context.drawImage(frame, 0, 0, width, height);
             if (!firstFrameLogged) {
@@ -171,8 +186,8 @@ export function ScreenShareSurface({ stream, className, fullscreenControls }: { 
     const drawFrame = (): void => {
       if (stopped) return;
       if (context && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
-        const width = Math.min(video.videoWidth, 1920);
-        const height = Math.round(width * video.videoHeight / video.videoWidth);
+        const width = video.videoWidth;
+        const height = video.videoHeight;
         if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
         context.drawImage(video, 0, 0, width, height);
         if (!firstFrameLogged) {

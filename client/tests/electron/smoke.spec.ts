@@ -46,6 +46,9 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   await page.getByRole("button", { name: "Отправить" }).click();
   await expect(page.getByText("Первое сетевое сообщение")).toBeVisible();
   await page.screenshot({ path: "test-results/chat.png" });
+  await page.getByRole("button", { name: "Гостиная" }).click();
+  await expect(page.getByRole("heading", { name: "Участники" })).toBeVisible();
+  await page.screenshot({ path: "test-results/voice-room.png" });
   await page.evaluate(() => window.openCord?.storage.reset());
   await page.evaluate(() => window.openCord?.window.close());
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((window) => window.isVisible()))).toBe(false);

@@ -22,6 +22,8 @@ describe("ChatRepository", () => {
     expect(await repository.getServer()).toMatchObject({ name: "Команда", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
     await repository.updateServerSettings({ name: "Команда без лимита", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 });
     expect(await repository.getServer()).toMatchObject({ name: "Команда без лимита", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 });
+    await repository.updateServerSettings({ name: "Источник", maxAttachmentBytes: null, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
+    expect(await repository.getServer()).toMatchObject({ name: "Источник", screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
   });
 
   it("does not overwrite a manually changed name on the same deployment restart", async () => {

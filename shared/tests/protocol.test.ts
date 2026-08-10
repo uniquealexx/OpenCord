@@ -45,9 +45,11 @@ describe("OpenCord protocol", () => {
   it("validates voice mute and deafen state synchronization", () => {
     const requestId = crypto.randomUUID();
     const channelId = crypto.randomUUID();
-    const participant = { userId: "voice-member", channelId, muted: true, deafened: false };
-    expect(clientEventSchema.parse({ type: "voice.state.update", requestId, muted: true, deafened: false })).toMatchObject({ muted: true, deafened: false });
+    const participant = { userId: "voice-member", channelId, muted: true, deafened: false, serverMuted: true, viewingScreenShareUserId: "screen-owner" };
+    expect(clientEventSchema.parse({ type: "voice.state.update", requestId, muted: true, deafened: false, viewingScreenShareUserId: "screen-owner" })).toMatchObject({ muted: true, deafened: false, viewingScreenShareUserId: "screen-owner" });
+    expect(clientEventSchema.parse({ type: "voice.member.mute", requestId, userId: "voice-member", muted: true })).toMatchObject({ userId: "voice-member", muted: true });
     expect(serverEventSchema.parse({ type: "voice.participant.updated", participant })).toEqual({ type: "voice.participant.updated", participant });
+    expect(clientEventSchema.parse({ type: "voice.state.update", requestId, muted: false, deafened: false, viewingScreenShareUserId: null })).toMatchObject({ viewingScreenShareUserId: null });
     expect(() => serverEventSchema.parse({ type: "voice.participant.updated", participant: { userId: "voice-member", channelId } })).toThrow();
   });
 
@@ -94,9 +96,10 @@ describe("OpenCord protocol", () => {
     expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings })).toMatchObject({ maxAttachmentBytes: MEBIBYTE, ...settings });
     expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES, ...settings })).toMatchObject({ maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES });
     expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: null, ...settings })).toMatchObject({ maxAttachmentBytes: null });
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, screenShareMaxResolution: 1440 })).toMatchObject({ screenShareMaxResolution: 1440 });
     expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE - 1, ...settings })).toThrow();
     expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: ATTACHMENT_LIMIT_MAX_BYTES + 1, ...settings })).toThrow();
-    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, screenShareMaxResolution: 1440 })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, screenShareMaxResolution: 2160 })).toThrow();
     expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, screenShareMaxFrameRate: 120 })).toThrow();
     expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId, maxAttachmentBytes: MEBIBYTE, ...settings, name: "x" })).toThrow();
   });

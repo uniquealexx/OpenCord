@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeImage, session, shell, Tray, type DesktopCapturerSource, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray, type DesktopCapturerSource, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { IPC } from "../src/shared/bridge";
@@ -9,7 +9,7 @@ import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
 import { GitHubReleaseBundleProvider, githubReleaseManifestUrl, LocalServerBundleProvider, ReleaseAwareServerBundleProvider } from "./server-bundle";
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
-import { downloadAttachment, prepareAttachmentPreviewDirectory, previewAttachment, uploadAttachment } from "./attachments";
+import { downloadAttachment, prepareAttachmentPreviewDirectory, previewAttachment, setAttachmentLatencySensitive, uploadAttachment } from "./attachments";
 import { autoUpdater } from "electron-updater";
 import { ClientUpdateManager, runRequiredStartupUpdate } from "./client-updater";
 import type { ClientUpdateState } from "../src/shared/updater";
@@ -84,6 +84,16 @@ function requireMainRenderer(event: IpcMainInvokeEvent): void {
 
 async function listScreenShareSources(): Promise<DesktopCapturerSource[]> {
   return desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 480, height: 270 }, fetchWindowIcons: true });
+}
+
+function screenShareSourceSize(source: DesktopCapturerSource): { width: number; height: number } {
+  const display = source.display_id ? screen.getAllDisplays().find((item) => String(item.id) === source.display_id) : undefined;
+  if (display) return {
+    width: Math.max(1, Math.round(display.size.width * display.scaleFactor)),
+    height: Math.max(1, Math.round(display.size.height * display.scaleFactor)),
+  };
+  const thumbnailSize = source.thumbnail.getSize();
+  return { width: Math.max(1, thumbnailSize.width), height: Math.max(1, thumbnailSize.height) };
 }
 
 function createWindow(): void {
@@ -307,19 +317,19 @@ function registerIpc(): void {
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     const filePath = result.filePaths[0];
     if (result.canceled || !filePath) return null;
-    return uploadAttachment(filePath, context.serverAddress, context.sessionToken, context.maxAttachmentBytes);
+    return uploadAttachment(filePath, context.serverAddress, context.sessionToken, context.maxAttachmentBytes, { latencySensitive: context.latencySensitive });
   });
   ipcMain.handle(IPC.attachmentDownload, async (_event, input: unknown) => {
     const request = attachmentDownloadRequestSchema.parse(input);
     const options = { title: "Сохранить вложение", defaultPath: request.attachment.fileName };
     const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) return false;
-    await downloadAttachment(request.serverAddress, request.sessionToken, request.attachment, result.filePath);
+    await downloadAttachment(request.serverAddress, request.sessionToken, request.attachment, result.filePath, { latencySensitive: request.latencySensitive });
     return true;
   });
   ipcMain.handle(IPC.attachmentPreview, async (_event, input: unknown) => {
     const request = attachmentDownloadRequestSchema.parse(input);
-    return previewAttachment(request.serverAddress, request.sessionToken, request.attachment, attachmentPreviewDirectory);
+    return previewAttachment(request.serverAddress, request.sessionToken, request.attachment, attachmentPreviewDirectory, { latencySensitive: request.latencySensitive });
   });
   ipcMain.handle(IPC.updateGetState, () => clientUpdateManager.getState());
   ipcMain.handle(IPC.updateCheck, () => clientUpdateManager.check());
@@ -366,6 +376,9 @@ void app.whenReady().then(async () => {
   }, (progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.deploymentProgress, progress);
   });
+  ipcMain.handle(IPC.attachmentSetLatencySensitive, (_event, value: unknown) => {
+    setAttachmentLatencySensitive(value === true);
+  });
   ipcMain.handle(IPC.screenShareListSources, async (event) => {
     requireMainRenderer(event);
     const sources = await listScreenShareSources();
@@ -373,6 +386,7 @@ void app.whenReady().then(async () => {
       id: source.id,
       name: source.name,
       kind: source.id.startsWith("screen:") ? "screen" : "window",
+      ...screenShareSourceSize(source),
       thumbnail: source.thumbnail.toDataURL(),
       appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
     })));

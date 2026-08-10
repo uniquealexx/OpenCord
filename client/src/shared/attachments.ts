@@ -12,6 +12,7 @@ export const attachmentTransferContextSchema = z.object({
   serverAddress: serverAddressSchema,
   sessionToken: z.string().min(40).max(200),
   maxAttachmentBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable(),
+  latencySensitive: z.boolean().optional(),
 });
 
 export const attachmentDownloadRequestSchema = attachmentTransferContextSchema.omit({ maxAttachmentBytes: true }).extend({ attachment: attachmentSchema });

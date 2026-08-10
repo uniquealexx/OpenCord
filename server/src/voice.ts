@@ -24,8 +24,9 @@ export interface VoiceService {
   capability(): Promise<VoiceCapability>;
   issueJoin(request: VoiceJoinRequest): Promise<VoiceJoinAuthorization>;
   leave(userId: string): Promise<VoicePresence | null>;
-  updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened">): VoicePresence | null;
+  updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened" | "viewingScreenShareUserId">): VoicePresence | null;
   disconnect(userId: string, reason: "moderated" | "replaced" | "channel_deleted"): Promise<VoicePresence | null>;
+  setModeratorMuted(userId: string, muted: boolean): Promise<VoicePresence | null>;
   removeChannel(channelId: string): Promise<VoicePresence[]>;
   presence(): VoicePresence[];
   receiveWebhook(body: string, authorization: string | undefined): Promise<VoiceWebhookChange | null>;
@@ -42,6 +43,7 @@ export interface LiveKitVoiceOptions {
 }
 
 export const LIVEKIT_PUBLISH_SOURCES = [TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
+export const LIVEKIT_SERVER_MUTED_PUBLISH_SOURCES = [TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
 
 export class DisabledVoiceService implements VoiceService {
   async capability(): Promise<VoiceCapability> {
@@ -52,6 +54,7 @@ export class DisabledVoiceService implements VoiceService {
   async leave(): Promise<VoicePresence | null> { return null; }
   updateState(): VoicePresence | null { return null; }
   async disconnect(): Promise<VoicePresence | null> { return null; }
+  async setModeratorMuted(): Promise<VoicePresence | null> { return null; }
   async removeChannel(): Promise<VoicePresence[]> { return []; }
   presence(): VoicePresence[] { return []; }
   async receiveWebhook(): Promise<VoiceWebhookChange | null> { return null; }
@@ -62,6 +65,7 @@ export class LiveKitVoiceService implements VoiceService {
   private readonly client: RoomServiceClient;
   private readonly receiver: WebhookReceiver;
   private readonly presences = new Map<string, VoicePresence>();
+  private readonly selfMutedByUser = new Map<string, boolean>();
   private readonly roomsByChannel = new Map<string, string>();
   private healthy = false;
 
@@ -99,7 +103,7 @@ export class LiveKitVoiceService implements VoiceService {
     const participants = await this.client.listParticipants(room);
     if (request.participantLimit > 0 && participants.filter((participant) => participant.identity !== request.userId).length >= request.participantLimit) throw new VoiceRoomFullError();
     const token = new AccessToken(this.options.apiKey, this.options.apiSecret, { identity: request.userId, ttl: 300 });
-    token.addGrant({ roomJoin: true, room, canPublish: true, canPublishSources: LIVEKIT_PUBLISH_SOURCES, canSubscribe: true, canPublishData: false, canUpdateOwnMetadata: false });
+    token.addGrant({ roomJoin: true, room, canPublish: true, canPublishSources: replaced?.serverMuted ? LIVEKIT_SERVER_MUTED_PUBLISH_SOURCES : LIVEKIT_PUBLISH_SOURCES, canSubscribe: true, canPublishData: false, canUpdateOwnMetadata: false });
     return { endpoint: this.options.publicUrl, token: await token.toJwt(), expiresAt: new Date(Date.now() + 300_000).toISOString(), replaced };
   }
 
@@ -110,10 +114,13 @@ export class LiveKitVoiceService implements VoiceService {
     return presence;
   }
 
-  updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened">): VoicePresence | null {
+  updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened" | "viewingScreenShareUserId">): VoicePresence | null {
     const current = this.presences.get(userId);
     if (!current) return null;
-    const next = { ...current, ...state };
+    this.selfMutedByUser.set(userId, state.muted);
+    const viewedParticipant = state.viewingScreenShareUserId ? this.presences.get(state.viewingScreenShareUserId) : null;
+    const viewingScreenShareUserId = viewedParticipant?.channelId === current.channelId ? viewedParticipant.userId : null;
+    const next = { ...current, ...state, viewingScreenShareUserId, muted: state.muted || current.serverMuted };
     this.presences.set(userId, next);
     return next;
   }
@@ -123,11 +130,32 @@ export class LiveKitVoiceService implements VoiceService {
     return this.leave(userId);
   }
 
+  async setModeratorMuted(userId: string, muted: boolean): Promise<VoicePresence | null> {
+    const current = this.presences.get(userId);
+    if (!current) return null;
+    await this.client.updateParticipant(this.roomForChannel(current.channelId), userId, {
+      permission: {
+        canPublish: true,
+        canPublishData: false,
+        canPublishSources: muted ? LIVEKIT_SERVER_MUTED_PUBLISH_SOURCES : LIVEKIT_PUBLISH_SOURCES,
+        canSubscribe: true,
+        canUpdateMetadata: false,
+      },
+    });
+    const selfMuted = this.selfMutedByUser.get(userId) ?? (current.muted && !current.serverMuted);
+    const next = { ...current, serverMuted: muted, muted: muted || selfMuted };
+    this.presences.set(userId, next);
+    return next;
+  }
+
   async removeChannel(channelId: string): Promise<VoicePresence[]> {
     const affected = this.presence().filter((presence) => presence.channelId === channelId);
     if (!affected.length) return [];
     try { await this.client.deleteRoom(this.roomForChannel(channelId)); } catch { /* A room may already be empty/closed. */ }
-    for (const presence of affected) this.presences.delete(presence.userId);
+    for (const presence of affected) {
+      this.presences.delete(presence.userId);
+      this.selfMutedByUser.delete(presence.userId);
+    }
     this.roomsByChannel.delete(channelId);
     return affected;
   }
@@ -148,14 +176,20 @@ export class LiveKitVoiceService implements VoiceService {
       channelId: parsed.channelId,
       muted: previous?.muted ?? false,
       deafened: previous?.deafened ?? false,
+      serverMuted: previous?.serverMuted ?? false,
+      viewingScreenShareUserId: previous?.viewingScreenShareUserId ?? null,
     };
     if (event.event === "participant_joined") {
+      this.selfMutedByUser.set(userId, this.selfMutedByUser.get(userId) ?? (presence.muted && !presence.serverMuted));
       this.presences.set(userId, presence);
       return { joined: presence };
     }
     if (event.event === "participant_left" || event.event === "participant_connection_aborted") {
       const current = this.presences.get(userId);
-      if (current?.channelId === presence.channelId) this.presences.delete(userId);
+      if (current?.channelId === presence.channelId) {
+        this.presences.delete(userId);
+        this.selfMutedByUser.delete(userId);
+      }
       return { left: presence };
     }
     return null;
@@ -173,11 +207,17 @@ export class LiveKitVoiceService implements VoiceService {
         if (!participant.identity) continue;
         const previous = this.presences.get(participant.identity);
         const microphone = participant.tracks.find((track) => track.source === TrackSource.MICROPHONE);
+        const allowedSources = participant.permission?.canPublishSources ?? [];
+        const serverMuted = previous?.serverMuted ?? (allowedSources.length > 0 && !allowedSources.includes(TrackSource.MICROPHONE));
+        const selfMuted = this.selfMutedByUser.get(participant.identity) ?? microphone?.muted ?? previous?.muted ?? false;
+        this.selfMutedByUser.set(participant.identity, selfMuted);
         next.set(participant.identity, {
           userId: participant.identity,
           channelId: parsed.channelId,
-          muted: microphone?.muted ?? previous?.muted ?? false,
+          muted: serverMuted || selfMuted,
           deafened: previous?.deafened ?? false,
+          serverMuted,
+          viewingScreenShareUserId: previous?.viewingScreenShareUserId ?? null,
         });
       }
     }
@@ -201,6 +241,7 @@ export class LiveKitVoiceService implements VoiceService {
   private async removeFromRoom(presence: VoicePresence): Promise<void> {
     try { await this.client.removeParticipant(this.roomForChannel(presence.channelId), presence.userId, { revokeTokenTs: BigInt(Math.floor(Date.now() / 1000)) }); } catch { /* The participant may have already left. */ }
     this.presences.delete(presence.userId);
+    this.selfMutedByUser.delete(presence.userId);
   }
 
   private roomForChannel(channelId: string): string {

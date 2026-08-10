@@ -76,6 +76,8 @@ export const clientPreferencesSchema = z.object({
   echoCancellation: z.boolean(),
   noiseSuppression: z.boolean(),
   autoGainControl: z.boolean(),
+  automaticInputSensitivity: z.boolean().default(true),
+  manualInputSensitivityDb: z.number().int().min(-80).max(-10).default(-45),
   voiceParticipantSettings: z.record(z.string().min(1).max(256), z.object({ muted: z.boolean(), volume: z.number().min(0).max(1) })).default({}),
 });
 const legacyClientPreferencesSchema = z.object({ compactMode: z.boolean(), showMemberList: z.boolean(), notifications: z.boolean() });
@@ -123,7 +125,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {} },
+    preferences: { compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
   };
 }
 
