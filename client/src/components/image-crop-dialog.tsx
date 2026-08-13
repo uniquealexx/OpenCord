@@ -91,7 +91,7 @@ function ImageCropEditor({ source, title, description, aspectRatio, rounded = fa
     <DialogContent>
       <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{description}</DialogDescription></DialogHeader>
       <div className="space-y-4">
-        <div className={cn("relative mx-auto w-full overflow-hidden border border-white/10 bg-black shadow-inner", rounded ? "max-w-[360px] rounded-[28%]" : "rounded-2xl")} style={{ aspectRatio }}>
+        <div className={cn("relative mx-auto w-full overflow-hidden border border-white/10 bg-black shadow-inner", rounded ? "max-w-[360px] rounded-full" : "rounded-2xl")} style={{ aspectRatio }}>
           <canvas ref={canvasRef} width={PREVIEW_WIDTH} height={height} aria-label="Область кадрирования" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} className={cn("size-full touch-none object-cover", !loading && !error && "cursor-grab active:cursor-grabbing")} />
           <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-35 [&>*]:border-white/30"><span className="border-b border-r" /><span className="border-b border-r" /><span className="border-b" /><span className="border-b border-r" /><span className="border-b border-r" /><span className="border-b" /><span className="border-r" /><span className="border-r" /><span /></div>
           {loading && <div className="absolute inset-0 grid place-items-center bg-black/60"><LoaderCircle className="size-7 animate-spin text-violet-300" /></div>}

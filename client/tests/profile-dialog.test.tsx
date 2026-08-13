@@ -74,7 +74,7 @@ describe("ProfileDialog status", () => {
     fireEvent.change(avatarInput!, { target: { files: [new File(["source"], "avatar.png", { type: "image/png" })] } });
 
     expect(screen.getByRole("heading", { name: "Кадрирование аватара" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Область кадрирования").parentElement).toHaveClass("rounded-[28%]");
+    expect(screen.getByLabelText("Область кадрирования").parentElement).toHaveClass("rounded-full");
   });
 
   it("can reopen the crop editor for an installed profile banner", async () => {

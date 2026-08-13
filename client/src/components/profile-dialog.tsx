@@ -86,10 +86,10 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
         <DialogHeader><DialogTitle>{ru.profile.title}</DialogTitle><DialogDescription>{ru.profile.description}</DialogDescription></DialogHeader>
         <form onSubmit={(event) => void submit(event)} className="space-y-5">
           <div className="overflow-hidden rounded-2xl border border-white/7 bg-white/[.025]">
-            <div className="relative aspect-[5/2] overflow-hidden bg-[radial-gradient(circle_at_18%_0%,rgba(139,92,246,.7),transparent_52%),linear-gradient(120deg,#312e81,#164e63)]">
+            <div className="relative aspect-[5/2] overflow-hidden bg-primary/15">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               {banner && <img src={banner} alt="" className="absolute inset-0 size-full object-cover" />}
-              <div className="absolute inset-x-0 bottom-0 flex justify-end gap-2 bg-gradient-to-t from-black/65 to-transparent p-3 pt-8">
+              <div className="absolute inset-x-0 bottom-0 flex justify-end gap-2 bg-black/45 p-3">
                 <input ref={bannerInputRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseBanner(event)} />
                 <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => bannerInputRef.current?.click()}><ImagePlus className="size-4" />{banner ? "Заменить" : "Добавить шапку"}</Button>
                 {banner && <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => cropExisting("banner")}><Crop className="size-4" />Кадрировать</Button>}

@@ -190,7 +190,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed, preset, updat
         </div>
         <Field label={ru.deployment.email}><Input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="admin@example.com" disabled={!domain.trim()} required={Boolean(domain.trim())} /></Field>
         <Field label={ru.deployment.authentication}>
-          <div className="grid grid-cols-2 gap-2 rounded-xl bg-black/20 p-1">
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-white/[.04] p-1">
             <AuthButton active={authentication === "private-key"} onClick={() => setAuthentication("private-key")}><KeyRound className="size-4" />{ru.deployment.privateKey}</AuthButton>
             <AuthButton active={authentication === "password"} onClick={() => setAuthentication("password")}>{ru.deployment.password}</AuthButton>
           </div>
@@ -258,7 +258,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed, preset, updat
                 : <LoaderCircle className="size-5 animate-spin text-violet-300" />}
           <div><div className={`text-sm font-semibold ${failedByError ? "text-red-200" : ""}`}>{finished ? redeployment ? ru.deployment.redeploymentDone : ru.deployment.done : failedByError ? redeployment ? ru.deployment.redeploymentFailed : ru.deployment.failed : cancelled ? ru.deployment.cancelled : redeployment ? ru.deployment.redeploymentProgress : ru.deployment.progress}</div><div className="text-xs text-slate-500">{domain || `http://${host}:3210`}</div></div>
         </div>
-        <div aria-label="Журнал развёртывания" className="scrollbar-thin h-64 overflow-y-auto rounded-xl bg-[#080a10] p-3 font-mono text-[11px] leading-5 text-slate-400">
+        <div aria-label="Журнал развёртывания" className="scrollbar-thin h-64 overflow-y-auto rounded-xl bg-[#191b1e] p-3 font-mono text-[11px] leading-5 text-slate-400">
           {progress.length ? progress.map((item, index) => <div key={`${item.phase}-${index}`} className={item.level === "error" ? "text-red-300" : item.level === "success" ? "text-emerald-300" : ""}>[{item.phase}] {item.message}</div>) : <div>Ожидание запуска операции…</div>}
         </div>
         {finished ? <Button onClick={() => close(false)} className="w-full">Готово</Button> : failed ? <Button variant="secondary" onClick={() => setStep(environment ? "environment" : "configuration")} className="w-full">Выбрать способ установки</Button> : <Button variant="danger" onClick={() => void cancel()} className="w-full">{ru.deployment.cancel}</Button>}

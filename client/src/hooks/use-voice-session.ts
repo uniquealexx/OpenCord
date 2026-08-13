@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, VideoQuality, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication, type RemoteVideoTrack } from "livekit-client";
 import type { ClientPreferences, VoiceParticipantSettings } from "@/shared/state";
-import { RnnoiseAudioProcessor } from "@/shared/rnnoise-processor";
+import { MicrophoneTrackProcessor } from "@/shared/rnnoise-processor";
 
 export type VoiceSessionStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface VoiceAuthorization { channelId: string; endpoint: string; token: string; expiresAt: string }
@@ -152,27 +152,45 @@ export function requestHighestScreenShareQuality(publication: Pick<RemoteTrackPu
   publication.setVideoQuality(VideoQuality.HIGH);
 }
 
-export async function configureMicrophoneNoiseSuppression(track: LocalAudioTrack, enabled: boolean): Promise<"enhanced" | "standard" | "off"> {
+export interface MicrophoneProcessingResult {
+  processor: MicrophoneTrackProcessor | null;
+  suppression: "enhanced" | "standard" | "off";
+}
+
+export async function configureMicrophoneProcessing(track: LocalAudioTrack, preferences: Pick<ClientPreferences, "noiseSuppression" | "echoCancellation" | "autoGainControl">): Promise<MicrophoneProcessingResult> {
   const currentProcessor = track.getProcessor();
-  if (!enabled) {
-    if (currentProcessor?.name === "opencord-rnnoise") await track.stopProcessor();
-    try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* The device may not expose this constraint. */ }
-    return "off";
+  if (currentProcessor) await track.stopProcessor();
+  try { await track.mediaStreamTrack.applyConstraints({ echoCancellation: preferences.echoCancellation, autoGainControl: preferences.autoGainControl }); } catch { /* The device may not expose these constraints. */ }
+  const installProcessor = async (enableRnnoise: boolean): Promise<MicrophoneTrackProcessor | null> => {
+    try {
+      const processor = new MicrophoneTrackProcessor({ enableRnnoise });
+      await track.setProcessor(processor);
+      return processor;
+    } catch {
+      return null;
+    }
+  };
+  if (preferences.noiseSuppression) {
+    try {
+      try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* Avoid stacking two suppressors where supported. */ }
+      const processor = await installProcessor(true);
+      if (!processor) throw new Error("Processor installation failed");
+      return { processor, suppression: "enhanced" };
+    } catch (error) {
+      console.warn("OpenCord RNNoise processor is unavailable; using standard WebRTC noise suppression", error);
+      try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: true }); } catch { /* Capture defaults remain the fallback. */ }
+      const processor = await installProcessor(false);
+      return { processor, suppression: "standard" };
+    }
   }
-  if (currentProcessor?.name === "opencord-rnnoise") return "enhanced";
-  try {
-    try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* Avoid stacking two suppressors where supported. */ }
-    await track.setProcessor(new RnnoiseAudioProcessor());
-    return "enhanced";
-  } catch (error) {
-    console.warn("OpenCord RNNoise processor is unavailable; using standard WebRTC noise suppression", error);
-    try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: true }); } catch { /* Capture defaults remain the fallback. */ }
-    return "standard";
-  }
+  try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* The device may not expose this constraint. */ }
+  const processor = await installProcessor(false);
+  return { processor, suppression: "off" };
 }
 
 export function useVoiceSession(authorization: VoiceAuthorization | null, preferences: ClientPreferences, onError: (message: string) => void, onParticipantAudioSettingsChange?: (settings: VoiceParticipantSettings) => void): VoiceSession {
   const roomRef = useRef<Room | null>(null);
+  const localGateProcessorRef = useRef<MicrophoneTrackProcessor | null>(null);
   const audioElementsRef = useRef<HTMLMediaElement[]>([]);
   const preferencesRef = useRef(preferences);
   const onParticipantAudioSettingsChangeRef = useRef(onParticipantAudioSettingsChange);
@@ -227,10 +245,14 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       const samples = new Float32Array(analyser.fftSize);
       const detector = { identity, speaking: false, stop: (): void => undefined };
       const localPreferences = identity === roomRef.current?.localParticipant.identity ? preferencesRef.current : null;
+      const pushToTalk = localPreferences?.voiceInputMode === "push-to-talk";
+      const gateController = localPreferences ? { setOpen: (open: boolean): void => localGateProcessorRef.current?.setGateOpen(open) } : null;
       const gate = createResponsiveVoiceActivityGate((speaking) => {
         detector.speaking = speaking;
         publishActiveSpeakers();
+        gateController?.setOpen(pushToTalk ? true : speaking);
       }, undefined, localPreferences ? { automatic: localPreferences.automaticInputSensitivity, manualThresholdDb: localPreferences.manualInputSensitivityDb } : undefined);
+      gateController?.setOpen(pushToTalk ? true : false);
       const interval = window.setInterval(() => {
         analyser.getFloatTimeDomainData(samples);
         gate.sample(calculateRms(samples));
@@ -247,7 +269,13 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [publishActiveSpeakers, stopResponsiveDetector]);
 
   const configureLocalMicrophone = useCallback(async (track: LocalAudioTrack): Promise<void> => {
-    await configureMicrophoneNoiseSuppression(track, preferencesRef.current.noiseSuppression);
+    const { processor } = await configureMicrophoneProcessing(track, preferencesRef.current);
+    localGateProcessorRef.current = processor;
+    if (processor) {
+      const detector = responsiveDetectorsRef.current.get(track);
+      const pushToTalk = preferencesRef.current.voiceInputMode === "push-to-talk";
+      processor.setGateOpen(pushToTalk || Boolean(detector?.speaking));
+    }
   }, []);
 
   useEffect(() => { preferencesRef.current = preferences; }, [preferences]);
@@ -296,22 +324,39 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [configureLocalMicrophone, preferences.noiseSuppression]);
 
   useEffect(() => {
+    const track = roomRef.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
+    if (!track) return;
+    void track.mediaStreamTrack.applyConstraints({
+      echoCancellation: preferences.echoCancellation,
+      autoGainControl: preferences.autoGainControl,
+    }).catch(() => undefined);
+  }, [preferences.echoCancellation, preferences.autoGainControl]);
+
+  useEffect(() => {
     const room = roomRef.current;
     const track = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
     if (room && track) startResponsiveDetector(track, room.localParticipant.identity);
-  }, [preferences.automaticInputSensitivity, preferences.manualInputSensitivityDb, startResponsiveDetector]);
+  }, [preferences.automaticInputSensitivity, preferences.manualInputSensitivityDb, preferences.voiceInputMode, startResponsiveDetector]);
 
   const refreshDevices = useCallback(async (): Promise<void> => {
     try {
-      const devices = await Room.getLocalDevices();
-      setInputDevices(devices.filter((device) => device.kind === "audioinput"));
-      setOutputDevices(devices.filter((device) => device.kind === "audiooutput"));
+      // Enumerate by explicit audio kind: a kindless Room.getLocalDevices()
+      // call makes LiveKit request the camera to resolve hidden device labels,
+      // which briefly turns on the webcam right after joining a voice channel.
+      // Per-kind calls acquire only the microphone when a permission is missing.
+      const [inputs, outputs] = await Promise.all([
+        Room.getLocalDevices("audioinput"),
+        Room.getLocalDevices("audiooutput"),
+      ]);
+      setInputDevices(inputs);
+      setOutputDevices(outputs);
     } catch { /* Device enumeration is unavailable before a media permission prompt. */ }
   }, []);
 
   const disposeRoom = useCallback(async (): Promise<void> => {
     const room = roomRef.current;
     roomRef.current = null;
+    localGateProcessorRef.current = null;
     for (const detector of responsiveDetectorsRef.current.values()) detector.stop();
     responsiveDetectorsRef.current.clear();
     liveKitSpeakerIdsRef.current.clear();

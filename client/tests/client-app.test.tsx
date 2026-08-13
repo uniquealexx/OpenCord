@@ -31,6 +31,26 @@ function readyState(): PersistedClientState {
   return state;
 }
 
+/** Веб-сокет, который никогда не открывается: тесты не выходят в сеть. */
+class FakeWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readyState = FakeWebSocket.CONNECTING;
+  readonly listeners: Record<string, ((event: { data?: string }) => void)[]> = {};
+  constructor(public readonly url: string) {}
+  addEventListener(type: string, handler: (event: { data?: string }) => void): void {
+    (this.listeners[type] ??= []).push(handler);
+  }
+  removeEventListener(): void {}
+  send(): void {}
+  close(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    for (const handler of this.listeners.close ?? []) handler({});
+  }
+}
+
 describe("ClientApp", () => {
   const save = vi.fn(async (state: PersistedClientState) => state);
 
@@ -77,11 +97,11 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
-    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
   });
 
@@ -173,7 +193,7 @@ describe("ClientApp", () => {
   it("saves the server name, unlimited attachments and screen-share limits together", async () => {
     const user = userEvent.setup();
     const onSaveSettings = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     const nameInput = screen.getByRole("textbox", { name: "Название сервера" });
     await user.clear(nameInput);
     await user.type(nameInput, "Новый OpenCord");
@@ -190,7 +210,7 @@ describe("ClientApp", () => {
   it("saves a manually entered bounded attachment limit", async () => {
     const user = userEvent.setup();
     const onSaveSettings = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     const input = screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" });
     await user.clear(input);
     await user.type(input, "1500");
@@ -210,7 +230,7 @@ describe("ClientApp", () => {
     expect(profileButtons).toHaveLength(2);
     await user.click(profileButtons[0]!);
     expect(screen.getByRole("dialog", { name: `Профиль ${message.authorName}` })).toBeInTheDocument();
-    expect(screen.getByTestId("profile-avatar-frame")).toHaveClass("rounded-[28%]");
+    expect(screen.getByTestId("profile-avatar-frame")).toHaveClass("rounded-full");
     expect(screen.getByText("Описание с сервера")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(profileButtons[0]).not.toHaveFocus();
@@ -593,5 +613,70 @@ describe("ClientApp", () => {
     expect(next.servers).toHaveLength(1);
     expect(next.servers[0]).toMatchObject({ id: "first", name: "Общий сервер", address: "http://127.0.0.1:3210" });
     expect(next.activeServerId).toBe("first");
+  });
+
+  it("clears the message draft when switching servers", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    state.servers = [...state.servers, { id: "second-server", name: "Второй сервер", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [{ id: "second-general", serverId: "second-server", name: "главный", kind: "text" as const, description: "", participantLimit: null }], members: [] }];
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const composer = screen.getByRole("textbox", { name: "Написать в #добро-пожаловать" }) as HTMLInputElement;
+    await user.type(composer, "черновик");
+    expect(composer).toHaveValue("черновик");
+
+    await user.click(screen.getByTitle("Второй сервер"));
+    expect(await screen.findByRole("textbox", { name: "Написать в #главный" })).toHaveValue("");
+  });
+
+  it("closes the search panel and drops results when switching servers", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    state.servers = [...state.servers, { id: "second-server", name: "Второй сервер", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [{ id: "second-general", serverId: "second-server", name: "главный", kind: "text" as const, description: "", participantLimit: null }], members: [] }];
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    await user.click(screen.getByRole("button", { name: "Открыть поиск по серверу" }));
+    await user.type(screen.getByLabelText("Текст поиска"), "Тестовое");
+    await user.click(screen.getByRole("button", { name: "Найти" }));
+    expect(await screen.findByText("Результаты")).toBeInTheDocument();
+
+    await user.click(screen.getByTitle("Второй сервер"));
+    expect(screen.queryByLabelText("Поиск по серверу")).not.toBeInTheDocument();
+  });
+
+  it("removes an unreachable server locally through the leave dialog", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    state.servers = [{ ...state.servers[0]!, id: "remote-server", address: "http://127.0.0.1:3210" }];
+    state.activeServerId = "remote-server";
+    window.openCord!.storage.load = vi.fn(async () => state);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    await user.click(screen.getByRole("button", { name: "Управление сервером: Тестовый сервер" }));
+    await user.click(await screen.findByRole("button", { name: "Удалить только с этого устройства" }));
+
+    expect(await screen.findByRole("heading", { name: "Главный экран" })).toBeInTheDocument();
+    expect(await screen.findByText("Сервер удалён с этого устройства")).toBeInTheDocument();
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ servers: [], activeServerId: null, activeChannelId: null }));
+  });
+
+  it("opens the profile editor from the home screen", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    state.servers = [];
+    state.activeServerId = null;
+    state.activeChannelId = null;
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByRole("heading", { name: "Главный экран" });
+
+    await user.click(screen.getByRole("button", { name: "Настроить профиль" }));
+    expect(await screen.findByRole("heading", { name: "Публичный профиль" })).toBeInTheDocument();
   });
 });

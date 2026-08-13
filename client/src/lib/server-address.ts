@@ -22,10 +22,17 @@ export function requiresInsecureHttpConfirmation(input: string): boolean {
 export function sameServerAddress(left: string | null, right: string | null): boolean {
   if (!left || !right) return false;
   try {
-    return normalizeServerAddress(left, { allowInsecureHttp: true }) === normalizeServerAddress(right, { allowInsecureHttp: true });
+    return comparisonKey(left) === comparisonKey(right);
   } catch {
     return left.trim().replace(/\/$/u, "").toLowerCase() === right.trim().replace(/\/$/u, "").toLowerCase();
   }
+}
+
+/** Сравнение адресов: loopback-алиасы (localhost, 127.0.0.1, ::1) считаются одним хостом. */
+function comparisonKey(input: string): string {
+  const url = new URL(normalizeServerAddress(input, { allowInsecureHttp: true }));
+  const host = isLoopbackHost(url.hostname) ? "loopback" : url.hostname.toLowerCase();
+  return `${url.protocol}//${host}:${url.port}`;
 }
 
 function isLoopbackHost(hostname: string): boolean {

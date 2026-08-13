@@ -37,10 +37,10 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
       : [...new Set([...current, ...attachmentTypes])]);
   }
 
-  return <aside aria-label="Поиск по серверу" className="absolute inset-y-0 right-0 z-50 flex w-[420px] max-w-[calc(100%-16px)] flex-col border-l border-white/10 bg-[#0f131d] shadow-[-24px_0_70px_rgba(0,0,0,.45)]">
+  return <aside aria-label="Поиск по серверу" className="glass absolute inset-y-0 right-0 z-50 flex w-[420px] max-w-[calc(100%-16px)] flex-col border-l border-white/10 shadow-[-24px_0_70px_rgba(0,0,0,.4)]">
     <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="border-b border-white/[.07] p-4">
       <div className="mb-3 flex items-center gap-2"><Search className="size-4 text-violet-300" /><div className="min-w-0 flex-1"><h2 className="text-sm font-bold text-white">Поиск</h2><p className="truncate text-[10px] text-slate-500">{serverName}</p></div><button type="button" aria-label="Закрыть поиск" onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-white/5 hover:text-white"><X className="size-4" /></button></div>
-      <div className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 focus-within:border-violet-400/40"><Search className="size-4 text-slate-500" /><input autoFocus aria-label="Текст поиска" value={query} onChange={(event) => setQuery(event.target.value)} maxLength={200} placeholder="Текст необязателен — выберите фильтр ниже" className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600" /><button type="submit" disabled={!canSearch || loading} className="rounded-lg bg-violet-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(124,92,255,.22)] transition hover:bg-violet-400 disabled:opacity-35">Найти</button></div>
+      <div className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/[.04] px-3 focus-within:border-violet-400/50"><Search className="size-4 text-slate-500" /><input autoFocus aria-label="Текст поиска" value={query} onChange={(event) => setQuery(event.target.value)} maxLength={200} placeholder="Текст необязателен — выберите фильтр ниже" className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-500" /><button type="submit" disabled={!canSearch || loading} className="rounded-md bg-primary px-3 py-1.5 text-[11px] font-medium text-white shadow-[0_1px_3px_rgba(0,0,0,.4)] transition-colors hover:bg-violet-400 disabled:opacity-35">Найти</button></div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <SearchCombobox label="Автор сообщения" value={authorId} placeholder="Любой автор" icon={User} options={members.map((member) => ({ value: member.id, label: member.displayName }))} onChange={setAuthorId} />
         <SearchCombobox label="Канал" value={channelId} placeholder="Все каналы" icon={Hash} options={channels.filter((channel) => channel.kind === "text").map((channel) => ({ value: channel.id, label: `#${channel.name}` }))} onChange={setChannelId} />
@@ -54,7 +54,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
       {result && <><div className="mb-2 flex items-center justify-between px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600"><span>Результаты</span><span>{result.total}</span></div><div className="space-y-2">{result.messages.map((message) => {
         const channel = channels.find((item) => item.id === message.channelId);
         const member = members.find((item) => item.id === message.authorId);
-        return <button key={message.id} type="button" onClick={() => onOpenMessage(toLocalSearchMessage(message))} className="group w-full rounded-xl border border-white/[.065] bg-[#151a27] p-3 text-left hover:border-violet-400/25 hover:bg-[#181e2c]">
+        return <button key={message.id} type="button" onClick={() => onOpenMessage(toLocalSearchMessage(message))} className="group w-full rounded-xl border border-white/[.065] bg-[#26282c] p-3 text-left hover:border-violet-400/25 hover:bg-[#2b2d32]">
           <div className="flex items-center gap-2"><Avatar name={message.authorName} image={message.authorAvatar} color={member?.avatarColor} size="sm" /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{message.authorName}</span><span className="text-[10px] text-slate-600">#{channel?.name ?? "удалённый-канал"}</span></div>
           {message.content && <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-400 group-hover:text-slate-300">{message.content}</p>}
           {message.attachments.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{message.attachments.map((attachment) => <span key={attachment.id} className="max-w-full truncate rounded-md bg-black/20 px-2 py-1 text-[10px] text-violet-200/70">{attachment.mimeType.startsWith("image/") ? "Изображение" : attachment.mimeType.startsWith("video/") ? "Видео" : "Файл"}: {attachment.fileName}</span>)}</div>}
@@ -66,7 +66,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
 }
 
 function toLocalSearchMessage(message: MessageSearchResult["messages"][number]): MockMessage {
-  return { ...message, authorColor: "#7c5cff", editedAt: message.editedAt ?? undefined };
+  return { ...message, authorColor: "#4d6bfe", editedAt: message.editedAt ?? undefined };
 }
 
 function SearchCombobox({ label, value, placeholder, icon: Icon, options, onChange }: { label: string; value: string; placeholder: string; icon: typeof User; options: { value: string; label: string }[]; onChange: (value: string) => void }): React.ReactElement {
@@ -89,12 +89,12 @@ function SearchCombobox({ label, value, placeholder, icon: Icon, options, onChan
 
   const choose = (nextValue: string): void => { onChange(nextValue); setOpen(false); };
   return <div ref={rootRef} className="relative min-w-0">
-    <button type="button" role="combobox" aria-label={label} aria-controls={listboxId} aria-expanded={open} aria-haspopup="listbox" onClick={() => setOpen((current) => !current)} className={cn("flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border px-3 text-left text-xs shadow-[inset_0_1px_rgba(255,255,255,.025)] transition", open ? "border-violet-400/45 bg-[#191e2c] ring-2 ring-violet-400/10" : "border-white/[.08] bg-[#151a27] hover:border-white/[.14] hover:bg-[#191e2c]")}>
+    <button type="button" role="combobox" aria-label={label} aria-controls={listboxId} aria-expanded={open} aria-haspopup="listbox" onClick={() => setOpen((current) => !current)} className={cn("flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border px-3 text-left text-xs shadow-[inset_0_1px_rgba(255,255,255,.025)] transition", open ? "border-violet-400/45 bg-[#2b2d32] ring-2 ring-violet-400/10" : "border-white/[.08] bg-[#26282c] hover:border-white/[.14] hover:bg-[#2b2d32]")}>
       <Icon className={cn("size-3.5 shrink-0", open ? "text-violet-300" : "text-slate-500")} />
       <span className={cn("min-w-0 flex-1 truncate", selected ? "text-slate-200" : "text-slate-500")}>{selected?.label ?? placeholder}</span>
       <ChevronDown className={cn("size-3.5 shrink-0 text-slate-600 transition-transform", open && "rotate-180 text-violet-300")} />
     </button>
-    {open && <div id={listboxId} role="listbox" aria-label={label} className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-52 overflow-y-auto rounded-xl border border-white/10 bg-[#191e2b] p-1.5 shadow-[0_18px_50px_rgba(0,0,0,.55)]">
+    {open && <div id={listboxId} role="listbox" aria-label={label} className="glass absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-52 overflow-y-auto rounded-xl p-1.5 shadow-[0_18px_50px_rgba(0,0,0,.5)]">
       {[{ value: "", label: placeholder }, ...options].map((option) => <button key={option.value || "all"} type="button" role="option" aria-selected={option.value === value} onClick={() => choose(option.value)} className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition", option.value === value ? "bg-violet-400/14 text-violet-100" : "text-slate-400 hover:bg-white/[.05] hover:text-white")}><span className="min-w-0 flex-1 truncate">{option.label}</span>{option.value === value && <Check className="size-3.5 shrink-0 text-violet-300" />}</button>)}
     </div>}
   </div>;

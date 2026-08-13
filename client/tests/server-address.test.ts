@@ -22,4 +22,13 @@ describe("server address validation", () => {
   it("compares previously confirmed HTTP server addresses canonically", () => {
     expect(sameServerAddress("http://203.0.113.42:3210/path", "http://203.0.113.42:3210/")).toBe(true);
   });
+
+  it("treats loopback aliases as the same server", () => {
+    expect(sameServerAddress("http://localhost:3210", "http://127.0.0.1:3210")).toBe(true);
+    expect(sameServerAddress("http://127.0.0.1:3210", "http://localhost:3210/")).toBe(true);
+    expect(sameServerAddress("http://[::1]:3210", "http://127.0.0.1:3210")).toBe(true);
+    expect(sameServerAddress("http://127.0.0.1:3210", "http://127.0.0.1:3211")).toBe(false);
+    expect(sameServerAddress("http://localhost:3210", "https://localhost:3210")).toBe(false);
+    expect(sameServerAddress("http://localhost:3210", "http://203.0.113.42:3210")).toBe(false);
+  });
 });

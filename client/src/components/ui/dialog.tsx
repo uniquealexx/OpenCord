@@ -12,12 +12,12 @@ export const DialogClose = DialogPrimitive.Close;
 export function DialogContent({ className, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>): React.ReactElement {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm data-[state=closed]:animate-out data-[state=open]:animate-in" />
-      <DialogPrimitive.Content className={cn("fixed left-1/2 top-1/2 z-50 max-h-[86vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl border border-white/10 bg-[#111520] text-slate-100 shadow-2xl outline-none", className)} {...props}>
-        <div className="scrollbar-thin m-1 max-h-[calc(86vh-0.5rem)] overflow-y-auto rounded-[20px] p-5 pr-6">
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md data-[state=closed]:animate-out data-[state=open]:animate-in" />
+      <DialogPrimitive.Content className={cn("glass fixed left-1/2 top-1/2 z-50 max-h-[86vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl text-slate-100 shadow-[0_24px_70px_rgba(0,0,0,.55)] outline-none", className)} {...props}>
+        <div className="scrollbar-thin m-1 max-h-[calc(86vh-0.5rem)] overflow-y-auto rounded-xl p-5 pr-6">
           {children}
         </div>
-        <DialogPrimitive.Close aria-label="Закрыть" className="absolute right-4 top-4 rounded-lg p-2 text-slate-500 transition hover:bg-white/8 hover:text-white"><X className="size-4" /></DialogPrimitive.Close>
+        <DialogPrimitive.Close aria-label="Закрыть" className="absolute right-4 top-4 rounded-md p-2 text-slate-500 transition hover:bg-white/10 hover:text-white"><X className="size-4" /></DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );

@@ -20,13 +20,10 @@ export function Onboarding({ onComplete }: { onComplete: (profile: LocalProfile)
   }
 
   return (
-    <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#090b12] p-8">
-      <div className="pointer-events-none absolute left-[15%] top-[10%] size-80 rounded-full bg-violet-600/15 blur-[110px]" />
-      <div className="pointer-events-none absolute bottom-[5%] right-[12%] size-72 rounded-full bg-cyan-500/10 blur-[110px]" />
-      <section className="relative grid w-full max-w-5xl overflow-hidden rounded-[32px] border border-white/8 bg-[#10131c]/90 shadow-[0_36px_100px_rgba(0,0,0,.45)] lg:grid-cols-[1.05fr_.95fr]">
-        <div className="relative hidden min-h-[610px] overflow-hidden border-r border-white/7 p-12 lg:flex lg:flex-col lg:justify-between">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,rgba(124,92,255,.25),transparent_42%),radial-gradient(circle_at_80%_80%,rgba(54,197,240,.15),transparent_38%)]" />
-          <div className="relative"><div className="mb-6 grid size-14 place-items-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 text-2xl font-black shadow-[0_18px_60px_rgba(124,92,255,.3)]">O</div><p className="max-w-sm text-4xl font-bold leading-tight tracking-[-.04em] text-white">Общение без чужих правил и закрытых дверей.</p></div>
+    <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-8">
+      <section className="glass relative grid w-full max-w-5xl overflow-hidden rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,.45)] lg:grid-cols-[1.05fr_.95fr]">
+        <div className="relative hidden min-h-[610px] overflow-hidden border-r border-white/10 p-12 lg:flex lg:flex-col lg:justify-between">
+          <div className="relative"><div className="mb-6 grid size-14 place-items-center rounded-xl bg-primary text-2xl font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)]">O</div><p className="max-w-sm text-4xl font-bold leading-tight tracking-[-.04em] text-white">Общение без чужих правил и закрытых дверей.</p></div>
           <div className="relative grid gap-3 text-sm text-slate-400"><Feature icon={<LockKeyhole />} text="Профиль и настройки хранятся локально" /><Feature icon={<Sparkles />} text="Открытый код и собственные серверы" /></div>
         </div>
         <form onSubmit={submit} className="flex flex-col justify-center p-8 sm:p-12">
@@ -46,5 +43,5 @@ export function Onboarding({ onComplete }: { onComplete: (profile: LocalProfile)
 }
 
 function Feature({ icon, text }: { icon: React.ReactNode; text: string }): React.ReactElement {
-  return <div className="flex items-center gap-3 rounded-2xl border border-white/7 bg-white/[.035] p-4"><span className="[&>svg]:size-4 text-violet-300">{icon}</span>{text}</div>;
+  return <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[.04] p-4"><span className="[&>svg]:size-4 text-violet-300">{icon}</span>{text}</div>;
 }

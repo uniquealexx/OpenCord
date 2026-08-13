@@ -85,15 +85,15 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
   return <span className={cn("relative inline-flex", wrapperClassName)}>
     <button ref={triggerRef} type="button" aria-label={label ?? `Открыть профиль ${profile.displayName}`} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
     {open && typeof document !== "undefined" && createPortal(
-      <div ref={cardRef} role="dialog" aria-label={`Профиль ${profile.displayName}`} className="fixed z-[100] w-[300px] overflow-hidden rounded-2xl border border-white/10 bg-[#151a27] shadow-[0_24px_80px_rgba(0,0,0,.72)]" style={position}>
-        <div data-testid="profile-banner" className="relative h-[96px] overflow-hidden bg-[radial-gradient(circle_at_18%_0%,rgba(139,92,246,.7),transparent_52%),linear-gradient(120deg,#312e81,#164e63)]">
+      <div ref={cardRef} role="dialog" aria-label={`Профиль ${profile.displayName}`} className="glass fixed z-[100] w-[300px] overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={position}>
+        <div data-testid="profile-banner" className="relative h-[96px] overflow-hidden bg-primary/15">
           {/* Public profile banners are compact data URLs supplied by OpenCord Server. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {profile.banner && <img src={profile.banner} alt="" className="absolute inset-0 size-full object-cover" />}
         </div>
         <div className="px-4 pb-4">
           <div className="-mt-9 flex items-end justify-between">
-            <div data-testid="profile-avatar-frame" className="rounded-[28%] bg-[#151a27] p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
+            <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
             {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">Это вы</span>}
           </div>
           <h3 className="mt-2 truncate text-base font-bold text-white">{profile.displayName}</h3>

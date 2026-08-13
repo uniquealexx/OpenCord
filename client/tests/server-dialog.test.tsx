@@ -14,14 +14,16 @@ describe("ServerDialog", () => {
 
   afterEach(() => { cleanup(); delete window.openCord; });
 
-  it("keeps the dialog open when the normalized address is already present", async () => {
+  it("closes the dialog and switches to the existing server when the address is already present", async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn(() => false);
-    render(<ServerDialog open onOpenChange={vi.fn()} onAdd={onAdd} />);
+    const onOpenChange = vi.fn();
+    render(<ServerDialog open onOpenChange={onOpenChange} onAdd={onAdd} />);
     await user.type(screen.getByLabelText("Адрес сервера"), "http://127.0.0.1:3210/");
     await user.click(screen.getByRole("button", { name: "Подключиться к серверу" }));
     expect(onAdd).toHaveBeenCalledOnce();
-    expect(await screen.findByText("Этот адрес уже добавлен в клиент.")).toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText("Этот адрес уже добавлен в клиент.")).not.toBeInTheDocument();
   });
 
   it("requires explicit confirmation before connecting to an insecure remote HTTP server", async () => {

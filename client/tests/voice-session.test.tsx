@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { configureMicrophoneNoiseSuppression, createResponsiveVoiceActivityGate, decibelsToRms, mergeResponsiveSpeakerIds, requestHighestScreenShareQuality, useVoiceSession } from "@/hooks/use-voice-session";
+import { configureMicrophoneProcessing, createResponsiveVoiceActivityGate, decibelsToRms, mergeResponsiveSpeakerIds, requestHighestScreenShareQuality, useVoiceSession } from "@/hooks/use-voice-session";
 import { createDefaultState } from "@/shared/state";
 import type { LocalAudioTrack } from "livekit-client";
 
@@ -203,7 +203,7 @@ describe("voice session controls", () => {
     expect(publication.setVideoQuality).toHaveBeenCalledWith(2);
   });
 
-  it("attaches the local RNNoise processor when noise suppression is enabled", async () => {
+  it("attaches the local microphone processor when noise suppression is enabled", async () => {
     const setProcessor = vi.fn(async (...args: unknown[]) => { void args; });
     const track = {
       getProcessor: vi.fn(() => undefined),
@@ -211,10 +211,11 @@ describe("voice session controls", () => {
       stopProcessor: vi.fn(async () => undefined),
       mediaStreamTrack: { applyConstraints: vi.fn(async () => undefined) },
     } as unknown as LocalAudioTrack;
+    const preferences = { noiseSuppression: true, echoCancellation: true, autoGainControl: true };
 
-    await expect(configureMicrophoneNoiseSuppression(track, true)).resolves.toBe("enhanced");
+    await expect(configureMicrophoneProcessing(track, preferences)).resolves.toMatchObject({ suppression: "enhanced" });
     expect(setProcessor).toHaveBeenCalledOnce();
-    expect(setProcessor.mock.calls[0]?.[0]).toMatchObject({ name: "opencord-rnnoise" });
+    expect(setProcessor.mock.calls[0]?.[0]).toMatchObject({ name: "opencord-microphone", enableRnnoise: true });
   });
 
   it("falls back to WebRTC suppression without breaking the microphone", async () => {
@@ -225,23 +226,27 @@ describe("voice session controls", () => {
       stopProcessor: vi.fn(async () => undefined),
       mediaStreamTrack: { applyConstraints },
     } as unknown as LocalAudioTrack;
+    const preferences = { noiseSuppression: true, echoCancellation: true, autoGainControl: true };
 
-    await expect(configureMicrophoneNoiseSuppression(track, true)).resolves.toBe("standard");
+    await expect(configureMicrophoneProcessing(track, preferences)).resolves.toMatchObject({ suppression: "standard", processor: null });
     expect(applyConstraints).toHaveBeenLastCalledWith({ noiseSuppression: true });
   });
 
-  it("removes only the OpenCord noise processor when suppression is disabled", async () => {
+  it("installs a gate-only processor and disables suppression when the switch is off", async () => {
     const stopProcessor = vi.fn(async () => undefined);
     const applyConstraints = vi.fn(async () => undefined);
+    const setProcessor = vi.fn(async (...args: unknown[]) => { void args; });
     const track = {
-      getProcessor: vi.fn(() => ({ name: "opencord-rnnoise" })),
-      setProcessor: vi.fn(async () => undefined),
+      getProcessor: vi.fn(() => ({ name: "opencord-microphone" })),
+      setProcessor,
       stopProcessor,
       mediaStreamTrack: { applyConstraints },
     } as unknown as LocalAudioTrack;
+    const preferences = { noiseSuppression: false, echoCancellation: true, autoGainControl: true };
 
-    await expect(configureMicrophoneNoiseSuppression(track, false)).resolves.toBe("off");
+    await expect(configureMicrophoneProcessing(track, preferences)).resolves.toMatchObject({ suppression: "off" });
     expect(stopProcessor).toHaveBeenCalledOnce();
     expect(applyConstraints).toHaveBeenCalledWith({ noiseSuppression: false });
+    expect(setProcessor.mock.calls[0]?.[0]).toMatchObject({ enableRnnoise: false });
   });
 });

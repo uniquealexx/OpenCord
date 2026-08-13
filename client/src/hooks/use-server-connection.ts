@@ -86,6 +86,8 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
       socketRef.current = socket;
 
       socket.addEventListener("message", (messageEvent) => {
+        // События уже закрытого или заменённого сокета не должны попадать в состояние.
+        if (socketRef.current !== socket) return;
         let decoded: unknown;
         try { decoded = JSON.parse(String(messageEvent.data)) as unknown; } catch { return callbacksRef.current.onError("Сервер отправил некорректный JSON"); }
         const incompatible = protocolCompatibility(decoded);

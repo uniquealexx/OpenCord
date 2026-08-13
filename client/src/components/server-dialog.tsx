@@ -54,7 +54,7 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
       id,
       name: serverName,
       address: normalizedAddress,
-      accent: "#36c5f0",
+      accent: "#4d6bfe",
       maxAttachmentBytes: DEFAULT_ATTACHMENT_LIMIT_BYTES,
       screenShareMaxResolution: DEFAULT_SCREEN_SHARE_MAX_RESOLUTION,
       screenShareMaxFrameRate: DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE,
@@ -64,7 +64,7 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
       ],
       members: [],
     });
-    if (!added) { setError(ru.server.duplicateAddress); return; }
+    if (!added) { setAddress(""); setError(""); setInsecureConfirmed(false); onOpenChange(false); return; }
     setAddress(""); setError(""); setInsecureConfirmed(false); onOpenChange(false);
   }
 

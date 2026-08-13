@@ -2,6 +2,8 @@ import type { RnnoiseWorkletNode } from "@sapphi-red/web-noise-suppressor";
 import { Track, type AudioProcessorOptions, type TrackProcessor } from "livekit-client";
 
 const DRY_SIGNAL_MIX = 0.08;
+const GATE_OPEN_TIME = 0.012;
+const GATE_CLOSE_TIME = 0.04;
 const workletUrl = new URL("@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js", import.meta.url);
 const simdWasmUrl = new URL("@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm", import.meta.url);
 type RnnoiseModule = typeof import("@sapphi-red/web-noise-suppressor");
@@ -69,39 +71,81 @@ export function supportsEnhancedNoiseSuppression(context?: AudioContext): boolea
   return typeof AudioWorkletNode === "function" && Boolean(context?.audioWorklet);
 }
 
-export class RnnoiseAudioProcessor implements TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
-  readonly name = "opencord-rnnoise";
+export interface MicrophoneTrackProcessorOptions {
+  enableRnnoise: boolean;
+}
+
+/**
+ * LiveKit audio processor for the local microphone: an optional RNNoise
+ * suppression stage followed by a smooth voice gate. The gate is driven by
+ * the sensitivity settings and silences the published signal below the
+ * activation threshold, like Discord's input sensitivity.
+ */
+export class MicrophoneTrackProcessor implements TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
+  readonly name = "opencord-microphone";
+  readonly enableRnnoise: boolean;
   processedTrack?: MediaStreamTrack;
+  private audioContext?: AudioContext;
   private source?: MediaStreamAudioSourceNode;
   private rnnoise?: RnnoiseWorkletNode;
   private processedGain?: GainNode;
   private dryGain?: GainNode;
+  private gate?: GainNode;
   private destination?: MediaStreamAudioDestinationNode;
+  private pendingOpen = true;
+
+  constructor(options: MicrophoneTrackProcessorOptions = { enableRnnoise: true }) {
+    this.enableRnnoise = options.enableRnnoise;
+  }
 
   async init({ track, audioContext }: AudioProcessorOptions): Promise<void> {
-    if (!supportsEnhancedNoiseSuppression(audioContext)) throw new Error("AudioWorklet is not supported by this Chromium version");
-    const { module, wasmBinary } = await prepareRnnoise(audioContext);
+    this.audioContext = audioContext;
     const source = audioContext.createMediaStreamSource(new MediaStream([track]));
-    const rnnoise = new module.RnnoiseWorkletNode(audioContext, { maxChannels: 1, wasmBinary });
-    const processedGain = audioContext.createGain();
-    const dryGain = audioContext.createGain();
+    let rnnoise: RnnoiseWorkletNode | undefined;
+    let processedGain: GainNode | undefined;
+    let dryGain: GainNode | undefined;
+    if (this.enableRnnoise) {
+      if (!supportsEnhancedNoiseSuppression(audioContext)) throw new Error("AudioWorklet is not supported by this Chromium version");
+      const { module, wasmBinary } = await prepareRnnoise(audioContext);
+      rnnoise = new module.RnnoiseWorkletNode(audioContext, { maxChannels: 1, wasmBinary });
+      processedGain = audioContext.createGain();
+      dryGain = audioContext.createGain();
+      processedGain.gain.value = 1 - DRY_SIGNAL_MIX;
+      dryGain.gain.value = DRY_SIGNAL_MIX;
+    }
+    const gate = audioContext.createGain();
+    gate.gain.value = this.pendingOpen ? 1 : 0;
     const destination = audioContext.createMediaStreamDestination();
-    processedGain.gain.value = 1 - DRY_SIGNAL_MIX;
-    dryGain.gain.value = DRY_SIGNAL_MIX;
-    source.connect(rnnoise).connect(processedGain).connect(destination);
-    source.connect(dryGain).connect(destination);
+    if (rnnoise && processedGain && dryGain) {
+      source.connect(rnnoise).connect(processedGain).connect(gate);
+      source.connect(dryGain).connect(gate);
+    } else {
+      source.connect(gate);
+    }
+    gate.connect(destination);
     const processedTrack = destination.stream.getAudioTracks()[0];
     if (!processedTrack) {
-      rnnoise.destroy();
+      rnnoise?.destroy();
       source.disconnect();
-      throw new Error("RNNoise did not produce an audio track");
+      throw new Error("Microphone processor did not produce an audio track");
     }
     this.source = source;
     this.rnnoise = rnnoise;
     this.processedGain = processedGain;
     this.dryGain = dryGain;
+    this.gate = gate;
     this.destination = destination;
     this.processedTrack = processedTrack;
+  }
+
+  setGateOpen(open: boolean): void {
+    this.pendingOpen = open;
+    const gate = this.gate;
+    const context = this.audioContext;
+    if (!gate || !context) return;
+    const now = context.currentTime;
+    gate.gain.cancelScheduledValues(now);
+    gate.gain.setTargetAtTime(open ? 1 : 0, now, open ? GATE_OPEN_TIME : GATE_CLOSE_TIME);
   }
 
   async restart(options: AudioProcessorOptions): Promise<void> {
@@ -115,12 +159,15 @@ export class RnnoiseAudioProcessor implements TrackProcessor<Track.Kind.Audio, A
     this.rnnoise?.destroy();
     this.processedGain?.disconnect();
     this.dryGain?.disconnect();
+    this.gate?.disconnect();
     this.destination?.disconnect();
     this.processedTrack?.stop();
+    this.audioContext = undefined;
     this.source = undefined;
     this.rnnoise = undefined;
     this.processedGain = undefined;
     this.dryGain = undefined;
+    this.gate = undefined;
     this.destination = undefined;
     this.processedTrack = undefined;
   }

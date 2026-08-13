@@ -15,9 +15,9 @@ export function TitleBar(): React.ReactElement {
   }, []);
 
   return (
-    <header className="titlebar-drag flex h-10 shrink-0 items-center justify-between border-b border-white/[0.055] bg-[#080a10] pl-4 select-none">
-      <div className="flex items-center gap-2.5 text-xs font-semibold tracking-wide text-slate-400">
-        <span className="grid size-5 place-items-center rounded-md bg-gradient-to-br from-violet-500 to-cyan-400 text-[10px] font-black text-white shadow-[0_0_18px_rgba(124,92,255,.35)]">O</span>
+    <header className="titlebar-drag flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] bg-rail pl-4 select-none">
+      <div className="flex items-center gap-2.5 text-xs font-medium tracking-wide text-slate-400">
+        <span className="grid size-5 place-items-center rounded-[5px] bg-primary text-[10px] font-bold text-white">O</span>
         {ru.appName}
         <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-300">{ru.prototype}</span>
       </div>
