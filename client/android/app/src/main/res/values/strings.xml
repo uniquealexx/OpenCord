@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OpenCord</string>
+    <string name="title_activity_main">OpenCord</string>
+    <string name="package_name">org.opencord.mobile</string>
+    <string name="custom_url_scheme">org.opencord.mobile</string>
+</resources>

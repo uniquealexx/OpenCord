@@ -57,6 +57,19 @@ button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 input[type="range"] { accent-color: #4d6bfe; }
 
+/* Безопасные зоны мобильной оболочки: на десктопе env() равен нулю, вёрстка не меняется. */
+.app-shell {
+  background: #191b1e;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Убирает задержку тапа и случайное выделение текста в WebView. */
+button, a { touch-action: manipulation; }
+* { -webkit-tap-highlight-color: transparent; }
+
 .titlebar-drag { -webkit-app-region: drag; }
 .titlebar-no-drag, .titlebar-no-drag * { -webkit-app-region: no-drag; }
 .scrollbar-none { scrollbar-width: none; }

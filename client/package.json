@@ -16,6 +16,8 @@
     "build:electron": "tsup",
     "build:renderer": "next build",
     "build": "pnpm build:renderer && pnpm build:electron",
+    "android:sync": "cap sync android",
+    "android:debug": "pnpm build:renderer && cap sync android && node scripts/build-android.mjs debug",
     "package:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "package:linux": "pnpm build && node scripts/package-linux.mjs",
     "package:mac": "pnpm build && electron-builder --mac dmg zip --universal --publish never",
@@ -26,6 +28,9 @@
     "test:electron": "pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm build && playwright test"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@opencord/shared": "workspace:*",
     "@radix-ui/react-dialog": "latest",
     "@radix-ui/react-switch": "latest",
@@ -45,6 +50,7 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@playwright/test": "latest",
     "@tailwindcss/postcss": "latest",
     "@testing-library/jest-dom": "latest",
@@ -112,7 +118,10 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "executableName": "opencord",
       "category": "Network",
       "syncDesktopName": true,
@@ -120,7 +129,10 @@
     },
     "mac": {
       "icon": "build/icon.png",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.social-networking",
       "artifactName": "OpenCord-${version}-${arch}.${ext}"
     }

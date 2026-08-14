@@ -82,6 +82,7 @@ export const ru = {
     placeholder: "Написать в",
     empty: "Здесь пока тихо. Начните разговор.",
     members: "Участники",
+    openChannels: "Открыть каналы",
     mockNotice: "Сообщения сохраняются только локально",
     serverNotice: "История сообщений хранится на подключённом сервере",
     channelFallback: "канал",

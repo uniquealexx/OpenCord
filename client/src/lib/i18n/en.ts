@@ -81,6 +81,7 @@ export const en = {
     placeholder: "Message in",
     empty: "It's quiet here. Start the conversation.",
     members: "Members",
+    openChannels: "Open channels",
     mockNotice: "Messages are only stored locally",
     serverNotice: "Message history is stored on the connected server",
     channelFallback: "channel",

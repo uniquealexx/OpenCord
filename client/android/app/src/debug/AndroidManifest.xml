@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Только для debug-сборок: разрешает http/ws для отладки против локального
+     dev-сервера (HOST=0.0.0.0 на LAN или adb reverse). Release-сборки используют
+     main-манифест без этого флага и остаются TLS-only. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

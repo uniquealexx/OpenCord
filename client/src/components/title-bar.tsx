@@ -4,16 +4,24 @@ import { useEffect, useState } from "react";
 import { Maximize2, Minus, Square, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
-export function TitleBar(): React.ReactElement {
+export function TitleBar(): React.ReactElement | null {
   const [maximized, setMaximized] = useState(false);
+  const [available, setAvailable] = useState(false);
   const { t } = useI18n();
 
   useEffect(() => {
     const bridge = window.openCord?.window;
     if (!bridge) return;
-    void bridge.isMaximized().then(setMaximized);
+    void bridge.isMaximized().then((value) => {
+      setMaximized(value);
+      setAvailable(true);
+    });
     return bridge.onMaximizedChange(setMaximized);
   }, []);
+
+  // Заголовок окна нужен только в Electron; в мобильной оболочке и в браузере
+  // моста нет. Условие после первого эффекта, чтобы серверная разметка и гидрация совпадали.
+  if (!available) return null;
 
   return (
     <header className="titlebar-drag flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] bg-rail pl-4 select-none">

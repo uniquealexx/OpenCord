@@ -14,6 +14,10 @@ In production and current Windows development, Next.js is built as a static expo
 
 After the main window is created, Electron creates an OpenCord icon in the system tray. Normal window close, including the button in the custom title bar, hides the window and keeps the client, connections, and voice session running. The window returns on a click on the icon or via the "Open OpenCord" item. Full exit happens only via the "Quit" item in the tray menu, an update install, or an explicit process termination; before exiting, the existing cleanup of temporary resources is preserved.
 
+## Mobile prototype (Android)
+
+An Android prototype wraps the same static renderer in a Capacitor 8 WebView (`client/android/`, config in `client/capacitor.config.ts`). Electron cannot produce an APK, so the renderer is reused as-is and only the native layer is replaced: the desktop preload bridge (`window.openCord`) has a mobile implementation in `client/src/platform/` — Ed25519 identity via WebCrypto with the private key in Android Keystore (`@aparajita/capacitor-secure-storage`), client state in validated `localStorage`, attachments and the `/health` probe through native `CapacitorHttp` (CORS does not apply, so the server is unchanged). The desktop-only surfaces (`window`, `deployment`, `screenShare`, `updates`) are intentionally absent, and the VPS deployment entry point is hidden on mobile. The channel list and member list become overlays on narrow screens. Details, threat model, and limitations: `docs/mobile-android-prototype.md`.
+
 ## Local State
 
 The `client-state.json` file lives in Electron's system `userData` directory. Data is validated against a Zod schema before writing and after reading. Writes go through a temporary file and an atomic rename. If the JSON is corrupted or does not match the schema, the original file is copied as `client-state.corrupt-<timestamp>.json`, after which a safe initial state is created. Versioned migrations preserve user servers and settings; the v1→v2 migration removes the former built-in `open-space` server and only the local messages associated with it.
@@ -60,6 +64,7 @@ pnpm typecheck
 pnpm test
 pnpm build        # static renderer + Electron main/preload
 pnpm package:win  # Windows x64 NSIS installer
+pnpm android:debug # Android debug APK (Capacitor shell)
 ```
 
 ---
@@ -79,6 +84,10 @@ pnpm package:win  # Windows x64 NSIS installer
 В production и текущем Windows development Next.js собирается как static export. Next-сервер на устройстве пользователя не запускается. Это временно исключает hot reload renderer, но обеспечивает одинаковое поведение dev-запуска и установщика; серверная часть продолжает работать через `tsx watch`.
 
 После создания основного окна Electron создаёт значок OpenCord в системном трее. Обычное закрытие окна, включая кнопку в собственной строке заголовка, скрывает окно и оставляет клиент, соединения и голосовую сессию работающими. Окно возвращается кликом по значку или пунктом «Открыть OpenCord». Полное завершение выполняется только пунктом «Выйти» в меню трея, установкой обновления либо явным завершением процесса; перед выходом сохраняется существующая очистка временных ресурсов.
+
+## Мобильный прототип (Android)
+
+Android-прототип упаковывает тот же статический renderer в WebView Capacitor 8 (`client/android/`, конфиг `client/capacitor.config.ts`). Electron не умеет собирать APK, поэтому renderer переиспользуется без изменений, а заменяется только нативный слой: у десктопного preload-моста (`window.openCord`) появилась мобильная реализация в `client/src/platform/` — Ed25519-идентичность через WebCrypto с приватным ключом в Android Keystore (`@aparajita/capacitor-secure-storage`), состояние клиента в валидируемом `localStorage`, вложения и проверка `/health` через нативный `CapacitorHttp` (CORS не применяется, сервер не меняется). Desktop-only поверхности (`window`, `deployment`, `screenShare`, `updates`) намеренно отсутствуют, точка входа развёртывания VPS на мобильных скрыта. Список каналов и список участников на узких экранах становятся накладками. Подробности, модель угроз и ограничения: `docs/mobile-android-prototype.md`.
 
 ## Локальное состояние
 
@@ -126,6 +135,7 @@ pnpm typecheck
 pnpm test
 pnpm build        # static renderer + Electron main/preload
 pnpm package:win  # Windows x64 NSIS installer
+pnpm android:debug # Android debug APK (Capacitor shell)
 ```
 
 ---
@@ -145,6 +155,10 @@ pnpm package:win  # Windows x64 NSIS installer
 在 production 和当前 Windows 开发环境中，Next.js 以 static export 方式构建。用户的设备上不会启动 Next 服务器。这暂时取消了渲染进程的 hot reload，但确保了开发启动与安装程序行为一致；服务器端继续通过 `tsx watch` 运行。
 
 创建主窗口后，Electron 会在系统托盘中创建 OpenCord 图标。窗口的正常关闭（包括自定义标题栏中的按钮）会隐藏窗口，并让客户端、连接和语音会话继续运行。点击图标或选择「打开 OpenCord」即可恢复窗口。只有通过托盘菜单中的「退出」、安装更新或显式终止进程才会完全退出；退出前会保留现有的临时资源清理。
+
+## 移动端原型（Android）
+
+Android 原型将同一个静态 renderer 打包进 Capacitor 8 WebView（`client/android/`，配置见 `client/capacitor.config.ts`）。Electron 无法生成 APK，因此 renderer 原样复用，仅替换原生层：桌面 preload 桥（`window.openCord`）在 `client/src/platform/` 中有移动端实现——通过 WebCrypto 生成 Ed25519 身份、私钥保存在 Android Keystore（`@aparajita/capacitor-secure-storage`），客户端状态保存在经过校验的 `localStorage` 中，附件与 `/health` 探测通过原生 `CapacitorHttp`（不受 CORS 限制，服务器无需改动）。仅桌面端可用的接口（`window`、`deployment`、`screenShare`、`updates`）被有意省略，VPS 部署入口在移动端隐藏。频道列表和成员列表在窄屏上变为覆盖层。详情、威胁模型与限制见 `docs/mobile-android-prototype.md`。
 
 ## 本地状态
 
@@ -192,4 +206,5 @@ pnpm typecheck
 pnpm test
 pnpm build        # static renderer + Electron main/preload
 pnpm package:win  # Windows x64 NSIS installer
+pnpm android:debug # Android debug APK (Capacitor shell)
 ```
