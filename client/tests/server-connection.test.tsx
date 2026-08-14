@@ -6,6 +6,8 @@ import type { LocalProfile, MockServer } from "@/shared/state";
 
 const profile: LocalProfile = {
   id: "local-user",
+  username: "lina",
+  discriminator: "1234",
   displayName: "Лина",
   bio: "Описание Лины",
   avatar: null,
@@ -31,7 +33,7 @@ describe("server connection", () => {
       window: { minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(), isMaximized: vi.fn(), onMaximizedChange: vi.fn(() => () => undefined) },
       storage: { load: vi.fn(), save: vi.fn(), reset: vi.fn() },
       identity: {
-        getOrCreate: vi.fn(async () => ({ publicKey: "p".repeat(64), fingerprint: "test" })),
+        getOrCreate: vi.fn(async () => ({ publicKey: "p".repeat(64), fingerprint: "test", discriminator: "1234" })),
         signChallenge: vi.fn(async () => "s".repeat(64)),
         reset: vi.fn(),
       },
@@ -107,7 +109,7 @@ describe("server connection", () => {
       await Promise.resolve();
     });
     expect(first?.sent).toHaveLength(1);
-    expect(JSON.parse(first!.sent[0]!) as unknown).toMatchObject({ type: "auth.respond", profile: { bio: "Описание Лины", banner: "data:image/webp;base64,AQ==" } });
+    expect(JSON.parse(first!.sent[0]!) as unknown).toMatchObject({ type: "auth.respond", profile: { username: "lina", discriminator: "1234", bio: "Описание Лины", banner: "data:image/webp;base64,AQ==" } });
 
     act(() => first?.receive({
       type: "auth.ok",
@@ -125,9 +127,9 @@ describe("server connection", () => {
     act(() => {
       expect(result.current.updateChannel(channelId, "анонсы", "Важные новости", null)).toBe(true);
       expect(result.current.deleteChannel(channelId)).toBe(true);
-      expect(result.current.updateMessage(channelId, "Исправлено", [channelId])).toBe(true);
+      expect(result.current.updateMessage(channelId, "Исправлено", [channelId], ["user-1"])).toBe(true);
       expect(result.current.deleteMessage(channelId)).toBe(true);
-      expect(result.current.updateProfile({ displayName: "Новое имя", bio: "Описание профиля", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "dnd" })).toBe(true);
+      expect(result.current.updateProfile({ username: "lina", discriminator: "1234", displayName: "Новое имя", bio: "Описание профиля", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "dnd" })).toBe(true);
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
       expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 })).toBe(true);
@@ -137,11 +139,12 @@ describe("server connection", () => {
       expect(result.current.kickMember("server-member")).toBe(true);
       searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
     });
-    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; name?: string; userId?: string; muted?: boolean; viewingScreenShareUserId?: string | null; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
+    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; mentions?: string[]; name?: string; userId?: string; muted?: boolean; viewingScreenShareUserId?: string | null; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
     expect(sentEvents.some((event) => event.type === "message.update")).toBe(true);
     expect(sentEvents.find((event) => event.type === "message.update")?.attachmentIds).toEqual([channelId]);
+    expect(sentEvents.find((event) => event.type === "message.update")?.mentions).toEqual(["user-1"]);
     expect(sentEvents.some((event) => event.type === "message.delete")).toBe(true);
     expect(sentEvents.find((event) => event.type === "profile.update")?.profile).toMatchObject({ status: "dnd", bio: "Описание профиля", banner: "data:image/webp;base64,AQ==" });
     expect(sentEvents.some((event) => event.type === "server.leave")).toBe(true);
@@ -166,7 +169,7 @@ describe("server connection", () => {
     act(() => first?.receive({ type: "voice.participant.disconnected", userId: "voice-member", channelId, reason: "moderated" }));
     expect(callbacks.onVoiceDisconnected).toHaveBeenCalledWith("voice-member", channelId, "moderated");
 
-    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [] };
+    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [], mentions: [], kind: "chat" as const, targetUserId: null, anonymous: false };
     act(() => {
       first?.receive({ type: "message.updated", message });
       first?.receive({ type: "message.deleted", messageId: channelId, channelId });

@@ -47,11 +47,19 @@ describe("persisted client state", () => {
     expect(restored.preferences.uiScale).toBe(1.2);
   });
 
-  it("persists a selected user status and accepts profiles saved before statuses existed", () => {
+  it("migrates v3 profiles by deriving a username and generating a discriminator", () => {
     const state = createDefaultState();
-    const profile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };
-    expect(parsePersistedState({ ...state, profile }).profile?.status).toBeUndefined();
-    expect(parsePersistedState({ ...state, profile: { ...profile, status: "invisible" } }).profile?.status).toBe("invisible");
+    const legacyProfile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };
+    const v3 = { ...state, version: 3, profile: legacyProfile };
+    const migrated = parsePersistedState(v3);
+    expect(migrated.profile).toMatchObject({ username: "user", displayName: "Лина", discriminator: expect.stringMatching(/^\d{4}$/u) });
+    expect(parsePersistedState({ ...v3, profile: { ...legacyProfile, status: "invisible" } }).profile?.status).toBe("invisible");
+  });
+
+  it("persists the username and discriminator of a current profile", () => {
+    const state = createDefaultState();
+    const restored = parsePersistedState({ ...state, profile: { id: "local-user", username: "Lina.Dev", discriminator: "0042", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: "2026-08-07T00:00:00.000Z" } });
+    expect(restored.profile).toMatchObject({ username: "lina.dev", discriminator: "0042" });
   });
 
   it("rejects an active channel outside the active server", () => {
@@ -82,7 +90,7 @@ describe("persisted client state", () => {
       activeChannelId: "welcome",
     };
     const migrated = parsePersistedState(legacy);
-    expect(migrated.version).toBe(3);
+    expect(migrated.version).toBe(4);
     expect(migrated.preferences.voiceInputMode).toBe("voice");
     expect(migrated.servers.map((server) => server.id)).toEqual(["real-server"]);
     expect(migrated.messages.map((message) => message.id)).toEqual(["real-message"]);

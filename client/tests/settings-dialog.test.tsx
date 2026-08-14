@@ -27,9 +27,9 @@ describe("SettingsDialog microphone test", () => {
     });
     window.openCord = {
       identity: {
-        getOrCreate: vi.fn(async () => ({ publicKey: "public-key", fingerprint: "fingerprint" })),
+        getOrCreate: vi.fn(async () => ({ publicKey: "public-key", fingerprint: "fingerprint", discriminator: "1234" })),
         signChallenge: vi.fn(async () => "signature"),
-        reset: vi.fn(async () => ({ publicKey: "new-public-key", fingerprint: "new-fingerprint" })),
+        reset: vi.fn(async () => ({ publicKey: "new-public-key", fingerprint: "new-fingerprint", discriminator: "9999" })),
       },
     } as unknown as NonNullable<typeof window.openCord>;
   });
@@ -171,5 +171,19 @@ describe("SettingsDialog microphone test", () => {
     } finally {
       Reflect.deleteProperty(navigator, "clipboard");
     }
+  });
+
+  it("shows the tag discriminator and reports a new one after the identity reset", async () => {
+    const user = userEvent.setup();
+    const onIdentityReset = vi.fn();
+    render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} onIdentityReset={onIdentityReset} />);
+
+    expect(await screen.findByText("#1234")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Сменить ключи" }));
+    const confirmButtons = await screen.findAllByRole("button", { name: "Сменить ключи" });
+    await user.click(confirmButtons[confirmButtons.length - 1]!);
+
+    await screen.findByText("#9999");
+    expect(onIdentityReset).toHaveBeenCalledWith(expect.objectContaining({ discriminator: "9999" }));
   });
 });

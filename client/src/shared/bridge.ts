@@ -44,6 +44,8 @@ export const IPC = {
 export interface PublicIdentity {
   publicKey: string;
   fingerprint: string;
+  /** Дискриминатор тега username#1234: 4 цифры, генерируются один раз вместе с ключами. */
+  discriminator: string;
 }
 
 export interface OpenCordBridge {

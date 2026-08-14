@@ -25,9 +25,9 @@ const bridge: OpenCordBridge = {
     reset: async () => parsePersistedState(await ipcRenderer.invoke(IPC.storageReset)),
   },
   identity: {
-    getOrCreate: () => ipcRenderer.invoke(IPC.identityGetOrCreate) as Promise<{ publicKey: string; fingerprint: string }>,
+    getOrCreate: () => ipcRenderer.invoke(IPC.identityGetOrCreate) as Promise<{ publicKey: string; fingerprint: string; discriminator: string }>,
     signChallenge: (challenge) => ipcRenderer.invoke(IPC.identitySignChallenge, challenge) as Promise<string>,
-    reset: () => ipcRenderer.invoke(IPC.identityReset) as Promise<{ publicKey: string; fingerprint: string }>,
+    reset: () => ipcRenderer.invoke(IPC.identityReset) as Promise<{ publicKey: string; fingerprint: string; discriminator: string }>,
   },
   deployment: {
     selectServerBundle: async () => {

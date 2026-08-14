@@ -89,9 +89,9 @@ describe("mobile platform bridge", () => {
     it("returns a default state on the first load and persists it", async () => {
       const bridge = createMobileBridge();
       const state = await bridge.storage.load();
-      expect(state.version).toBe(3);
+      expect(state.version).toBe(4);
       expect(state.servers).toEqual([]);
-      expect(localStorage.getItem("opencord.client-state")).toContain("\"version\":3");
+      expect(localStorage.getItem("opencord.client-state")).toContain("\"version\":4");
     });
 
     it("falls back to the default state when stored JSON is corrupted", async () => {
@@ -121,17 +121,20 @@ describe("mobile platform bridge", () => {
   });
 
   describe("identity", () => {
-    it("creates an Ed25519 identity once and stores both keys in secure storage", async () => {
+    it("creates an Ed25519 identity once and stores both keys and the discriminator in secure storage", async () => {
       const bridge = createMobileBridge();
       const identity = await bridge.identity.getOrCreate();
       expect(identity.publicKey.length).toBeGreaterThan(40);
       expect(identity.fingerprint.split("-")).toHaveLength(4);
+      expect(identity.discriminator).toMatch(/^\d{4}$/u);
       expect(mocks.secureValues.has("opencord.identity.publicKey")).toBe(true);
       expect(mocks.secureValues.has("opencord.identity.privateKey")).toBe(true);
+      expect(mocks.secureValues.has("opencord.identity.discriminator")).toBe(true);
 
       const again = await bridge.identity.getOrCreate();
       expect(again.publicKey).toBe(identity.publicKey);
-      expect(mocks.secureSetItem.mock.calls.length).toBe(2); // пара ключей, повторной генерации нет
+      expect(again.discriminator).toBe(identity.discriminator);
+      expect(mocks.secureSetItem.mock.calls.length).toBe(3); // пара ключей + дискриминатор, повторной генерации нет
     });
 
     it("signs a challenge with a raw Ed25519 signature the server can verify", async () => {
@@ -169,7 +172,9 @@ describe("mobile platform bridge", () => {
       const before = await bridge.identity.getOrCreate();
       const after = await bridge.identity.reset();
       expect(after.publicKey).not.toBe(before.publicKey);
+      expect(after.discriminator).toMatch(/^\d{4}$/u);
       expect(mocks.secureValues.get("opencord.identity.publicKey")).toBe(after.publicKey);
+      expect(mocks.secureValues.get("opencord.identity.discriminator")).toBe(after.discriminator);
     });
   });
 

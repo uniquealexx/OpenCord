@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { userAvatarSchema, userBannerSchema, type UserStatus } from "@opencord/shared";
-import { Camera, Crop, ImagePlus, LoaderCircle, Trash2 } from "lucide-react";
+import { AtSign, Camera, Check, Copy, Crop, Fingerprint, ImagePlus, LoaderCircle, Trash2 } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { ImageCropDialog } from "@/components/image-crop-dialog";
 import { Button } from "@/components/ui/button";
@@ -17,16 +17,26 @@ import type { LocalProfile } from "@/shared/state";
 
 export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile: LocalProfile; open: boolean; onOpenChange: (open: boolean) => void; onSave: (profile: LocalProfile) => void }): React.ReactElement {
   const { t } = useI18n();
+  const [username, setUsername] = useState(profile.username);
   const [name, setName] = useState(profile.displayName);
   const [bio, setBio] = useState(profile.bio);
   const [avatar, setAvatar] = useState(profile.avatar);
   const [banner, setBanner] = useState(profile.banner);
   const [status, setStatus] = useState<UserStatus>(profile.status ?? "online");
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
+  const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState("");
   const [compressing, setCompressing] = useState(false);
   const [cropSource, setCropSource] = useState<{ file: File; kind: "avatar" | "banner" } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    void window.openCord?.identity?.getOrCreate().then((identity) => setFingerprint(identity.fingerprint)).catch(() => setFingerprint(null));
+  }, [open]);
+
+  const usernameValid = /^[a-z0-9_.-]{2,32}$/u.test(username.trim().toLowerCase());
 
   function chooseAvatar(event: React.ChangeEvent<HTMLInputElement>): void {
     const file = event.target.files?.[0];
@@ -66,15 +76,25 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     } finally { setCompressing(false); }
   }
 
+  async function copyFingerprint(): Promise<void> {
+    if (!fingerprint) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error(t.profile.copyFailed);
+      await navigator.clipboard.writeText(fingerprint);
+      setFingerprintCopied(true);
+      window.setTimeout(() => setFingerprintCopied(false), 2_000);
+    } catch { /* код остаётся выделяемым вручную */ }
+  }
+
   async function submit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
-    if (name.trim().length < 2) return;
+    if (name.trim().length < 2 || !usernameValid) return;
     setError("");
     setCompressing(true);
     try {
       const nextAvatar = avatar && !userAvatarSchema.safeParse(avatar).success ? await compressUserAvatar(await (await fetch(avatar)).blob()) : avatar;
       const nextBanner = banner && !userBannerSchema.safeParse(banner).success ? await compressUserBanner(await (await fetch(banner)).blob()) : banner;
-      onSave({ ...profile, displayName: name.trim(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status });
+      onSave({ ...profile, username: username.trim().toLowerCase(), displayName: name.trim(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status });
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t.profile.avatarFailed);
@@ -103,7 +123,27 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             <Avatar name={name || profile.displayName} image={avatar} size="xl" />
             <div><input ref={inputRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseAvatar(event)} /><div className="flex flex-wrap gap-2"><Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => inputRef.current?.click()}>{compressing ? <LoaderCircle className="size-4 animate-spin" /> : <Camera className="size-4" />}{compressing ? t.profile.compressing : t.profile.upload}</Button>{avatar && <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => cropExisting("avatar")}><Crop className="size-4" />{t.profile.crop}</Button>}{avatar && <Button type="button" variant="danger" size="sm" disabled={compressing} onClick={() => setAvatar(null)}><Trash2 className="size-4" />{t.profile.remove}</Button>}</div><p className="mt-2 max-w-72 text-xs leading-5 text-slate-500">{t.profile.avatarHint}</p>{error && <p className="mt-2 text-xs text-red-300">{error}</p>}</div>
           </div>
-          <label className="grid gap-2 text-sm font-medium text-slate-300">{t.profile.name}<Input value={name} onChange={(event) => setName(event.target.value)} maxLength={32} /></label>
+          <div className="rounded-2xl border border-white/7 bg-white/[.025] p-4">
+            <label className="grid gap-2 text-sm font-medium text-slate-300">{t.profile.username}<Input value={username} onChange={(event) => setUsername(event.target.value)} maxLength={32} placeholder="username" className={username && !usernameValid ? "border-red-400/60" : ""} /></label>
+            <p className="flex items-center gap-1.5 text-xs text-slate-500"><AtSign className="size-3.5" />{t.profile.usernameHint}</p>
+            <div className="mt-4 rounded-xl border border-white/[.06] bg-black/15 px-4 py-3">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-slate-500">{t.profile.tag}</p>
+                <p className="min-w-0 truncate text-sm font-semibold text-slate-200">{username.trim().toLowerCase() || "username"}#{profile.discriminator}</p>
+              </div>
+              <p className="mt-1 text-[11px] leading-4 text-slate-500">{t.profile.tagHint}</p>
+              <div className="mt-3 flex items-center gap-1.5 border-t border-white/[.06] pt-3">
+                <Fingerprint className="size-3.5 shrink-0 text-violet-300/70" />
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-slate-500">{t.profile.identityCode}</p>
+              </div>
+              <div className="mt-1.5 flex min-w-0 items-center gap-2">
+                <code title={t.profile.identityCodeHint} className="min-w-0 flex-1 truncate rounded-md bg-white/[.04] px-2 py-1 text-xs text-violet-200/90">{fingerprint ?? t.profile.identityCodeUnavailable}</code>
+                {fingerprint && <button type="button" aria-label={t.profile.copyCode} title={t.profile.copyCode} onClick={() => void copyFingerprint()} className="grid size-7 shrink-0 place-items-center rounded-md text-slate-500 transition hover:bg-white/10 hover:text-slate-200">{fingerprintCopied ? <Check className="size-3.5 text-emerald-300" /> : <Copy className="size-3.5" />}</button>}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-4 text-slate-500">{t.profile.identityCodeHint}</p>
+            </div>
+          </div>
+          <label className="grid gap-2 text-sm font-medium text-slate-300">{t.profile.nickname}<Input value={name} onChange={(event) => setName(event.target.value)} maxLength={32} /></label>
           <label className="grid gap-2 text-sm font-medium text-slate-300">{t.profile.bio}<Textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={160} /></label>
           <fieldset className="grid gap-2">
             <legend className="mb-2 text-sm font-medium text-slate-300">{t.profile.status}</legend>
@@ -117,7 +157,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             </div>
             {status === "invisible" && <p className="text-xs text-slate-500">{t.profile.invisibleHint}</p>}
           </fieldset>
-          <Button type="submit" className="w-full" disabled={compressing || name.trim().length < 2}>{t.profile.save}</Button>
+          <Button type="submit" className="w-full" disabled={compressing || name.trim().length < 2 || !usernameValid}>{t.profile.save}</Button>
         </form>
       </DialogContent>
     </Dialog>

@@ -1,11 +1,12 @@
-import type { Attachment, Channel, ChatMessage, Member, MemberRole, MessageSearchFilters, MessageSearchResult, Permission, PublicMemberStatus, PublicProfile, ServerSettings } from "@opencord/shared";
+import { publicKeyFingerprint, type Attachment, type Channel, type ChatMessage, type Member, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
-interface UserRow extends QueryRow { id: string; display_name: string; bio: string; avatar: string | null; banner: string | null; role: MemberRole }
-interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null }
+interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
+interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean }
+interface MentionRow extends QueryRow { message_id: string; user_id: string }
 interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 interface MessageUpdateRow extends MessageRow { removed_storage_keys: string[] | null }
@@ -80,19 +81,19 @@ export class ChatRepository {
     return rows.length > 0;
   }
 
-  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<void> {
+  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<void> {
     await this.database.query(
-      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner) VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, updated_at = now()
+      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, updated_at = now()
        WHERE users.public_key = EXCLUDED.public_key`,
-      [userId, publicKey, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null],
+      [userId, publicKey, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator],
     );
   }
 
-  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<boolean> {
+  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<boolean> {
     const rows = await this.database.query<{ id: string }>(
-      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, updated_at = now() WHERE id = $1 RETURNING id",
-      [userId, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null],
+      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, updated_at = now() WHERE id = $1 RETURNING id",
+      [userId, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator],
     );
     return rows.length > 0;
   }
@@ -100,7 +101,7 @@ export class ChatRepository {
   async leaveServer(userId: string): Promise<MemberRole | null> {
     const role = await this.getOptionalMemberRole(userId);
     if (!role) return null;
-    await this.database.query("UPDATE users SET bio = '', avatar = NULL, banner = NULL, updated_at = now() WHERE id = $1", [userId]);
+    await this.database.query("UPDATE users SET bio = '', avatar = NULL, banner = NULL, username = NULL, discriminator = NULL, updated_at = now() WHERE id = $1", [userId]);
     if (role !== "owner") await this.database.query("DELETE FROM server_members WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
     return role;
   }
@@ -139,22 +140,48 @@ export class ChatRepository {
 
   async listMembers(statuses: ReadonlyMap<string, PublicMemberStatus>): Promise<Member[]> {
     const users = await this.database.query<UserRow>(
-      `SELECT u.id, u.display_name, u.bio, u.avatar, u.banner, sm.role FROM server_members sm
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
        JOIN users u ON u.id = sm.user_id WHERE sm.server_id = $1
        ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.display_name`,
       [DEFAULT_SERVER_ID],
     );
-    return users.map((user) => ({ id: user.id, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status: statuses.get(user.id) ?? "offline", role: user.role }));
+    return Promise.all(users.map((user) => mapMember(user, statuses.get(user.id) ?? "offline")));
   }
 
   async getMember(userId: string, status: PublicMemberStatus): Promise<Member> {
     const [user] = await this.database.query<UserRow>(
-      `SELECT u.id, u.display_name, u.bio, u.avatar, u.banner, sm.role FROM users u
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
        JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2 WHERE u.id = $1`,
       [userId, DEFAULT_SERVER_ID],
     );
     if (!user) throw new Error("User is missing");
-    return { id: user.id, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, role: user.role };
+    return mapMember(user, status);
+  }
+
+  /**
+   * Эффективный мут: если срок истёк — лениво очищаем флаг и возвращаем false.
+   * Сервер так же проверяет перед приёмом сообщений.
+   */
+  async isChatMuted(userId: string): Promise<boolean> {
+    const [row] = await this.database.query<{ chat_muted: boolean; chat_muted_until: Date | string | null }>(
+      "SELECT chat_muted, chat_muted_until FROM server_members WHERE server_id = $1 AND user_id = $2",
+      [DEFAULT_SERVER_ID, userId],
+    );
+    if (!row || row.chat_muted !== true) return false;
+    if (row.chat_muted_until && new Date(row.chat_muted_until).getTime() <= Date.now()) {
+      await this.database.query("UPDATE server_members SET chat_muted = false, chat_muted_until = NULL WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+      return false;
+    }
+    return true;
+  }
+
+  async setChatMuted(userId: string, muted: boolean, durationMinutes: number | null = null): Promise<boolean> {
+    const until = muted && durationMinutes !== null ? new Date(Date.now() + durationMinutes * 60_000) : null;
+    const rows = await this.database.query<{ user_id: string }>(
+      "UPDATE server_members SET chat_muted = $3, chat_muted_until = $4 WHERE server_id = $1 AND user_id = $2 RETURNING user_id",
+      [DEFAULT_SERVER_ID, userId, muted, until],
+    );
+    return rows.length > 0;
   }
 
   async createAttachment(id: string, uploaderId: string, storageKey: string, fileName: string, mimeType: string, sizeBytes: number, sha256: string): Promise<Attachment> {
@@ -187,7 +214,7 @@ export class ChatRepository {
     return row ? { ...mapAttachment(row), storageKey: row.storage_key } : null;
   }
 
-  async createMessage(id: string, channelId: string, authorId: string, content: string, attachmentIds: string[] = []): Promise<ChatMessage | null> {
+  async createMessage(id: string, channelId: string, authorId: string, content: string, attachmentIds: string[] = [], mentions: string[] = [], kind: "chat" | "pm" | "apm" = "chat", targetUserId: string | null = null, anonymous = false): Promise<ChatMessage | null> {
     const rows = await this.database.query<MessageRow>(
       `WITH requested AS (
          SELECT value::uuid AS id, (position - 1)::integer AS position
@@ -197,36 +224,46 @@ export class ChatRepository {
          WHERE a.uploader_id = $3 AND a.server_id = $6
          AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id)
        ), inserted AS (
-         INSERT INTO messages (id, channel_id, author_id, content)
-         SELECT $1, $2, $3, $4
+         INSERT INTO messages (id, channel_id, author_id, content, kind, target_user_id, anonymous)
+         SELECT $1, $2, $3, $4, $8, $9, $10
          WHERE (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
-         RETURNING id, channel_id, author_id, content, created_at, edited_at
+         RETURNING id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous
        ), linked AS (
          INSERT INTO message_attachments (message_id, attachment_id, position)
          SELECT inserted.id, available.id, available.position FROM inserted CROSS JOIN available
+       ), mentioned AS (
+         INSERT INTO message_mentions (message_id, user_id, position)
+         SELECT inserted.id, candidate.value, candidate.position FROM inserted
+         CROSS JOIN (
+           SELECT DISTINCT ON (input.value) input.value, (input.ordinality - 1)::integer AS position
+           FROM unnest($7::text[]) WITH ORDINALITY AS input(value, ordinality)
+           WHERE EXISTS (SELECT 1 FROM server_members sm WHERE sm.server_id = $6 AND sm.user_id = input.value)
+           ORDER BY input.value, input.ordinality
+         ) AS candidate
        )
-       SELECT id, channel_id, author_id, content, created_at, edited_at,
+       SELECT id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous,
        (SELECT display_name FROM users WHERE users.id = author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = author_id) AS author_avatar FROM inserted`,
-      [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID],
+      [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID, mentions, kind, targetUserId, anonymous],
     );
     const row = rows[0];
     if (!row) return null;
     const attachments = await this.getAttachmentsForMessages([id]);
-    return mapMessage(row, attachments.get(id) ?? []);
+    const messageMentions = await this.getMentionsForMessages([id]);
+    return mapMessage(row, attachments.get(id) ?? [], messageMentions.get(id) ?? []);
   }
 
-  async getMessageAccess(messageId: string): Promise<{ authorId: string; channelId: string } | null> {
-    const [row] = await this.database.query<{ author_id: string; channel_id: string }>(
-      `SELECT m.author_id, m.channel_id FROM messages m
+  async getMessageAccess(messageId: string): Promise<{ authorId: string; channelId: string; kind: "chat" | "pm" | "apm"; targetUserId: string | null } | null> {
+    const [row] = await this.database.query<{ author_id: string; channel_id: string; kind: "chat" | "pm" | "apm"; target_user_id: string | null }>(
+      `SELECT m.author_id, m.channel_id, m.kind, m.target_user_id FROM messages m
        JOIN channels c ON c.id = m.channel_id
        WHERE m.id = $1 AND c.server_id = $2`,
       [messageId, DEFAULT_SERVER_ID],
     );
-    return row ? { authorId: row.author_id, channelId: row.channel_id } : null;
+    return row ? { authorId: row.author_id, channelId: row.channel_id, kind: row.kind, targetUserId: row.target_user_id } : null;
   }
 
-  async updateMessage(messageId: string, authorId: string, content: string, attachmentIds: string[] = []): Promise<{ message: ChatMessage; removedStorageKeys: string[] } | null> {
+  async updateMessage(messageId: string, authorId: string, content: string, attachmentIds: string[] = [], mentions: string[] = []): Promise<{ message: ChatMessage; removedStorageKeys: string[] } | null> {
     const rows = await this.database.query<MessageUpdateRow>(
       `WITH requested AS (
          SELECT value::uuid AS id, (position - 1)::integer AS position
@@ -243,7 +280,7 @@ export class ChatRepository {
          AND EXISTS (SELECT 1 FROM channels c WHERE c.id = m.channel_id AND c.server_id = $5)
          AND (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
          AND ($3 <> '' OR EXISTS (SELECT 1 FROM requested))
-         RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at
+         RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous
        ), removed AS (
          DELETE FROM message_attachments ma USING updated
          WHERE ma.message_id = updated.id AND NOT EXISTS (SELECT 1 FROM requested r WHERE r.id = ma.attachment_id)
@@ -252,20 +289,34 @@ export class ChatRepository {
          INSERT INTO message_attachments (message_id, attachment_id, position)
          SELECT updated.id, available.id, available.position FROM updated CROSS JOIN available
          ON CONFLICT (message_id, attachment_id) DO UPDATE SET position = excluded.position
+       ), removed_mentions AS (
+         DELETE FROM message_mentions mm USING updated
+         WHERE mm.message_id = updated.id
+         RETURNING mm.user_id
+       ), linked_mentions AS (
+         INSERT INTO message_mentions (message_id, user_id, position)
+         SELECT updated.id, candidate.value, candidate.position FROM updated
+         CROSS JOIN (
+           SELECT DISTINCT ON (input.value) input.value, (input.ordinality - 1)::integer AS position
+           FROM unnest($6::text[]) WITH ORDINALITY AS input(value, ordinality)
+           WHERE EXISTS (SELECT 1 FROM server_members sm WHERE sm.server_id = $5 AND sm.user_id = input.value)
+           ORDER BY input.value, input.ordinality
+         ) AS candidate
        ), removed_files AS (
          DELETE FROM attachments a USING removed WHERE a.id = removed.attachment_id RETURNING a.storage_key
        )
-       SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at,
+       SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at, updated.kind, updated.target_user_id, updated.anonymous,
        (SELECT display_name FROM users WHERE users.id = updated.author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = updated.author_id) AS author_avatar,
        COALESCE((SELECT array_agg(storage_key) FROM removed_files), ARRAY[]::text[]) AS removed_storage_keys
        FROM updated`,
-      [messageId, authorId, content, attachmentIds, DEFAULT_SERVER_ID],
+      [messageId, authorId, content, attachmentIds, DEFAULT_SERVER_ID, mentions],
     );
     const row = rows[0];
     if (!row) return null;
     const attachments = await this.getAttachmentsForMessages([messageId]);
-    return { message: mapMessage(row, attachments.get(messageId) ?? []), removedStorageKeys: row.removed_storage_keys ?? [] };
+    const messageMentions = await this.getMentionsForMessages([messageId]);
+    return { message: mapMessage(row, attachments.get(messageId) ?? [], messageMentions.get(messageId) ?? []), removedStorageKeys: row.removed_storage_keys ?? [] };
   }
 
   async deleteMessage(messageId: string, authorId: string, allowAnyAuthor: boolean): Promise<{ channelId: string; storageKeys: string[] } | null> {
@@ -289,16 +340,18 @@ export class ChatRepository {
     return { channelId: deleted[0].channel_id, storageKeys: candidates.flatMap((row) => row.storage_key ? [row.storage_key] : []) };
   }
 
-  async getHistory(channelId: string, limit: number): Promise<ChatMessage[]> {
+  async getHistory(channelId: string, limit: number, viewerId: string): Promise<ChatMessage[]> {
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at
+      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous
        FROM messages m JOIN users u ON u.id = m.author_id
-       WHERE m.channel_id = $1 ORDER BY m.created_at DESC LIMIT $2`,
-      [channelId, limit],
+       WHERE m.channel_id = $1 AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
+       ORDER BY m.created_at DESC LIMIT $2`,
+      [channelId, limit, viewerId],
     );
     const ordered = rows.reverse();
     const attachments = await this.getAttachmentsForMessages(ordered.map((message) => message.id));
-    return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? []));
+    const messageMentions = await this.getMentionsForMessages(ordered.map((message) => message.id));
+    return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
   }
 
   async updateServerSettings(settings: ServerSettings): Promise<void> {
@@ -309,7 +362,9 @@ export class ChatRepository {
   }
 
   async searchMessages(filters: MessageSearchFilters): Promise<MessageSearchResult> {
+    // Личные и анонимные сообщения в общий поиск не попадают.
     const conditions = `c.server_id = $1
+      AND m.kind = 'chat'
       AND ($2::text = '' OR m.content ILIKE '%' || $2 || '%' OR EXISTS (
         SELECT 1 FROM message_attachments search_ma JOIN attachments search_a ON search_a.id = search_ma.attachment_id
         WHERE search_ma.message_id = m.id AND search_a.original_name ILIKE '%' || $2 || '%'
@@ -342,13 +397,31 @@ export class ChatRepository {
       [...parameters, filters.limit, filters.offset],
     );
     const attachments = await this.getAttachmentsForMessages(rows.map((message) => message.id));
+    const messageMentions = await this.getMentionsForMessages(rows.map((message) => message.id));
     const total = Number(countRow?.count ?? 0);
     return {
-      messages: rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [])),
+      messages: rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [])),
       total,
       offset: filters.offset,
       hasMore: filters.offset + rows.length < total,
     };
+  }
+
+  private async getMentionsForMessages(messageIds: string[]): Promise<Map<string, { userId: string }[]>> {
+    const result = new Map<string, { userId: string }[]>();
+    if (!messageIds.length) return result;
+    const rows = await this.database.query<MentionRow>(
+      `SELECT mm.message_id, mm.user_id FROM message_mentions mm
+       WHERE mm.message_id = ANY($1::uuid[]) ORDER BY mm.message_id, mm.position`,
+      [messageIds],
+    );
+    for (const row of rows) {
+      if (!row.message_id) continue;
+      const current = result.get(row.message_id) ?? [];
+      current.push({ userId: row.user_id });
+      result.set(row.message_id, current);
+    }
+    return result;
   }
 
   private async getAttachmentsForMessages(messageIds: string[]): Promise<Map<string, Attachment[]>> {
@@ -376,8 +449,25 @@ export function permissionsForRole(role: MemberRole): Permission[] {
   return ["VOICE_CONNECT", "VOICE_SPEAK"];
 }
 
-function mapMessage(row: MessageRow, attachments: Attachment[] = []): ChatMessage {
-  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments };
+async function mapMember(user: UserRow, status: PublicMemberStatus): Promise<Member> {
+  const fingerprint = user.username && user.discriminator ? await publicKeyFingerprint(user.public_key) : "0000-0000-0000-0000";
+  const mutedUntil = user.chat_muted_until ? new Date(user.chat_muted_until) : null;
+  const chatMuted = user.chat_muted === true && (mutedUntil === null || mutedUntil.getTime() > Date.now());
+  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
+}
+
+function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = []): ChatMessage {
+  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments, mentions, kind: row.kind, targetUserId: row.target_user_id, anonymous: row.anonymous === true };
+}
+
+/**
+ * Представление личного сообщения для конкретного зрителя. Анонимное (/apm)
+ * сообщение получатель видит без личности отправителя: синтетический authorId,
+ * имя «Аноним» и без аватара. Отправитель видит собственное сообщение как обычно.
+ */
+export function messageForViewer(message: ChatMessage, viewerId: string): ChatMessage {
+  if (message.kind !== "apm" || message.targetUserId !== viewerId || message.authorId === viewerId) return message;
+  return { ...message, authorId: `anonymous-${message.id}`, authorName: "Аноним", authorAvatar: null };
 }
 
 function mapAttachment(row: AttachmentRow): Attachment {

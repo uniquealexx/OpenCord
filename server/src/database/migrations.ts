@@ -213,6 +213,79 @@ const migrations = [
       );
     `,
   },
+  {
+    id: "015_username_discriminator_mentions",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS username text;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS discriminator text;
+
+      UPDATE users SET username = CASE
+        WHEN btrim(regexp_replace(lower(display_name), '[^a-z0-9_.-]+', '-', 'g'), '-') = '' THEN 'user-' || left(id, 12)
+        ELSE left(CASE
+          WHEN char_length(btrim(regexp_replace(lower(display_name), '[^a-z0-9_.-]+', '-', 'g'), '-')) < 2
+          THEN btrim(regexp_replace(lower(display_name), '[^a-z0-9_.-]+', '-', 'g'), '-') || repeat('0', 2 - char_length(btrim(regexp_replace(lower(display_name), '[^a-z0-9_.-]+', '-', 'g'), '-')))
+          ELSE btrim(regexp_replace(lower(display_name), '[^a-z0-9_.-]+', '-', 'g'), '-')
+        END, 32)
+      END WHERE username IS NULL;
+      UPDATE users SET discriminator = to_char(floor(random() * 10000)::integer, 'FM0000') WHERE discriminator IS NULL;
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'users_username_check'
+            AND conrelid = 'users'::regclass
+        ) THEN
+          ALTER TABLE users ADD CONSTRAINT users_username_check CHECK (
+            username IS NULL OR username ~ '^[a-z0-9_.-]{2,32}$'
+          );
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'users_discriminator_check'
+            AND conrelid = 'users'::regclass
+        ) THEN
+          ALTER TABLE users ADD CONSTRAINT users_discriminator_check CHECK (
+            discriminator IS NULL OR discriminator ~ '^[0-9]{4}$'
+          );
+        END IF;
+      END
+      $$;
+
+      CREATE TABLE IF NOT EXISTS message_mentions (
+        message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        position integer NOT NULL CHECK (position BETWEEN 0 AND 19),
+        PRIMARY KEY (message_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS message_mentions_user_idx ON message_mentions(user_id);
+    `,
+  },
+  {
+    id: "016_private_messages_chat_mute",
+    sql: `
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'chat';
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS target_user_id text REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS anonymous boolean NOT NULL DEFAULT false;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'messages_kind_check'
+            AND conrelid = 'messages'::regclass
+        ) THEN
+          ALTER TABLE messages ADD CONSTRAINT messages_kind_check CHECK (kind IN ('chat', 'pm', 'apm'));
+        END IF;
+      END
+      $$;
+      ALTER TABLE server_members ADD COLUMN IF NOT EXISTS chat_muted boolean NOT NULL DEFAULT false;
+      CREATE INDEX IF NOT EXISTS messages_target_user_idx ON messages(target_user_id) WHERE target_user_id IS NOT NULL;
+    `,
+  },
+  {
+    id: "017_chat_mute_duration",
+    sql: `ALTER TABLE server_members ADD COLUMN IF NOT EXISTS chat_muted_until timestamptz;`,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

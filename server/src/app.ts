@@ -3,12 +3,12 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
 import { runMigrations } from "./database/migrations";
-import { ChatRepository, permissionsForRole } from "./database/repository";
+import { ChatRepository, messageForViewer, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, type AttachmentStorage } from "./attachments/storage";
 import { DisabledVoiceService, VoiceRoomFullError, VoiceUnavailableError, type VoiceService } from "./voice";
@@ -158,6 +158,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (session) session.expiresAt = Date.now() + 15 * 60_000;
     }
     if (event.type === "ping") return send(connection.socket, { type: "pong", requestId: event.requestId, serverTime: new Date().toISOString() });
+    if (event.type === "chat.send" || event.type === "chat.pm" || event.type === "chat.apm") {
+      if (await repository.isChatMuted(connection.userId)) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Вы отключены от чата администратором");
+    }
     if (event.type === "profile.update") {
       if (!(await repository.updateUserProfile(connection.userId, event.profile))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Профиль пользователя не найден");
       connection.presenceStatus = event.profile.status;
@@ -178,7 +181,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "history.request") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
-      const messages = await repository.getHistory(event.channelId, event.limit);
+      const messages = await repository.getHistory(event.channelId, event.limit, connection.userId);
       return send(connection.socket, { type: "history.result", requestId: event.requestId, channelId: event.channelId, messages });
     }
     if (event.type === "message.search") {
@@ -187,19 +190,40 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "chat.send") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
-      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds);
+      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds, event.mentions);
       if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Одно или несколько вложений недоступны или уже отправлены");
       broadcast({ type: "message.created", message });
+      return;
+    }
+    if (event.type === "chat.pm" || event.type === "chat.apm") {
+      if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (event.targetUserId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя отправить личное сообщение самому себе");
+      try { await repository.getMemberRole(event.targetUserId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Получатель не найден"); }
+      const anonymous = event.type === "chat.apm";
+      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, [], [], anonymous ? "apm" : "pm", event.targetUserId, anonymous);
+      if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось отправить личное сообщение");
+      routeMessageEvent(message, (current) => ({ type: "message.created", message: current }));
+      return;
+    }
+    if (event.type === "chat.mute.set") {
+      if (!(await hasPermission(connection.userId, "MANAGE_MESSAGES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления чатом");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя замьютить самого себя");
+      let targetRole: import("@opencord/shared").MemberRole;
+      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      const actorRole = await repository.getMemberRole(connection.userId);
+      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить мут этого участника");
+      if (!(await repository.setChatMuted(event.userId, event.muted, event.durationMinutes))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден");
+      await broadcastMember(event.userId, publicUserStatuses().get(event.userId) ?? "offline");
       return;
     }
     if (event.type === "message.update") {
       const existing = await repository.getMessageAccess(event.messageId);
       if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       if (existing.authorId !== connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Редактировать можно только собственные сообщения");
-      const updated = await repository.updateMessage(event.messageId, connection.userId, event.content, event.attachmentIds);
+      const updated = await repository.updateMessage(event.messageId, connection.userId, event.content, event.attachmentIds, event.mentions);
       if (!updated) return sendError(connection.socket, event.requestId, "CONFLICT", "Сообщение должно содержать текст или доступное вложение");
       await Promise.all(updated.removedStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
-      broadcast({ type: "message.updated", message: updated.message });
+      routeMessageEvent(updated.message, (current) => ({ type: "message.updated", message: current }));
       return;
     }
     if (event.type === "message.delete") {
@@ -210,7 +234,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const deleted = await repository.deleteMessage(event.messageId, connection.userId, canDeleteAny);
       if (!deleted) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение уже удалено");
       await Promise.all(deleted.storageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
-      broadcast({ type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
+      if (existing.kind === "chat") broadcast({ type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
+      else sendToParticipants(existing.authorId, existing.targetUserId, { type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
       return;
     }
     if (event.type === "channel.create") {
@@ -417,6 +442,27 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   function broadcast(event: ServerEvent): void {
     for (const connection of connections) if (connection.userId && connection.socket.readyState === connection.socket.OPEN) send(connection.socket, event);
+  }
+
+  /**
+   * Доставка события о личном сообщении: обычные сообщения — всем, личные —
+   * только отправителю и получателю. Анонимное сообщение получателю маскируется.
+   */
+  function routeMessageEvent(message: ChatMessage, build: (message: ChatMessage) => ServerEvent): void {
+    if (message.kind === "chat") { broadcast(build(message)); return; }
+    const recipients = new Set([message.authorId, message.targetUserId].filter((id): id is string => typeof id === "string" && id.length > 0));
+    for (const connection of connections) {
+      if (connection.userId && recipients.has(connection.userId) && connection.socket.readyState === connection.socket.OPEN) {
+        send(connection.socket, build(messageForViewer(message, connection.userId)));
+      }
+    }
+  }
+
+  function sendToParticipants(authorId: string, targetUserId: string | null, event: ServerEvent): void {
+    const recipients = new Set([authorId, targetUserId].filter((id): id is string => typeof id === "string" && id.length > 0));
+    for (const connection of connections) {
+      if (connection.userId && recipients.has(connection.userId) && connection.socket.readyState === connection.socket.OPEN) send(connection.socket, event);
+    }
   }
 
   function authorizeHttp(authorization: string | undefined): string | null {

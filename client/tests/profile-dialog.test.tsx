@@ -6,6 +6,8 @@ import type { LocalProfile } from "@/shared/state";
 
 const profile: LocalProfile = {
   id: "local-user",
+  username: "lina",
+  discriminator: "1234",
   displayName: "Лина",
   bio: "",
   avatar: null,
@@ -86,5 +88,31 @@ describe("ProfileDialog status", () => {
     await user.click(screen.getByRole("button", { name: "Кадрировать" }));
 
     expect(screen.getByRole("heading", { name: "Кадрирование шапки" })).toBeInTheDocument();
+  });
+
+  it("shows the generated tag and normalizes an edited username", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    expect(screen.getByText("lina#1234")).toBeInTheDocument();
+
+    const usernameInput = screen.getByRole("textbox", { name: "Username (id)" });
+    await user.clear(usernameInput);
+    await user.type(usernameInput, "  LiNa.Dev  ");
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ username: "lina.dev" }));
+  });
+
+  it("blocks saving an invalid username", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    const usernameInput = screen.getByRole("textbox", { name: "Username (id)" });
+    await user.clear(usernameInput);
+    await user.type(usernameInput, "плохое имя");
+    expect(screen.getByRole("button", { name: "Сохранить профиль" })).toBeDisabled();
   });
 });

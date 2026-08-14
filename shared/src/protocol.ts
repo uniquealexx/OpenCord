@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 25 as const;
+export const PROTOCOL_VERSION = 28 as const;
 
 export const MEBIBYTE = 1024 * 1024;
 export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
@@ -41,7 +41,18 @@ export const userBannerSchema = z.string().max(USER_BANNER_MAX_DATA_URL_LENGTH).
 export const userStatusSchema = z.enum(["online", "idle", "dnd", "invisible"]);
 export const publicMemberStatusSchema = z.enum(["online", "idle", "dnd", "offline"]);
 
+// Username (id) в стиле старого Discord: строчные буквы, цифры, точка, подчёркивание, дефис.
+export const USERNAME_MIN_LENGTH = 2 as const;
+export const USERNAME_MAX_LENGTH = 32 as const;
+export const usernameSchema = z.string().trim().toLowerCase().regex(/^[a-z0-9_.-]{2,32}$/u);
+// Дискриминатор тега username#1234: ровно 4 цифры, генерируется один раз вместе с ключами.
+export const discriminatorSchema = z.string().regex(/^[0-9]{4}$/u);
+// Код идентичности — SHA-256 отпечаток публичного ключа, группы по 4 hex-символа.
+export const fingerprintSchema = z.string().regex(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){3}$/u);
+
 export const publicProfileSchema = z.object({
+  username: usernameSchema,
+  discriminator: discriminatorSchema,
   displayName: z.string().trim().min(2).max(32),
   bio: z.string().trim().max(160).default(""),
   avatar: userAvatarSchema.default(null),
@@ -75,12 +86,17 @@ export const voicePresenceSchema = z.object({
 
 export const memberSchema = z.object({
   id: z.string().min(1),
+  username: usernameSchema,
+  discriminator: discriminatorSchema,
+  fingerprint: fingerprintSchema,
   displayName: z.string().min(1).max(32),
   bio: z.string().max(160),
   avatar: userAvatarSchema,
   banner: userBannerSchema,
   status: publicMemberStatusSchema,
   role: memberRoleSchema,
+  chatMuted: z.boolean().default(false),
+  chatMutedUntil: z.string().datetime().nullable().default(null),
 });
 
 export const attachmentSchema = z.object({
@@ -90,6 +106,15 @@ export const attachmentSchema = z.object({
   sizeBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   sha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
+
+export const messageMentionSchema = z.object({
+  userId: z.string().min(1).max(200),
+});
+export const mentionIdsSchema = z.array(z.string().min(1).max(200)).max(20).refine((ids) => new Set(ids).size === ids.length, "Mention user IDs must be unique");
+
+// Вид сообщения: обычное, личное (/pm) или анонимное личное (/apm).
+export const messageKindSchema = z.enum(["chat", "pm", "apm"]);
+export const privateMessageTargetSchema = z.string().min(1).max(200);
 
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),
@@ -101,6 +126,10 @@ export const chatMessageSchema = z.object({
   createdAt: z.string().datetime(),
   editedAt: z.string().datetime().nullable().default(null),
   attachments: z.array(attachmentSchema).max(5).default([]),
+  mentions: z.array(messageMentionSchema).max(20).default([]),
+  kind: messageKindSchema.default("chat"),
+  targetUserId: privateMessageTargetSchema.nullable().default(null),
+  anonymous: z.boolean().default(false),
 }).superRefine((message, context) => {
   if (!message.content && message.attachments.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
@@ -136,8 +165,11 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("history.request"), requestId: requestIdSchema, channelId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }),
   z.object({ type: z.literal("message.search"), requestId: requestIdSchema, filters: messageSearchFiltersSchema }),
-  z.object({ type: z.literal("chat.send"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]) }),
-  z.object({ type: z.literal("message.update"), requestId: requestIdSchema, messageId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]) }),
+  z.object({ type: z.literal("chat.send"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]) }),
+  z.object({ type: z.literal("chat.pm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema }),
+  z.object({ type: z.literal("chat.apm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema }),
+  z.object({ type: z.literal("chat.mute.set"), requestId: requestIdSchema, userId: z.string().min(1), muted: z.boolean(), durationMinutes: z.number().int().min(1).max(10_080).nullable().default(null) }),
+  z.object({ type: z.literal("message.update"), requestId: requestIdSchema, messageId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]) }),
   z.object({ type: z.literal("message.delete"), requestId: requestIdSchema, messageId: z.string().uuid() }),
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
@@ -194,6 +226,8 @@ export type ScreenShareResolution = z.infer<typeof screenShareResolutionSchema>;
 export type ScreenShareFrameRate = z.infer<typeof screenShareFrameRateSchema>;
 export type ServerSettings = z.infer<typeof serverSettingsSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export type MessageKind = z.infer<typeof messageKindSchema>;
+export type MessageMention = z.infer<typeof messageMentionSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type MessageContentType = z.infer<typeof messageContentTypeSchema>;
 export type MessageSearchFilters = z.infer<typeof messageSearchFiltersSchema>;

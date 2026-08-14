@@ -115,18 +115,18 @@ describe("WebSocket chat flow", () => {
     if (!address || typeof address === "string") throw new Error("Unexpected test address");
     const url = `ws://127.0.0.1:${address.port}/ws`;
     const observer = await connectAndAuthenticate(url, "Наблюдатель");
-    const memberJoined = waitForEvent(observer.socket, "member.updated");
+    const memberJoined = waitForMemberUpdated(observer.socket, (candidate) => candidate.displayName === "Участник");
     const member = await connectAndAuthenticate(url, "Участник");
-    expect(await memberJoined).toMatchObject({ member: { id: member.userId, displayName: "Участник", avatar: null } });
+    expect(await memberJoined).toMatchObject({ member: { id: member.userId, username: usernameFromDisplayName("Участник"), discriminator: "1234", displayName: "Участник", avatar: null } });
     const avatar = "data:image/webp;base64,AA==";
     const banner = "data:image/webp;base64,AQ==";
 
     const profileUpdated = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } }));
-    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } });
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } }));
+    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } });
 
     const becameInvisible = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "invisible" } }));
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "invisible" } }));
     expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, status: "offline" } });
 
     const memberRemoved = waitForEvent(observer.socket, "member.removed");
@@ -308,6 +308,148 @@ describe("WebSocket chat flow", () => {
     expect((await serverUnmuted).participant).toMatchObject({ userId: target.userId, muted: false, serverMuted: false });
     expect(moderationCalls).toEqual([{ userId: target.userId, muted: true }, { userId: target.userId, muted: false }]);
   }, 15_000);
+
+  it("coexists identical username#discriminator members and delivers mentions with membership validation", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const firstTwin = await connectAndAuthenticate(url, "Близнец первый", generateKeyPairSync("ed25519"), null, "twins", "4242");
+    const observer = await connectAndAuthenticate(url, "Наблюдатель", generateKeyPairSync("ed25519"), null, "observer", "7777");
+    const secondTwin = await connectAndAuthenticate(url, "Близнец второй", generateKeyPairSync("ed25519"), null, "twins", "4242");
+
+    const twins = secondTwin.snapshot.server.members.filter((member) => member.username === "twins" && member.discriminator === "4242");
+    expect(twins).toHaveLength(2);
+    expect(twins[0]!.fingerprint).toMatch(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){3}$/u);
+    expect(twins[0]!.fingerprint).not.toBe(twins[1]!.fingerprint);
+
+    const channel = secondTwin.snapshot.server.channels.find((item) => item.kind === "text");
+    expect(channel).toBeDefined();
+
+    const broadcast = waitForEvent(observer.socket, "message.created");
+    firstTwin.socket.send(JSON.stringify({
+      type: "chat.send",
+      requestId: randomUUID(),
+      channelId: channel!.id,
+      content: `Смотри <@${secondTwin.userId}>, ты это ты`,
+      mentions: [secondTwin.userId, "not-a-member"],
+    }));
+    const created = await broadcast;
+    if (created.type !== "message.created") throw new Error("Message expected");
+    expect(created.message.mentions).toEqual([{ userId: secondTwin.userId }]);
+
+    const history = waitForEvent(observer.socket, "history.result");
+    observer.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel!.id, limit: 50 }));
+    const result = await history;
+    expect(result.type === "history.result" && result.messages.some((message) => message.mentions.some((mention) => mention.userId === secondTwin.userId))).toBe(true);
+
+    const updated = waitForEvent(observer.socket, "message.updated");
+    firstTwin.socket.send(JSON.stringify({ type: "message.update", requestId: randomUUID(), messageId: created.message.id, content: "Отредактировано без упоминаний", mentions: [] }));
+    const edited = await updated;
+    expect(edited.type === "message.updated" && edited.message.mentions).toEqual([]);
+
+    const closed = [once(firstTwin.socket, "close"), once(observer.socket, "close"), once(secondTwin.socket, "close")];
+    firstTwin.socket.close();
+    observer.socket.close();
+    secondTwin.socket.close();
+    await Promise.all(closed);
+  }, 15_000);
+
+  it("delivers private messages only to participants, masks anonymous senders and enforces chat mute", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const sender = await connectAndAuthenticate(url, "Sender");
+    const receiver = await connectAndAuthenticate(url, "Receiver");
+    const outsider = await connectAndAuthenticate(url, "Outsider");
+    const channel = sender.snapshot.server.channels.find((item) => item.kind === "text");
+    expect(channel).toBeDefined();
+
+    // /pm: получают отправитель и получатель; посторонний — нет.
+    const outsiderNext = waitForEvent(outsider.socket, "message.created");
+    const receiverPm = waitForEvent(receiver.socket, "message.created");
+    const senderPm = waitForEvent(sender.socket, "message.created");
+    sender.socket.send(JSON.stringify({ type: "chat.pm", requestId: randomUUID(), channelId: channel!.id, content: "Приват", targetUserId: receiver.userId }));
+    const receivedPm = await receiverPm;
+    const sentPm = await senderPm;
+    if (receivedPm.type !== "message.created" || sentPm.type !== "message.created") throw new Error("Private message expected");
+    expect(receivedPm.message).toMatchObject({ kind: "pm", content: "Приват", authorId: sender.userId, targetUserId: receiver.userId });
+    expect(sentPm.message).toMatchObject({ kind: "pm", content: "Приват" });
+
+    // Обычное сообщение доходит и до постороннего — значит, личное ему не ушло.
+    sender.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Всем" }));
+    const outsiderGot = await outsiderNext;
+    expect(outsiderGot.type === "message.created" && outsiderGot.message.content).toBe("Всем");
+
+    // /apm: получателю личность отправителя не видна, отправитель видит себя.
+    const receiverApm = waitForEvent(receiver.socket, "message.created");
+    const senderApm = waitForEvent(sender.socket, "message.created");
+    sender.socket.send(JSON.stringify({ type: "chat.apm", requestId: randomUUID(), channelId: channel!.id, content: "Секрет", targetUserId: receiver.userId }));
+    const receivedApm = await receiverApm;
+    const sentApm = await senderApm;
+    if (receivedApm.type !== "message.created" || sentApm.type !== "message.created") throw new Error("Anonymous message expected");
+    expect(receivedApm.message).toMatchObject({ kind: "apm", anonymous: true, content: "Секрет", authorName: "Аноним", authorAvatar: null });
+    expect(receivedApm.message.authorId).not.toBe(sender.userId);
+    expect(sentApm.message).toMatchObject({ kind: "apm", content: "Секрет", authorId: sender.userId, authorName: "Sender" });
+
+    // История: получатель видит анонимное сообщение без отправителя, посторонний — не видит личных.
+    const receiverHistory = waitForEvent(receiver.socket, "history.result");
+    receiver.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel!.id, limit: 50 }));
+    const receiverHistoryEvent = await receiverHistory;
+    if (receiverHistoryEvent.type !== "history.result") throw new Error("History expected");
+    const apmInHistory = receiverHistoryEvent.messages.find((message) => message.content === "Секрет");
+    expect(apmInHistory).toMatchObject({ authorName: "Аноним" });
+    expect(apmInHistory?.authorId).not.toBe(sender.userId);
+
+    const outsiderHistory = waitForEvent(outsider.socket, "history.result");
+    outsider.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel!.id, limit: 50 }));
+    const outsiderHistoryEvent = await outsiderHistory;
+    if (outsiderHistoryEvent.type !== "history.result") throw new Error("History expected");
+    expect(outsiderHistoryEvent.messages.some((message) => message.content === "Секрет" || message.content === "Приват")).toBe(false);
+
+    // /mute: владелец мутит отправителя на 30 минут — его сообщения отклоняются.
+    const mutedEvent = waitForMemberUpdated(receiver.socket, (member) => member.id === sender.userId && member.chatMuted === true);
+    owner.socket.send(JSON.stringify({ type: "chat.mute.set", requestId: randomUUID(), userId: sender.userId, muted: true, durationMinutes: 30 }));
+    const mutedMember = (await mutedEvent).member;
+    expect(mutedMember.chatMuted).toBe(true);
+    expect(mutedMember.chatMutedUntil).toBeTruthy();
+
+    const denied = waitForEvent(sender.socket, "error");
+    sender.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Мне нельзя" }));
+    expect((await denied).code).toBe("FORBIDDEN");
+
+    // Обычный участник не может менять мут.
+    const memberDenied = waitForEvent(receiver.socket, "error");
+    receiver.socket.send(JSON.stringify({ type: "chat.mute.set", requestId: randomUUID(), userId: sender.userId, muted: false }));
+    expect((await memberDenied).code).toBe("FORBIDDEN");
+
+    // /unmute: сообщения снова проходят.
+    const unmutedEvent = waitForMemberUpdated(receiver.socket, (member) => member.id === sender.userId && member.chatMuted === false);
+    owner.socket.send(JSON.stringify({ type: "chat.mute.set", requestId: randomUUID(), userId: sender.userId, muted: false }));
+    expect((await unmutedEvent).member.chatMuted).toBe(false);
+
+    const allowed = waitForEvent(receiver.socket, "message.created");
+    sender.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Снова можно" }));
+    const allowedEvent = await allowed;
+    expect(allowedEvent.type === "message.created" && allowedEvent.message.content).toBe("Снова можно");
+
+    const closed = [once(owner.socket, "close"), once(sender.socket, "close"), once(receiver.socket, "close"), once(outsider.socket, "close")];
+    owner.socket.close();
+    sender.socket.close();
+    receiver.socket.close();
+    outsider.socket.close();
+    await Promise.all(closed);
+  }, 15_000);
 });
 
 async function connectToDeletedServer(url: string, displayName: string): Promise<Extract<ServerEvent, { type: "server.deleted" }>> {
@@ -318,11 +460,11 @@ async function connectToDeletedServer(url: string, displayName: string): Promise
   const publicKey = exportPublicKey(keys.publicKey);
   const signature = sign(null, Buffer.from(challenge.challenge, "base64"), keys.privateKey).toString("base64");
   const deleted = waitForEvent(socket, "server.deleted");
-  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { displayName, avatar: null } }));
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { username: "returning", discriminator: "4321", displayName, avatar: null } }));
   return deleted;
 }
 
-async function connectAndAuthenticate(url: string, displayName: string, keys = generateKeyPairSync("ed25519"), avatar: string | null = null): Promise<{ socket: WebSocket; snapshot: Extract<ServerEvent, { type: "server.snapshot" }>; userId: string; sessionToken: string }> {
+async function connectAndAuthenticate(url: string, displayName: string, keys = generateKeyPairSync("ed25519"), avatar: string | null = null, username = usernameFromDisplayName(displayName), discriminator = "1234"): Promise<{ socket: WebSocket; snapshot: Extract<ServerEvent, { type: "server.snapshot" }>; userId: string; sessionToken: string }> {
   const socket = new WebSocket(url);
   const challengeEvent = await waitForEvent(socket, "auth.challenge");
   if (challengeEvent.type !== "auth.challenge") throw new Error("Challenge expected");
@@ -330,7 +472,7 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   const signature = sign(null, Buffer.from(challengeEvent.challenge, "base64"), keys.privateKey).toString("base64");
   const authOk = waitForEvent(socket, "auth.ok");
   const snapshot = waitForEvent(socket, "server.snapshot");
-  socket.send(JSON.stringify({ type: "auth.respond", requestId: challengeEvent.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { displayName, avatar } }));
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challengeEvent.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { username, discriminator, displayName, avatar } }));
   const authenticated = await authOk;
   const snapshotEvent = await snapshot;
   if (snapshotEvent.type !== "server.snapshot") throw new Error("Snapshot expected");
@@ -338,16 +480,30 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   return { socket, snapshot: snapshotEvent, userId: authenticated.userId, sessionToken: authenticated.sessionToken };
 }
 
+function usernameFromDisplayName(displayName: string): string {
+  const slug = displayName.toLocaleLowerCase("ru").replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "");
+  return slug.length >= 2 ? slug.slice(0, 32) : `user-${displayName.length}`;
+}
+
 function exportPublicKey(publicKey: KeyObject): string {
   return publicKey.export({ format: "der", type: "spki" }).toString("base64");
 }
 
 function waitForEvent<T extends ServerEvent["type"]>(socket: WebSocket, type: T): Promise<Extract<ServerEvent, { type: T }>> {
+  return waitForEventMatching(socket, type, () => true);
+}
+
+/** Ждёт событие типа type, пропуская подходящие по типу, но не подходящие по условию (например, собственные member.updated). */
+function waitForMemberUpdated(socket: WebSocket, predicate: (member: Extract<ServerEvent, { type: "member.updated" }>["member"]) => boolean): Promise<Extract<ServerEvent, { type: "member.updated" }>> {
+  return waitForEventMatching(socket, "member.updated", (event) => predicate(event.member));
+}
+
+function waitForEventMatching<T extends ServerEvent["type"]>(socket: WebSocket, type: T, matches: (event: Extract<ServerEvent, { type: T }>) => boolean): Promise<Extract<ServerEvent, { type: T }>> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { cleanup(); reject(new Error(`Timed out waiting for ${type}`)); }, 5_000);
     const onMessage = (data: WebSocket.RawData): void => {
       const parsed = serverEventSchema.safeParse(JSON.parse(data.toString()) as unknown);
-      if (parsed.success && parsed.data.type === type) { cleanup(); resolve(parsed.data as Extract<ServerEvent, { type: T }>); }
+      if (parsed.success && parsed.data.type === type && matches(parsed.data as Extract<ServerEvent, { type: T }>)) { cleanup(); resolve(parsed.data as Extract<ServerEvent, { type: T }>); }
     };
     const onError = (error: Error): void => { cleanup(); reject(error); };
     const cleanup = (): void => { clearTimeout(timeout); socket.off("message", onMessage); socket.off("error", onError); };

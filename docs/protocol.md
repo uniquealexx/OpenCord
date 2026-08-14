@@ -1,4 +1,4 @@
-# OpenCord Protocol v22 (English)
+# OpenCord Protocol v28 (English)
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
 
@@ -23,6 +23,8 @@ The challenge is single-use within a connection. The private key is not included
 `auth.respond.profile` contains the display name, a public description of up to 160 characters, optional public avatar and banner, and the chosen status: `online`, `idle`, `dnd`, or `invisible`. After a file is selected, the client shows a local cropping editor with panning and zoom. The selected avatar square is scaled down to 128×128 and encoded as WebP of at most 96 KB. The banner is cropped to a 5:2 ratio, scaled down to at most 600×240, and encoded as WebP of at most 256 KB. The server re-validates the format and size limits and stores a single current version of the user's profile — messages do not create separate copies. The server avatar uses the same square-frame editor before separate server-side compression.
 
 The name, description, avatar, and banner are returned in `server.snapshot.members` and `member.updated`; the current name and avatar are also used by events and the message history. Therefore one server profile is used by the member list, the text chat, and the voice room interface, while the banner is shown in the profile preview that opens. When the profile or status changes, the client sends `profile.update` over the existing WebSocket without reconnecting. The server replaces the previous public fields in the user's single record and broadcasts `member.updated` to all active clients. On explicit leave, the public description, avatar, and banner are cleared on the server.
+
+`auth.respond.profile` additionally contains `username` (2–32 lowercase letters, digits, dots, underscores, or dashes; it is used for @mentions) and the four-digit `discriminator` that completes the `username#1234` tag. The discriminator is generated once by the client together with the Ed25519 key pair and stored next to the keys; resetting the identity generates a new one. Identical tags belonging to different people are allowed by design. Each member entry also carries `fingerprint` — the SHA-256 fingerprint of the public key formatted as `XXXX-XXXX-XXXX-XXXX` — so identical tags can be told apart by comparing the identity codes shown in profile previews. The fingerprint is derived from the public key the server already stores, so it adds no new disclosure.
 
 The status is stored locally and re-sent on the next connection. The server keeps presence only in the memory of the active WebSocket connection: `online`, `idle`, and `dnd` are visible to other members as "Online", "Idle", and "Do Not Disturb". `invisible` is never revealed to other clients and is converted by the server into a public `offline`; after the last connection is closed, any user also becomes `offline`.
 
@@ -54,12 +56,29 @@ An authenticated client sends `message.search` with a `filters` object. The sear
 
 An empty request without a single filter is rejected by the shared Zod schema. The "Attachments" button in the client sends an empty `query` and simultaneously selects `image`, `video`, and `file`. Image search classifies the attachment's MIME type and does not perform object or text recognition inside the file.
 
+### Mentions
+
+A client may mention server members in the composer with `@username` or `@username#1234`. The composer suggests matching members after `@` (avatar, tag, and a short prefix of the identity code) and inserts the chosen tag. When sending, the client resolves `@username[#1234]` into member IDs: a unique match is selected, and an ambiguous token resolves to the first candidate in the member-list order; the autocomplete with identity codes is the reliable way to pick an exact person.
+
+The transmitted message stores mentions as `<@userId>` markers inside the plain-text content plus a separate `mentions` array of user IDs, so renames never break old mentions. `chat.send.mentions` and `message.update.mentions` accept up to 20 unique member IDs; the server silently drops IDs that are not members of the current server and stores the rest in the `message_mentions` table. The history and search results return `mentions` as well.
+
+The chat renders a mention as a highlighted chip with the mentioned member's current display name; clicking it opens the profile preview. Mentions of members who have left render as a plain "unknown user" chip. A message may consist of only an attachment and mentions; the 4000-character limit applies to the content including its markers.
+
+### Private messages and slash commands
+
+The client composer supports slash commands: `/pm @user message` sends a private message, `/apm @user message` sends an anonymous private message, `/roll` posts a random number from 0 to 100 (generated locally by the client), and `/mute @user` / `/unmute @user` control the chat mute.
+
+`chat.pm` and `chat.apm` create a message with `kind: "pm"` or `kind: "apm"` and a `targetUserId`. Such messages are stored in the channel but delivered only to the author and the target — both as live `message.created`/`message.updated`/`message.deleted` events and in `history.result`, which filters out private messages that the viewer does not participate in. For `/apm` the recipient receives a masked copy: a synthetic `authorId`, the name "Anonymous", and no avatar, so the sender's identity is not revealed to the recipient; the sender sees their own message as usual. Private messages do not appear in `message.search` results. Sending a private message to yourself, to a non-member, or into a non-existent channel is rejected.
+
+`chat.mute.set` requires the `MANAGE_MESSAGES` permission held by the owner and administrators. The owner can mute administrators and members, an administrator only regular members; muting oneself or the owner is forbidden. The event carries an optional `durationMinutes` (1–10080): when present, the mute expires automatically after that period and the server lazily lifts it on the next message attempt; `null` means an indefinite mute. A muted member's `chat.send`, `chat.pm`, and `chat.apm` are rejected with `FORBIDDEN`; the mute state is part of each `member` entry (`chatMuted`, plus `chatMutedUntil` for a timed mute) and is updated live via `member.updated`.
+
 The client sends:
 
 - `auth.respond`;
 - `history.request`;
 - `message.search`;
 - `chat.send`;
+- `chat.pm`, `chat.apm`, `chat.mute.set`;
 - `message.update`;
 - `message.delete`;
 - `profile.update`;
@@ -105,11 +124,11 @@ A voice channel contains `participantLimit`: values `1–25` define a finite cap
 
 ## Storage
 
-Local development uses PGlite with PostgreSQL-compatible migrations. Production uses the same repository and migrations through a regular PostgreSQL `DATABASE_URL`. The current schema contains the server, channels, public profiles, messages, and attachment metadata. Files reside in `ATTACHMENTS_DIR` (`server/.data/attachments` locally, a separate Docker volume, or `/var/lib/opencord/attachments` for a native install).
+Local development uses PGlite with PostgreSQL-compatible migrations. Production uses the same repository and migrations through a regular PostgreSQL `DATABASE_URL`. The current schema contains the server, channels, public profiles (including `username` and `discriminator`), messages, message mentions (`message_mentions`), and attachment metadata. Files reside in `ATTACHMENTS_DIR` (`server/.data/attachments` locally, a separate Docker volume, or `/var/lib/opencord/attachments` for a native install).
 
 ---
 
-# OpenCord Protocol v22 (Русский)
+# OpenCord Protocol v28 (Русский)
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
 
@@ -134,6 +153,8 @@ Challenge одноразовый в рамках соединения. Прив�
 `auth.respond.profile` содержит отображаемое имя, публичное описание длиной до 160 символов, необязательные публичные аватар и шапку, а также выбранный статус: `online`, `idle`, `dnd` или `invisible`. После выбора файла клиент показывает локальный редактор кадрирования с перемещением и масштабом. Выбранный квадрат аватара уменьшается до 128×128 и кодируется в WebP размером не более 96 КБ. Шапка кадрируется в пропорции 5:2, уменьшается максимум до 600×240 и кодируется в WebP размером не более 256 КБ. Сервер повторно проверяет формат и ограничения размера и хранит одну актуальную версию профиля пользователя — сообщения не создают отдельных копий. Аватар сервера использует тот же редактор квадратного кадра перед отдельным серверным сжатием.
 
 Имя, описание, аватар и шапка возвращаются в `server.snapshot.members` и `member.updated`; актуальные имя и аватар также используются событиями и историей сообщений. Поэтому один серверный профиль используется списком участников, текстовым чатом и интерфейсом голосовой комнаты, а шапка показывается в открываемом превью профиля. При смене профиля или статуса клиент отправляет `profile.update` по существующему WebSocket без переподключения. Сервер заменяет прежние публичные поля в единственной записи пользователя и рассылает `member.updated` всем активным клиентам. При явном выходе публичные описание, аватар и шапка очищаются на сервере.
+
+`auth.respond.profile` дополнительно содержит `username` (2–32 строчные буквы, цифры, точки, подчёркивания или дефисы; используется для упоминаний через @) и четырёхзначный `discriminator`, дополняющий тег `username#1234`. Дискриминатор генерируется клиентом один раз вместе с парой Ed25519-ключей и хранится рядом с ключами; сброс идентичности создаёт новый. Совпадения тегов у разных людей допустимы по замыслу. Каждая запись участника также несёт `fingerprint` — SHA-256-отпечаток публичного ключа в формате `XXXX-XXXX-XXXX-XXXX`, чтобы одинаковые теги можно было различить сравнением кодов идентичности в превью профиля. Отпечаток выводится из уже хранимого на сервере публичного ключа, поэтому нового раскрытия данных не добавляет.
 
 Статус сохраняется локально и повторно отправляется при следующем подключении. Сервер держит присутствие только в памяти активного WebSocket-соединения: `online`, `idle` и `dnd` видны другим участникам как «В сети», «Недоступен» и «Не беспокоить». `invisible` никогда не раскрывается другим клиентам и преобразуется сервером в публичный `offline`; после закрытия последнего соединения любой пользователь также становится `offline`.
 
@@ -165,12 +186,29 @@ Electron-клиент показывает изображения до 10 МБ �
 
 Пустой запрос без единого фильтра отклоняется общей Zod-схемой. Кнопка «Вложения» в клиенте отправляет пустой `query` и одновременно выбирает `image`, `video` и `file`. Поиск по изображениям классифицирует MIME-тип вложения и не выполняет распознавание объектов или текста внутри файла.
 
+### Упоминания
+
+Клиент может упомянуть участников сервера в поле ввода через `@username` или `@username#1234`. Поле ввода после `@` предлагает подходящих участников (аватар, тег и короткий префикс кода идентичности) и вставляет выбранный тег. При отправке клиент резолвит `@username[#1234]` в ID участников: выбирается единственное совпадение, а при неоднозначности — первый кандидат в порядке списка участников; автокомплит с кодами идентичности — надёжный способ выбрать точного человека.
+
+Передаваемое сообщение хранит упоминания как маркеры `<@userId>` внутри обычного текста плюс отдельный массив `mentions` из ID, поэтому переименования не ломают старые упоминания. `chat.send.mentions` и `message.update.mentions` принимают до 20 уникальных ID участников; сервер молча отбрасывает ID, не являющиеся участниками текущего сервера, а остальные сохраняет в таблицу `message_mentions`. История и результаты поиска также возвращают `mentions`.
+
+Чат отображает упоминание как подсвеченный чип с актуальным отображаемым именем упомянутого участника; клик открывает превью профиля. Упоминания выбывших участников отображаются простым чипом «неизвестный пользователь». Сообщение может состоять только из вложения и упоминаний; лимит в 4000 символов применяется к контенту вместе с маркерами.
+
+### Личные сообщения и слэш-команды
+
+Поле ввода клиента поддерживает слэш-команды: `/pm @пользователь сообщение` отправляет личное сообщение, `/apm @пользователь сообщение` — анонимное личное, `/roll` публикует случайное число от 0 до 100 (генерируется локально клиентом), а `/mute @пользователь` и `/unmute @пользователь` управляют мутом чата.
+
+`chat.pm` и `chat.apm` создают сообщение с `kind: "pm"` или `kind: "apm"` и полем `targetUserId`. Такие сообщения хранятся в канале, но доставляются только отправителю и получателю — и как живые события `message.created`/`message.updated`/`message.deleted`, и в `history.result`, который отфильтровывает личные сообщения, в которых зритель не участвует. При `/apm` получатель получает замаскированную копию: синтетический `authorId`, имя «Аноним» и без аватара — личность отправителя получателю не раскрывается; сам отправитель видит своё сообщение как обычно. В результатах `message.search` личные сообщения не появляются. Отправка личного сообщения самому себе, не-участнику или в несуществующий канал отклоняется.
+
+`chat.mute.set` требует разрешения `MANAGE_MESSAGES`, которым обладают владелец и администраторы. Владелец может мутить администраторов и участников, администратор — только обычных участников; мутить себя или владельца нельзя. Событие несёт необязательный `durationMinutes` (1–10080): при наличии срока мут истекает автоматически, и сервер лениво снимает его при следующей попытке отправить сообщение; `null` означает бессрочный мут. Сообщения (`chat.send`, `chat.pm`, `chat.apm`) замьюченного участника отклоняются с `FORBIDDEN`; состояние мута входит в каждую запись `member` (`chatMuted`, а для срочного мута ещё `chatMutedUntil`) и обновляется вживую через `member.updated`.
+
 Клиент отправляет:
 
 - `auth.respond`;
 - `history.request`;
 - `message.search`;
 - `chat.send`;
+- `chat.pm`, `chat.apm`, `chat.mute.set`;
 - `message.update`;
 - `message.delete`;
 - `profile.update`;
@@ -216,11 +254,11 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ## Хранение
 
-Локальный development использует PGlite с PostgreSQL-совместимыми миграциями. Production использует тот же repository и миграции через обычный PostgreSQL `DATABASE_URL`. Текущая схема содержит сервер, каналы, публичные профили, сообщения и метаданные вложений. Файлы лежат в `ATTACHMENTS_DIR` (`server/.data/attachments` локально, отдельный volume Docker или `/var/lib/opencord/attachments` при native-установке).
+Локальный development использует PGlite с PostgreSQL-совместимыми миграциями. Production использует тот же repository и миграции через обычный PostgreSQL `DATABASE_URL`. Текущая схема содержит сервер, каналы, публичные профили (включая `username` и `discriminator`), сообщения, упоминания (`message_mentions`) и метаданные вложений. Файлы лежат в `ATTACHMENTS_DIR` (`server/.data/attachments` локально, отдельный volume Docker или `/var/lib/opencord/attachments` при native-установке).
 
 ---
 
-# OpenCord 协议 v22 (中文)
+# OpenCord 协议 v28 (中文)
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
 
@@ -245,6 +283,8 @@ Challenge 在单个连接内是一次性的。私钥不会出现在任何网络�
 `auth.respond.profile` 包含显示名称、最长 160 个字符的公开描述、可选的公开头像和横幅，以及所选的状态：`online`、`idle`、`dnd` 或 `invisible`。选择文件后，客户端会显示一个带有平移和缩放的本地裁剪编辑器。选定的头像正方形会缩小到 128×128，并编码为不超过 96 KB 的 WebP。横幅按 5:2 的比例裁剪，最大缩小到 600×240，并编码为不超过 256 KB 的 WebP。服务器会再次验证格式和大小限制，并存储用户个人资料的一个当前版本——消息不会创建单独的副本。服务器头像在单独的服务器端压缩之前使用相同的正方形画面编辑器。
 
 名称、描述、头像和横幅在 `server.snapshot.members` 和 `member.updated` 中返回；当前的名称和头像也会被事件和消息历史使用。因此，一个服务器个人资料被成员列表、文本聊天和语音房间界面共同使用，而横幅显示在打开的个人资料预览中。当个人资料或状态发生变化时，客户端会通过现有 WebSocket 发送 `profile.update`，无需重新连接。服务器在用户的唯一记录中替换之前的公开字段，并向所有活动客户端广播 `member.updated`。在明确退出时，服务器会清除公开描述、头像和横幅。
+
+`auth.respond.profile` 还包含 `username`（2–32 个小写字母、数字、点、下划线或连字符；用于 @提及）以及构成 `username#1234` 标签的四位 `discriminator`。判别号由客户端与 Ed25519 密钥对一起生成一次，并存储在密钥旁边；重置身份会生成新的判别号。不同的人拥有相同的标签在设计上是允许的。每个成员条目还带有 `fingerprint`——公钥的 SHA-256 指纹，格式为 `XXXX-XXXX-XXXX-XXXX`——这样可以通过比较个人资料预览中显示的身份代码来区分相同的标签。指纹来源于服务器已存储的公钥，因此不会增加新的数据披露。
 
 状态在本地保存，并在下次连接时重新发送。服务器仅在活动 WebSocket 连接的内存中维护在线状态：`online`、`idle` 和 `dnd` 对其他成员显示为「在线」「空闲」和「请勿打扰」。`invisible` 从不向其他客户端透露，并由服务器转换为公开的 `offline`；在最后一个连接关闭后，任何用户也会变为 `offline`。
 
@@ -276,12 +316,29 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 没有任何过滤器的空请求会被共享 Zod 模式拒绝。客户端中的「附件」按钮发送空的 `query`，并同时选择 `image`、`video` 和 `file`。图像搜索对附件的 MIME 类型进行分类，并且不会在文件内部执行对象或文本识别。
 
+### 提及
+
+客户端可以在输入框中通过 `@username` 或 `@username#1234` 提及服务器成员。输入 `@` 后，输入框会建议匹配的成员（头像、标签和身份代码的短前缀），并插入所选标签。发送时，客户端将 `@username[#1234]` 解析为成员 ID：唯一匹配会被选中，有歧义时选择成员列表顺序中的第一个候选者；带有身份代码的自动补全是选择精确对象人的可靠方式。
+
+传输的消息将提及存储为纯文本内容中的 `<@userId>` 标记，再加上单独的 `mentions` 用户 ID 数组，因此重命名不会破坏旧的提及。`chat.send.mentions` 和 `message.update.mentions` 最多接受 20 个唯一的成员 ID；服务器会静默丢弃不是当前服务器成员的 ID，并将其余的存储到 `message_mentions` 表中。历史记录和搜索结果也会返回 `mentions`。
+
+聊天将提及渲染为带有被提及成员当前显示名称的高亮芯片；点击它会打开个人资料预览。已离开成员的提及会渲染为普通的「未知用户」芯片。消息可以仅包含附件和提及；4000 个字符的限制适用于包含标记在内的内容。
+
+### 私聊消息和斜杠命令
+
+客户端输入框支持斜杠命令：`/pm @用户 消息` 发送私聊消息，`/apm @用户 消息` 发送匿名私聊消息，`/roll` 发布 0 到 100 的随机数字（由客户端本地生成），`/mute @用户` 和 `/unmute @用户` 控制聊天禁言。
+
+`chat.pm` 和 `chat.apm` 会创建带有 `kind: "pm"` 或 `kind: "apm"` 以及 `targetUserId` 的消息。此类消息存储在频道中，但只发送给发送者和接收者——无论是实时的 `message.created`/`message.updated`/`message.deleted` 事件，还是 `history.result`（它会过滤掉查看者未参与的私聊消息）。对于 `/apm`，接收者会收到经过遮盖的副本：合成的 `authorId`、名称为「匿名」且没有头像，因此发送者的身份不会透露给接收者；发送者本人则像平常一样看到自己的消息。私聊消息不会出现在 `message.search` 结果中。向自己、非成员或发送到不存在的频道会被拒绝。
+
+`chat.mute.set` 需要所有者和管理员所拥有的 `MANAGE_MESSAGES` 权限。所有者可以禁言管理员和成员，管理员只能禁言普通成员；不能禁言自己或所有者。事件带有可选的 `durationMinutes`（1–10080）：指定时长后禁言会自动到期，服务器会在下一次发送尝试时惰性解除；`null` 表示永久禁言。被禁言成员的 `chat.send`、`chat.pm` 和 `chat.apm` 会被拒绝并返回 `FORBIDDEN`；禁言状态包含在每个 `member` 条目中（`chatMuted`，定时禁言还有 `chatMutedUntil`），并通过 `member.updated` 实时更新。
+
 客户端发送：
 
 - `auth.respond`;
 - `history.request`;
 - `message.search`;
 - `chat.send`;
+- `chat.pm`, `chat.apm`, `chat.mute.set`;
 - `message.update`;
 - `message.delete`;
 - `profile.update`;
@@ -327,4 +384,4 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 ## 存储
 
-本地 development 使用 PGlite 和 PostgreSQL 兼容的迁移。Production 通过常规 PostgreSQL `DATABASE_URL` 使用相同的 repository 和迁移。当前模式包含服务器、频道、公开个人资料、消息和附件元数据。文件位于 `ATTACHMENTS_DIR`（本地为 `server/.data/attachments`，独立的 Docker volume，或 native 安装时为 `/var/lib/opencord/attachments`）。
+本地 development 使用 PGlite 和 PostgreSQL 兼容的迁移。Production 通过常规 PostgreSQL `DATABASE_URL` 使用相同的 repository 和迁移。当前模式包含服务器、频道、公开个人资料（包括 `username` 和 `discriminator`）、消息、消息提及（`message_mentions`）和附件元数据。文件位于 `ATTACHMENTS_DIR`（本地为 `server/.data/attachments`，独立的 Docker volume，或 native 安装时为 `/var/lib/opencord/attachments`）。

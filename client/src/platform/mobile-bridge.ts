@@ -16,7 +16,7 @@
 
 import { CapacitorHttp } from "@capacitor/core";
 import { SecureStorage } from "@aparajita/capacitor-secure-storage";
-import { attachmentSchema, type Attachment } from "@opencord/shared";
+import { attachmentSchema, publicKeyFingerprint, type Attachment } from "@opencord/shared";
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema, type AttachmentDownloadRequest, type AttachmentTransferContext } from "@/shared/attachments";
 import type { OpenCordBridge, PublicIdentity } from "@/shared/bridge";
 import { createDefaultState, parsePersistedState, type PersistedClientState } from "@/shared/state";
@@ -24,6 +24,7 @@ import { probeOpenCordServer, type ServerProbeResult } from "@/shared/server-pro
 
 const IDENTITY_PUBLIC_KEY = "opencord.identity.publicKey";
 const IDENTITY_PRIVATE_KEY = "opencord.identity.privateKey";
+const IDENTITY_DISCRIMINATOR = "opencord.identity.discriminator";
 const STATE_STORAGE_KEY = "opencord.client-state";
 
 const MAX_INLINE_PREVIEW_BYTES = 10 * 1024 * 1024;
@@ -32,6 +33,7 @@ const IMAGE_PREVIEW_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "im
 interface StoredIdentity {
   publicKey: string;
   privateKey: string;
+  discriminator: string;
 }
 
 export type MobileBridge = Omit<OpenCordBridge, "window" | "deployment" | "screenShare" | "updates">;
@@ -64,7 +66,7 @@ export function createMobileBridge(): MobileBridge {
 
 async function getOrCreate(): Promise<PublicIdentity> {
   const stored = await loadStoredIdentity();
-  if (stored) return publicIdentity(stored.publicKey);
+  if (stored) return publicIdentity(stored.publicKey, stored.discriminator);
   return resetIdentity();
 }
 
@@ -84,14 +86,25 @@ async function resetIdentity(): Promise<PublicIdentity> {
   const identity = await createIdentity();
   await SecureStorage.setItem(IDENTITY_PUBLIC_KEY, identity.publicKey);
   await SecureStorage.setItem(IDENTITY_PRIVATE_KEY, identity.privateKey);
-  return publicIdentity(identity.publicKey);
+  await SecureStorage.setItem(IDENTITY_DISCRIMINATOR, identity.discriminator);
+  return publicIdentity(identity.publicKey, identity.discriminator);
 }
 
 async function loadStoredIdentity(): Promise<StoredIdentity | null> {
   const publicKey = await SecureStorage.getItem(IDENTITY_PUBLIC_KEY);
   const privateKey = await SecureStorage.getItem(IDENTITY_PRIVATE_KEY);
   if (!isKeyPayload(publicKey) || !isKeyPayload(privateKey)) return null;
-  return { publicKey, privateKey };
+  let discriminator = await SecureStorage.getItem(IDENTITY_DISCRIMINATOR);
+  // Идентичность, созданная до появления дискриминатора: до-генерируем, не трогая ключи.
+  if (!isDiscriminator(discriminator)) {
+    discriminator = randomDiscriminator();
+    await SecureStorage.setItem(IDENTITY_DISCRIMINATOR, discriminator);
+  }
+  return { publicKey, privateKey, discriminator };
+}
+
+function isDiscriminator(value: string | null): value is string {
+  return typeof value === "string" && /^\d{4}$/u.test(value);
 }
 
 function isKeyPayload(value: string | null): value is string {
@@ -108,7 +121,14 @@ async function createIdentity(): Promise<StoredIdentity> {
   }
   const publicKey = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey)));
   const privateKey = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
-  return { publicKey, privateKey };
+  return { publicKey, privateKey, discriminator: randomDiscriminator() };
+}
+
+/** Дискриминатор тега username#1234 — ровно 4 цифры, генерируется вместе с ключами. */
+function randomDiscriminator(): string {
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return String((values[0] ?? 0) % 10_000).padStart(4, "0");
 }
 
 async function importPrivateKey(privateKey: string): Promise<CryptoKey> {
@@ -119,11 +139,11 @@ async function importPrivateKey(privateKey: string): Promise<CryptoKey> {
   }
 }
 
-async function publicIdentity(publicKey: string): Promise<PublicIdentity> {
-  // Отпечаток считается так же, как в Electron: SHA-256 от SPKI DER, группы по 4 символа.
-  const digest = await crypto.subtle.digest("SHA-256", base64ToBytes(publicKey));
-  const fingerprint = bytesToHex(new Uint8Array(digest)).match(/.{1,4}/gu)?.slice(0, 4).join("-") ?? "unknown";
-  return { publicKey, fingerprint };
+async function publicIdentity(publicKey: string, discriminator: string): Promise<PublicIdentity> {
+  // Отпечаток считается общим алгоритмом из @opencord/shared: SHA-256 от SPKI DER,
+  // группы по 4 hex-символа. Сервер возвращает тот же код для этого пользователя.
+  const fingerprint = await publicKeyFingerprint(publicKey);
+  return { publicKey, fingerprint, discriminator };
 }
 
 // --- Состояние клиента (localStorage + Zod) ------------------------------------------------

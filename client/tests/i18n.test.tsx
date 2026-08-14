@@ -57,10 +57,10 @@ describe("i18n", () => {
     setActiveLanguage("en");
     const { unmount } = render(<I18nRoot><Onboarding language="en" onLanguageChange={setActiveLanguage} onComplete={vi.fn()} /></I18nRoot>);
     expect(screen.getByRole("heading", { name: "Welcome to OpenCord" })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Display name")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Nickname")).toBeInTheDocument();
     act(() => setActiveLanguage("zh"));
     expect(screen.getByRole("heading", { name: "欢迎使用 OpenCord" })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("显示名称")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("昵称")).toBeInTheDocument();
     unmount();
   });
 

@@ -1,8 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
+import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
@@ -10,7 +12,7 @@ function readyState(): PersistedClientState {
   const state: PersistedClientState = {
     ...createDefaultState(),
     onboardingComplete: true,
-    profile: { id: "local-user", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
+    profile: { id: "local-user", username: "lina", discriminator: "1234", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
   };
   state.servers = [{
     id: "test-server",
@@ -59,7 +61,7 @@ describe("ClientApp", () => {
     window.openCord = {
       window: { minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(), isMaximized: vi.fn(), onMaximizedChange: vi.fn(() => () => undefined) },
       storage: { load: vi.fn(async () => readyState()), save, reset: vi.fn(async () => createDefaultState()) },
-      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "test-public-key", fingerprint: "test" })), signChallenge: vi.fn(async () => "test-signature"), reset: vi.fn(async () => ({ publicKey: "new-test-public-key", fingerprint: "new-test" })) },
+      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "test-public-key", fingerprint: "test", discriminator: "1234" })), signChallenge: vi.fn(async () => "test-signature"), reset: vi.fn(async () => ({ publicKey: "new-test-public-key", fingerprint: "new-test", discriminator: "5678" })) },
       deployment: { selectServerBundle: vi.fn(async () => null), selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
       attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
@@ -97,11 +99,11 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
-    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canUpdate canDeleteForAll canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canViewSettings canUpdate canDeleteForAll canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    rerender(<LeaveServerDialog server={server} canManageServer={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    rerender(<LeaveServerDialog server={server} canManageServer={false} canViewSettings={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
   });
 
@@ -125,7 +127,7 @@ describe("ClientApp", () => {
     const onDelete = vi.fn(() => true);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "До правки", createdAt: new Date().toISOString(), editedAt: null };
-    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} />);
     expect(screen.getByText("Лина")).not.toHaveAttribute("style");
 
     await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
@@ -144,7 +146,7 @@ describe("ClientApp", () => {
   it("closes a message action menu outside its bounds and on Escape", async () => {
     const user = userEvent.setup();
     const message = { id: "message-menu", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Закрой меню", createdAt: new Date().toISOString(), editedAt: null };
-    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
     const trigger = screen.getByRole("button", { name: /Действия с сообщением/ });
 
     await user.click(trigger);
@@ -165,7 +167,7 @@ describe("ClientApp", () => {
     const newAttachment = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "новый.png", mimeType: "image/png", sizeBytes: 2048, sha256: "b".repeat(64) };
     const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Текст", createdAt: new Date().toISOString(), editedAt: null, attachments: [oldAttachment] };
     const onEdit = vi.fn(() => true);
-    render(<Message message={message} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach uploading={false} onAttach={vi.fn(async () => newAttachment)} onEdit={onEdit} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach uploading={false} onAttach={vi.fn(async () => newAttachment)} onEdit={onEdit} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
     await user.click(screen.getByRole("menuitem", { name: "Редактировать" }));
@@ -193,7 +195,7 @@ describe("ClientApp", () => {
   it("saves the server name, unlimited attachments and screen-share limits together", async () => {
     const user = userEvent.setup();
     const onSaveSettings = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     const nameInput = screen.getByRole("textbox", { name: "Название сервера" });
     await user.clear(nameInput);
     await user.type(nameInput, "Новый OpenCord");
@@ -210,7 +212,7 @@ describe("ClientApp", () => {
   it("saves a manually entered bounded attachment limit", async () => {
     const user = userEvent.setup();
     const onSaveSettings = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     const input = screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" });
     await user.clear(input);
     await user.type(input, "1500");
@@ -220,11 +222,32 @@ describe("ClientApp", () => {
     expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
   });
 
+  it("shows server settings read-only to an administrator", () => {
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer={false} canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn()} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Управление сервером" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Название сервера" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" })).toBeDisabled();
+    expect(screen.getByRole("slider", { name: "Максимальный размер загружаемого файла" })).toBeDisabled();
+    expect(screen.getByRole("slider", { name: "Максимальное качество демонстрации экрана" })).toBeDisabled();
+    expect(screen.getByRole("slider", { name: "Максимальная частота кадров демонстрации экрана" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Сохранить настройки" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Аватар сервера" })).not.toBeInTheDocument();
+    expect(screen.getByText("Изменять настройки может только владелец сервера.")).toBeInTheDocument();
+  });
+
+  it("hides server settings from regular members", () => {
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer={false} canViewSettings={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn()} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Выйти с сервера?" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Название сервера" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Максимальный размер загружаемого файла" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Изменять настройки может только владелец сервера.")).not.toBeInTheDocument();
+  });
+
   it("opens a profile preview from both the message avatar and author name", async () => {
     const user = userEvent.setup();
     const message = readyState().messages[0]!;
     const member = { id: message.authorId, displayName: message.authorName, bio: "Описание с сервера", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: message.authorColor, avatar: null };
-    render(<Message message={message} member={member} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} member={member} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
 
     const profileButtons = screen.getAllByRole("button", { name: `Открыть профиль ${message.authorName}` });
     expect(profileButtons).toHaveLength(2);
@@ -257,11 +280,47 @@ describe("ClientApp", () => {
     expect(screen.getByText("Это вы")).toBeInTheDocument();
   });
 
+  it("opens the server context menu on double click and disconnects from the server", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    await user.dblClick(screen.getByTitle("Тестовый сервер"));
+    expect(screen.getByRole("menu", { name: "Меню сервера Тестовый сервер" })).toBeInTheDocument();
+    // Демо-сервер без подключения: роль текущего пользователя неизвестна, пункта настроек нет.
+    expect(screen.queryByRole("menuitem", { name: "Открыть настройки" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("menuitem", { name: "Отключиться от сервера" }));
+    expect(await screen.findByRole("heading", { name: "Главный экран" })).toBeInTheDocument();
+    expect(screen.getByText("Вы вышли с сервера")).toBeInTheDocument();
+    expect(save).toHaveBeenCalled();
+  });
+
+  it("groups the member list by role with the highest role first", async () => {
+    const state = readyState();
+    state.servers[0]!.members = [
+      { id: "member-1", displayName: "Обычный", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" },
+      { id: "admin-1", displayName: "Админ", bio: "", role: "Администратор", serverRole: "administrator" as const, status: "online" as const, avatarColor: "#7c5cff" },
+    ];
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const memberList = screen.getByRole("heading", { name: /Участники — 3/u }).closest("aside");
+    expect(memberList).not.toBeNull();
+    const headers = within(memberList!).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent ?? "");
+    expect(headers).toEqual(["Владелец сервера — 1", "Администраторы — 1", "Участники — 1"]);
+    const order = within(memberList!).getAllByRole("button", { name: /Открыть профиль/u }).map((button) => button.getAttribute("aria-label"));
+    expect(order).toEqual(["Открыть профиль Лина", "Открыть профиль Админ", "Открыть профиль Обычный"]);
+  });
+
   it("shows uploaded attachments in the composer and allows removing them", async () => {
     const user = userEvent.setup();
     const onAttach = vi.fn();
     const onRemoveAttachment = vi.fn();
-    render(<Composer draft="сообщение" channelName="общий" disabled={false} uploading={false} canAttach attachments={[{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "план.pdf", mimeType: "application/pdf", sizeBytes: 1024, sha256: "a".repeat(64) }]} onAttach={onAttach} onRemoveAttachment={onRemoveAttachment} onDraft={vi.fn()} onSubmit={vi.fn()} />);
+    render(<Composer draft="сообщение" channelName="общий" disabled={false} uploading={false} canAttach attachments={[{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "план.pdf", mimeType: "application/pdf", sizeBytes: 1024, sha256: "a".repeat(64) }]} onAttach={onAttach} onRemoveAttachment={onRemoveAttachment} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} />);
     expect(screen.getByText("план.pdf")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Прикрепить файл" }));
     expect(onAttach).toHaveBeenCalledOnce();
@@ -272,7 +331,7 @@ describe("ClientApp", () => {
   it("opens the emoji panel and inserts an emoji at the text cursor", async () => {
     const user = userEvent.setup();
     const onDraft = vi.fn();
-    render(<Composer draft="Привет мир" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={onDraft} onSubmit={vi.fn()} />);
+    render(<Composer draft="Привет мир" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={onDraft} onSubmit={vi.fn()} members={[]} />);
 
     const input = screen.getByRole("textbox", { name: "Написать в #общий" }) as HTMLInputElement;
     input.focus();
@@ -289,7 +348,7 @@ describe("ClientApp", () => {
   it("allows submitting an attachment without message text", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
-    render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "фото.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) }]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={onSubmit} />);
+    render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "фото.png", mimeType: "image/png", sizeBytes: 1024, sha256: "a".repeat(64) }]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={onSubmit} members={[]} />);
     await user.click(screen.getByRole("button", { name: "Отправить" }));
     expect(onSubmit).toHaveBeenCalledOnce();
   });
@@ -427,7 +486,7 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
-      members: [{ id: "server-admin", displayName: "Анна", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator" }],
+      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", displayName: "Анна", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
@@ -689,4 +748,160 @@ describe("ClientApp", () => {
     await user.click(screen.getByRole("button", { name: "Настроить профиль" }));
     expect(await screen.findByRole("heading", { name: "Публичный профиль" })).toBeInTheDocument();
   });
+
+  it("renders a mention as a highlighted chip that opens the profile preview", async () => {
+    const user = userEvent.setup();
+    const member = { id: "user-mark", username: "mark", discriminator: "5678", fingerprint: "abcd-ef01-2345-6789", displayName: "Марк", bio: "Про упоминания", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
+    const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-mark>!", createdAt: new Date().toISOString(), mentions: ["user-mark"] };
+    render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Упоминание: Марк" }));
+    expect(screen.getByRole("dialog", { name: "Профиль Марк" })).toBeInTheDocument();
+    expect(screen.getByText("@mark#5678")).toBeInTheDocument();
+    expect(screen.getByText("abcd-ef01-2345-6789")).toBeInTheDocument();
+  });
+
+  it("renders a mention of a left member with an unknown-user fallback", () => {
+    const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-gone>!", createdAt: new Date().toISOString(), mentions: ["user-gone"] };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    expect(screen.getByText("@Неизвестный пользователь")).toBeInTheDocument();
+  });
+
+  it("suggests members after @ in the composer and inserts the chosen tag", async () => {
+    const user = userEvent.setup();
+    const candidates: MentionCandidate[] = [
+      { id: "user-lina", username: "lina", discriminator: "1234", displayName: "Лина", status: "online" },
+      { id: "user-lina2", username: "lina", discriminator: "9999", displayName: "Лина Вторая", status: "offline" },
+    ];
+    render(<StatefulComposer candidates={candidates} />);
+    const input = screen.getByRole("textbox", { name: "Написать в #общий" });
+
+    await user.type(input, "@lin");
+    expect(screen.getByRole("listbox", { name: "Упоминание участников" })).toBeInTheDocument();
+    expect(screen.getByText("@lina#1234")).toBeInTheDocument();
+
+    await user.keyboard("{Enter}");
+    expect(input).toHaveValue("@lina#1234");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("opens a clickable command list on / and autocompletes with Tab", async () => {
+    const user = userEvent.setup();
+    render(<StatefulComposer candidates={[]} />);
+    const input = screen.getByRole("textbox", { name: "Написать в #общий" });
+
+    await user.type(input, "/");
+    const listbox = screen.getByRole("listbox", { name: "Команды" });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(3);
+    expect(within(listbox).getByText("/pm")).toBeInTheDocument();
+
+    await user.type(input, "p");
+    expect(within(listbox).getAllByRole("option")).toHaveLength(1);
+
+    await user.tab();
+    expect(input).toHaveValue("/pm ");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("completes a command by clicking its list item and supports arrows", async () => {
+    const user = userEvent.setup();
+    render(<StatefulComposer candidates={[]} />);
+    const input = screen.getByRole("textbox", { name: "Написать в #общий" });
+
+    await user.type(input, "/");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(input).toHaveValue("/apm ");
+
+    await user.clear(input);
+    await user.type(input, "/r");
+    await user.click(screen.getByRole("option", { name: /\/roll/u }));
+    expect(input).toHaveValue("/roll ");
+  });
+
+  it("rolls a random number as a chat message", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const composer = screen.getByRole("textbox", { name: "Написать в #добро-пожаловать" });
+    await user.type(composer, "/roll");
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(await screen.findByText(/Выпало: \d{1,3} \(0–100\)/u)).toBeInTheDocument();
+    expect(save).toHaveBeenCalled();
+  });
+
+  it("asks for a recipient when a private message has no @target", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const composer = screen.getByRole("textbox", { name: "Написать в #добро-пожаловать" });
+    await user.type(composer, "/pm привет без адресата");
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(await screen.findByText("Укажите получателя через @username")).toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("stores a local private message with a badge in the demo mode", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    state.servers[0]!.members = [{ id: "user-mark", username: "mark", discriminator: "5678", displayName: "Марк", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" }];
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const composer = screen.getByRole("textbox", { name: "Написать в #добро-пожаловать" });
+    await user.type(composer, "/pm @mark Привет лично");
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(await screen.findByText("Привет лично")).toBeInTheDocument();
+    expect(screen.getByText("Личное сообщение")).toBeInTheDocument();
+  });
+
+  it("renders an anonymous private message with the anonymous badge", () => {
+    const message = { id: "apm-message", channelId: "welcome", authorId: "anonymous-apm-message", authorName: "Аноним", authorColor: "#7c5cff", content: "Это секрет", createdAt: new Date().toISOString(), kind: "apm" as const, targetUserId: "local-user", anonymous: true };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    expect(screen.getByText("Личное сообщение · анонимно")).toBeInTheDocument();
+    expect(screen.getByText("Это секрет")).toBeInTheDocument();
+  });
+  it("offers mute duration presets after /mute @target and applies them by click or Tab", async () => {
+    const user = userEvent.setup();
+    render(<StatefulComposer candidates={[]} canModerateChat />);
+    const input = screen.getByRole("textbox", { name: "Написать в #общий" });
+
+    await user.type(input, "/mute @mark");
+    const listbox = screen.getByRole("listbox", { name: "Срок мута" });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(7);
+    await user.click(within(listbox).getByRole("option", { name: "5 минут" }));
+    expect(input).toHaveValue("/mute @mark 5m");
+
+    await user.clear(input);
+    await user.type(input, "/mute @mark");
+    await user.tab();
+    expect(input).toHaveValue("/mute @mark 5m");
+
+    await user.clear(input);
+    await user.type(input, "/mute @mark");
+    await user.click(screen.getByRole("option", { name: "Навсегда" }));
+    expect(input).toHaveValue("/mute @mark");
+    expect(screen.queryByRole("listbox", { name: "Срок мута" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the command list free of /mute for members without moderation rights", async () => {
+    const user = userEvent.setup();
+    render(<StatefulComposer candidates={[]} />);
+    const input = screen.getByRole("textbox", { name: "Написать в #общий" });
+    await user.type(input, "/");
+    const listbox = screen.getByRole("listbox", { name: "Команды" });
+    expect(within(listbox).queryByText("/mute")).not.toBeInTheDocument();
+    expect(within(listbox).getAllByRole("option")).toHaveLength(3);
+  });
 });
+
+function StatefulComposer({ candidates, canModerateChat = false }: { candidates: MentionCandidate[]; canModerateChat?: boolean }): React.ReactElement {
+  const [draft, setDraft] = useState("");
+  return <Composer draft={draft} channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={setDraft} onSubmit={vi.fn()} members={candidates} canModerateChat={canModerateChat} />;
+}

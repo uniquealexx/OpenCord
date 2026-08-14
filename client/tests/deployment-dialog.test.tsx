@@ -23,7 +23,7 @@ describe("DeploymentDialog", () => {
     window.openCord = {
       window: { minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(), isMaximized: vi.fn(), onMaximizedChange: vi.fn(() => () => undefined) },
       storage: { load: vi.fn(), save: vi.fn(), reset: vi.fn() },
-      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "A".repeat(64), fingerprint: "owner" })), signChallenge: vi.fn(), reset: vi.fn() },
+      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "A".repeat(64), fingerprint: "owner", discriminator: "0001" })), signChallenge: vi.fn(), reset: vi.fn() },
       deployment: {
         selectServerBundle: vi.fn(async () => null),
         selectPrivateKey: vi.fn(async () => ({ credentialId: "123e4567-e89b-42d3-a456-426614174000", label: "id_ed25519" })),
@@ -86,7 +86,7 @@ describe("DeploymentDialog", () => {
     window.openCord = {
       window: { minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(), isMaximized: vi.fn(), onMaximizedChange: vi.fn(() => () => undefined) },
       storage: { load: vi.fn(), save: vi.fn(), reset: vi.fn() },
-      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "A".repeat(64), fingerprint: "owner" })), signChallenge: vi.fn(), reset: vi.fn() },
+      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "A".repeat(64), fingerprint: "owner", discriminator: "0001" })), signChallenge: vi.fn(), reset: vi.fn() },
       deployment: {
         selectServerBundle: vi.fn(async () => null),
         selectPrivateKey: vi.fn(async () => ({ credentialId: "123e4567-e89b-42d3-a456-426614174000", label: "id_ed25519" })),

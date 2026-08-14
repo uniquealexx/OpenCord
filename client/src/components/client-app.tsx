@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
 import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization } from "@/hooks/use-voice-session";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
+import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
@@ -38,6 +39,13 @@ const userStatusLabels: Record<UserStatus, keyof Dictionary["statuses"]> = { onl
 
 export function visibleProfileStatus(status: UserStatus | undefined): PublicMemberStatus {
   return status === "invisible" ? "offline" : status ?? "online";
+}
+
+/** Эффективный мут чата с учётом срока: бессрочный или ещё не истёкший. */
+export function isChatMutedNow(member: Pick<MockMember, "chatMuted" | "chatMutedUntil"> | undefined): boolean {
+  if (member?.chatMuted !== true) return false;
+  if (!member.chatMutedUntil) return true;
+  return new Date(member.chatMutedUntil).getTime() > Date.now();
 }
 
 export function shouldRequestVoiceJoin(status: "idle" | "connecting" | "connected" | "reconnecting" | "error", connectedChannelId: string | null, authorizedChannelId: string | null, targetChannelId: string): boolean {
@@ -76,6 +84,7 @@ export function ClientApp(): React.ReactElement {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [viewingScreenShareId, setViewingScreenShareId] = useState<string | null>(null);
   const [mobilePanel, setMobilePanel] = useState<"channels" | "members" | null>(null);
+  const [selfIdentity, setSelfIdentity] = useState<{ publicKey: string; fingerprint: string; discriminator: string } | null>(null);
   const searchRequestRef = useRef<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const serverMuteStateRef = useRef(false);
@@ -107,7 +116,7 @@ export function ClientApp(): React.ReactElement {
       setSearchResult((current) => result.offset > 0 && current ? { ...result, offset: 0, messages: [...current.messages, ...result.messages] } : result);
       commit((current) => ({ ...current, messages: [...current.messages.filter((message) => !result.messages.some((found) => found.id === message.id)), ...result.messages.map(toLocalMessage)] }));
     },
-    onMember: (member) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: [...server.members.filter((item) => item.id !== member.id), { id: member.id, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner }] }), messages: current.messages.map((message) => message.authorId === member.id ? { ...message, authorName: member.displayName, authorAvatar: member.avatar } : message) })),
+    onMember: (member) => commit((current) => ({ ...current, servers: current.servers.map((server) => server.id !== current.activeServerId ? server : { ...server, members: [...server.members.filter((item) => item.id !== member.id), { id: member.id, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner, chatMuted: member.chatMuted, chatMutedUntil: member.chatMutedUntil }] }), messages: current.messages.map((message) => message.authorId === member.id ? { ...message, authorName: member.displayName, authorAvatar: member.avatar } : message) })),
     onMemberRemoved: (userId) => {
       if (connectionServer && userId === currentAccess?.id) {
         const removedServerId = connectionServer.id;
@@ -184,6 +193,16 @@ export function ClientApp(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Сверка дискриминатора профиля с дискриминатором ключей: у легаси-профилей (v1–v3)
+  // он был сгенерирован локально, а тег username#1234 должен совпадать с ключами.
+  useEffect(() => {
+    void window.openCord?.identity?.getOrCreate().then((identity) => {
+      setSelfIdentity(identity);
+      commit((current) => (!current.profile || current.profile.discriminator === identity.discriminator) ? current : { ...current, profile: { ...current.profile, discriminator: identity.discriminator } });
+    }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Мобильная оболочка: при входе запрашиваем доступ к микрофону (системный диалог
   // Android), пока пользователь его не предоставит. Без разрешения запрос повторяется
   // при следующем запуске; поток немедленно останавливается, голос это не затрагивает.
@@ -196,7 +215,6 @@ export function ClientApp(): React.ReactElement {
       for (const track of stream.getTracks()) track.stop();
       try { localStorage.setItem("opencord.mic-permission-granted", "1"); } catch { /* ignore */ }
     }).catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Мобильная оболочка: масштаб интерфейса из настроек применяется к корню документа,
@@ -271,8 +289,10 @@ export function ClientApp(): React.ReactElement {
   const activeChannel = activeServer?.channels.find((channel) => channel.id === state.activeChannelId) ?? activeServer?.channels.find((channel) => channel.kind === "text");
   const messages = activeChannel ? sortMessagesChronologically(state.messages.filter((message) => message.channelId === activeChannel.id)) : [];
   const searchMembers = activeServer && !activeServer.members.some((member) => member.id === (currentAccess?.id ?? profile.id))
-    ? [{ id: currentAccess?.id ?? profile.id, displayName: profile.displayName, role: t.roles.you, serverRole: currentAccess?.role, status: visibleProfileStatus(profile.status), avatarColor: "#4d6bfe", avatar: profile.avatar }, ...activeServer.members]
+    ? [{ id: currentAccess?.id ?? profile.id, username: profile.username, discriminator: profile.discriminator, fingerprint: selfIdentity?.fingerprint, displayName: profile.displayName, role: t.roles.you, serverRole: currentAccess?.role, status: visibleProfileStatus(profile.status), avatarColor: "#4d6bfe", avatar: profile.avatar }, ...activeServer.members]
     : activeServer?.members ?? [];
+  const mentionCandidates: MentionCandidate[] = searchMembers.map(memberToMentionCandidate);
+  const selfChatMuted = isChatMutedNow(searchMembers.find((member) => member.id === (currentAccess?.id ?? profile.id)));
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
     commit((current) => ({ ...current, activeServerId: server.id, activeChannelId: channel?.id ?? null }));
@@ -395,6 +415,27 @@ export function ClientApp(): React.ReactElement {
     setNotice(t.server.left);
   }
 
+  /** «Открыть настройки» из меню сервера в колонке: переключаемся на сервер и открываем диалог управления. */
+  function openServerSettingsFromRail(server: MockServer): void {
+    if (state?.activeServerId !== server.id) selectServer(server);
+    setModal("leave");
+  }
+
+  /** «Отключиться от сервера» из меню сервера в колонке. */
+  function disconnectFromRail(server: MockServer): void {
+    const isActive = state?.activeServerId === server.id;
+    if (!isActive) {
+      selectServer(server);
+      if (server.address) {
+        // Удалённый сервер ещё не подключён: переключаемся на него и открываем диалог
+        // выхода, чтобы сервер узнал об уходе участника через установленное соединение.
+        setModal("leave");
+        return;
+      }
+    }
+    leaveServer(server.id);
+  }
+
   function removeServerLocally(serverId: string): void {
     commit((current) => removeServers(current, (server) => server.id === serverId));
     setModal(null);
@@ -406,7 +447,7 @@ export function ClientApp(): React.ReactElement {
 
   function saveProfile(profile: LocalProfile): void {
     commit((current) => ({ ...current, profile, messages: current.messages.map((message) => message.authorId === profile.id || message.authorId === currentAccess?.id ? { ...message, authorName: profile.displayName, authorAvatar: profile.avatar } : message) }));
-    if (activeServer?.address && !connection.updateProfile({ displayName: profile.displayName, bio: profile.bio, avatar: profile.avatar, banner: profile.banner, status: profile.status ?? "online" })) setNotice(t.notices.profileSavedLocalOnly);
+    if (activeServer?.address && !connection.updateProfile({ username: profile.username, discriminator: profile.discriminator, displayName: profile.displayName, bio: profile.bio, avatar: profile.avatar, banner: profile.banner, status: profile.status ?? "online" })) setNotice(t.notices.profileSavedLocalOnly);
   }
 
   function deleteServerForEveryone(): void {
@@ -428,26 +469,64 @@ export function ClientApp(): React.ReactElement {
 
   function sendMessage(event: React.FormEvent): void {
     event.preventDefault();
-    const content = draft.trim();
-    if ((!content && pendingAttachments.length === 0) || !activeChannel) return;
+    if (!activeChannel) return;
+    const command = parseSlashCommand(draft, mentionCandidates);
+    if (command.type === "roll") {
+      const content = t.chat.rollResult(Math.floor(Math.random() * 101));
+      sendPlainMessage(content);
+      return;
+    }
+    if (command.type === "pm" || command.type === "apm") {
+      if (!command.targetUserId) { setNotice(t.notices.pmTargetMissing); return; }
+      if (!command.content) { setNotice(t.notices.pmMessageMissing); return; }
+      if (command.targetUserId === (activeServer?.address ? currentAccess?.id : profile.id)) { setNotice(t.notices.pmSelf); return; }
+      if (activeServer?.address) {
+        if (!connection.sendPrivateMessage(command.type, activeChannel.id, command.content, command.targetUserId)) { setNotice(t.notices.messageNotReady); return; }
+      } else {
+        // Локальный демо-режим: сообщение сохраняется локально с пометкой личного.
+        const message: MockMessage = { id: createId("message"), channelId: activeChannel.id, authorId: profile.id, authorName: profile.displayName, authorColor: "#4d6bfe", content: command.content, createdAt: new Date().toISOString(), kind: command.type, targetUserId: command.targetUserId, anonymous: command.type === "apm" };
+        commit((current) => ({ ...current, messages: [...current.messages, message] }));
+      }
+      setDraft("");
+      return;
+    }
+    if (command.type === "mute" || command.type === "unmute") {
+      if (!command.targetUserId) { setNotice(t.notices.pmTargetMissing); return; }
+      if (command.targetUserId === (currentAccess?.id ?? profile.id)) { setNotice(t.notices.chatMuteSelf); return; }
+      if (!activeServer?.address || !connection.setChatMuted(command.targetUserId, command.type === "mute", command.type === "mute" ? command.durationMinutes : null)) { setNotice(t.notices.chatMuteNotReady); return; }
+      setNotice(command.type === "mute" ? t.notices.chatMutedForAll : t.notices.chatUnmuted);
+      setDraft("");
+      return;
+    }
+    const resolved = resolveDraftMentions(draft, mentionCandidates);
+    sendPlainMessage(resolved.content, resolved.mentions);
+  }
+
+  /** Отправка обычного сообщения: на сервер или в локальный демо-чат. */
+  function sendPlainMessage(content: string, mentions: string[] = []): void {
+    const trimmed = content.trim();
+    if ((!trimmed && pendingAttachments.length === 0) || !activeChannel) return;
+    if (trimmed.length > 4000) { setNotice(t.notices.messageTooLong); return; }
     if (activeServer?.address) {
-      if (!connection.sendMessage(activeChannel.id, content, pendingAttachments.map((attachment) => attachment.id))) { setNotice(t.notices.messageNotReady); return; }
+      if (!connection.sendMessage(activeChannel.id, trimmed, pendingAttachments.map((attachment) => attachment.id), mentions)) { setNotice(t.notices.messageNotReady); return; }
       setDraft("");
       setPendingAttachments([]);
       return;
     }
-    const message: MockMessage = { id: createId("message"), channelId: activeChannel.id, authorId: profile.id, authorName: profile.displayName, authorColor: "#4d6bfe", content, createdAt: new Date().toISOString() };
+    const message: MockMessage = { id: createId("message"), channelId: activeChannel.id, authorId: profile.id, authorName: profile.displayName, authorColor: "#4d6bfe", content: trimmed, createdAt: new Date().toISOString(), mentions };
     commit((current) => ({ ...current, messages: [...current.messages, message] }));
     setDraft("");
   }
 
   function editMessage(message: MockMessage, content: string, attachments: Attachment[]): boolean {
+    const resolved = resolveDraftMentions(content, mentionCandidates);
+    if (resolved.content.length > 4000) { setNotice(t.notices.messageTooLong); return false; }
     if (activeServer?.address) {
-      if (!connection.updateMessage(message.id, content, attachments.map((attachment) => attachment.id))) { setNotice(t.notices.editNotReady); return false; }
+      if (!connection.updateMessage(message.id, resolved.content, attachments.map((attachment) => attachment.id), resolved.mentions)) { setNotice(t.notices.editNotReady); return false; }
       return true;
     }
-    if (message.authorId !== profile.id || (!content && attachments.length === 0)) return false;
-    commit((current) => ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, content, attachments, editedAt: new Date().toISOString() } : item) }));
+    if (message.authorId !== profile.id || (!resolved.content && attachments.length === 0)) return false;
+    commit((current) => ({ ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, content: resolved.content, mentions: resolved.mentions, attachments, editedAt: new Date().toISOString() } : item) }));
     return true;
   }
 
@@ -543,7 +622,7 @@ export function ClientApp(): React.ReactElement {
 
   return (
     <main className="relative flex min-h-0 flex-1 overflow-hidden bg-[#212327] text-slate-200">
-      <ServerRail servers={state.servers} activeId={activeServer?.id} onHome={openHome} onSelect={selectServer} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} showCreate={!mobile} />
+      <ServerRail servers={state.servers} activeId={activeServer?.id} onHome={openHome} onSelect={selectServer} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} showCreate={!mobile} onManage={openServerSettingsFromRail} onDisconnect={disconnectFromRail} canManageServer={(server) => { const access = accessByServer[server.id]; return access?.role === "owner" || access?.role === "administrator"; }} />
       {mobile && mobilePanel !== null && <div aria-hidden="true" className="fixed inset-0 z-20 bg-black/45" onClick={() => setMobilePanel(null)} />}
       {activeServer ? <>
         {mobile ? <div className={cn("absolute inset-y-0 left-[76px] z-30 w-[calc(100%-76px)] max-w-[300px] [&>aside]:w-full", mobilePanel === "channels" ? "flex" : "hidden")}><ChannelSidebar mobile server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={effectiveMuted} serverMuted={serverMuted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)} isScreenSharing={voice.isScreenSharing} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => { if (!serverMuted) void voice.setMuted(value); }} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} /></div> : <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={effectiveMuted} serverMuted={serverMuted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)} isScreenSharing={voice.isScreenSharing} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => { if (!serverMuted) void voice.setMuted(value); }} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} />}
@@ -554,14 +633,14 @@ export function ClientApp(): React.ReactElement {
             <div className="flex min-w-0 flex-1 flex-col">
               <div className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-sm:px-3 max-sm:py-3", state.preferences.compactMode && "py-3")}>
                 <ChannelIntro name={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
-                {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} member={activeServer.members.find((member) => member.id === message.authorId)} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} />) : <p className="py-8 text-center text-sm text-slate-600">{t.chat.empty}</p>}
+                {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} />) : <p className="py-8 text-center text-sm text-slate-600">{t.chat.empty}</p>}
                 <div ref={messageEndRef} />
               </div>
-              <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} />
+              <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
             </div>
             {mobile ? mobilePanel === "members" && <div className="absolute inset-y-0 right-0 z-30 flex w-[240px]"><MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} /></div> : state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
           </div>
-          <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => setSearchOpen(false)} onSearch={searchServer} onOpenMessage={openSearchMessage} />
+          <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => setSearchOpen(false)} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
         </section> : <NoTextChannelView server={activeServer} profile={state.profile} access={currentAccess} connectionStatus={activeServer.address ? connection.status : "demo"} showMembers={!mobile && state.preferences.showMemberList} onCreate={() => setModal("channel")} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
       </> : <HomeScreen showCreate={!mobile} serverCount={state.servers.length} profile={state.profile} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} />}
       {notice && <div role="status" className="glass absolute bottom-5 left-1/2 z-40 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl px-4 py-2.5 text-center text-xs font-medium text-slate-200 shadow-xl">{notice}</div>}
@@ -569,8 +648,8 @@ export function ClientApp(): React.ReactElement {
       {activeServer && updatePreset && <DeploymentDialog key={`update-${activeServer.id}`} open={modal === "update"} updateOnly preset={updatePreset} onOpenChange={(open) => setModal(open ? "update" : null)} onDeployed={updatedDeployedServer} />}
       <ServerDialog open={modal === "connect"} onOpenChange={(open) => setModal(open ? "connect" : null)} onAdd={addServer} />
       <ProfileDialog key={modal === "profile" ? "profile-open" : "profile-closed"} profile={state.profile} open={modal === "profile"} onOpenChange={(open) => setModal(open ? "profile" : null)} onSave={saveProfile} />
-      {modal === "settings" && <SettingsDialog preferences={state.preferences} open confirmReset={confirmReset} onOpenChange={(open) => { setModal(open ? "settings" : null); if (!open) setConfirmReset(false); }} onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))} onRequestReset={() => setConfirmReset(true)} onCancelReset={() => setConfirmReset(false)} onReset={() => void reset()} />}
-      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onUpdate={() => setModal("update")} onSaveSettings={saveServerSettings} onConfirm={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
+      {modal === "settings" && <SettingsDialog preferences={state.preferences} open confirmReset={confirmReset} onOpenChange={(open) => { setModal(open ? "settings" : null); if (!open) setConfirmReset(false); }} onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))} onRequestReset={() => setConfirmReset(true)} onCancelReset={() => setConfirmReset(false)} onReset={() => void reset()} onIdentityReset={(identity) => commit((current) => current.profile && current.profile.discriminator !== identity.discriminator ? { ...current, profile: { ...current.profile, discriminator: identity.discriminator } } : current)} />}
+      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canViewSettings={currentAccess?.role === "owner" || currentAccess?.role === "administrator"} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onUpdate={() => setModal("update")} onSaveSettings={saveServerSettings} onConfirm={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
       {activeServer && <ServerAvatarDialog key={`${activeServer.id}-${activeServer.avatar ?? "none"}`} server={activeServer} open={modal === "server-avatar"} onOpenChange={(open) => setModal(open ? "server-avatar" : null)} onSave={updateServerAvatar} />}
       <ChannelDialog open={modal === "channel"} onOpenChange={(open) => setModal(open ? "channel" : null)} onCreate={createServerChannel} />
       {managedChannel && <EditChannelDialog key={managedChannel.id} channel={managedChannel} open={modal === "channel-edit"} onOpenChange={(open) => { setModal(open ? "channel-edit" : null); if (!open) setManagedChannel(null); }} onSave={(name, description, participantLimit) => editServerChannel(managedChannel, name, description, participantLimit)} />}
@@ -580,13 +659,40 @@ export function ClientApp(): React.ReactElement {
   );
 }
 
-function ServerRail({ servers, activeId, onHome, onSelect, onCreate, onConnect, showCreate = true }: { servers: MockServer[]; activeId?: string; onHome: () => void; onSelect: (server: MockServer) => void; onCreate: () => void; onConnect: () => void; showCreate?: boolean }): React.ReactElement {
+function ServerRail({ servers, activeId, onHome, onSelect, onCreate, onConnect, showCreate = true, onManage, onDisconnect, canManageServer }: { servers: MockServer[]; activeId?: string; onHome: () => void; onSelect: (server: MockServer) => void; onCreate: () => void; onConnect: () => void; showCreate?: boolean; onManage: (server: MockServer) => void; onDisconnect: (server: MockServer) => void; canManageServer: (server: MockServer) => boolean }): React.ReactElement {
   const { t } = useI18n();
+  const [menu, setMenu] = useState<{ server: MockServer; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = (): void => setMenu(null);
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menu]);
+
+  function openMenu(event: React.MouseEvent, server: MockServer): void {
+    event.preventDefault();
+    setMenu({ server, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 232)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 140)) });
+  }
+
   return <nav aria-label={t.nav.servers} className="flex w-[76px] shrink-0 flex-col items-center gap-2 border-r border-white/[.055] bg-[#191b1e] py-3">
     <button aria-label={t.nav.friends} title={t.nav.friends} onClick={onHome} className={cn("mb-1 grid size-12 place-items-center rounded-xl bg-primary text-lg font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)] transition-colors", activeId ? "hover:bg-violet-400" : "ring-2 ring-white/70 ring-offset-2 ring-offset-rail")}>O</button><div className="h-px w-8 bg-white/10" />
-    <div className="scrollbar-none flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto py-1">{servers.map((server) => <button key={server.id} title={server.name} onClick={() => onSelect(server)} className={cn("group relative grid size-12 shrink-0 place-items-center rounded-xl bg-panel text-xs font-bold text-slate-300 transition-colors hover:bg-primary hover:text-white", activeId === server.id && "bg-primary text-white")}><span className={cn("absolute -left-3 z-10 w-1 rounded-r-full bg-white transition-all", activeId === server.id ? "h-8" : "h-0 group-hover:h-5")} />{server.avatar ? <Image src={server.avatar} alt="" width={48} height={48} unoptimized className="size-12 rounded-xl object-cover" /> : initials(server.name)}</button>)}</div>
+    <div className="scrollbar-none flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto py-1">{servers.map((server) => <button key={server.id} title={server.name} onClick={() => onSelect(server)} onDoubleClick={(event) => openMenu(event, server)} onContextMenu={(event) => openMenu(event, server)} className={cn("group relative grid size-12 shrink-0 place-items-center rounded-xl bg-panel text-xs font-bold text-slate-300 transition-colors hover:bg-primary hover:text-white", activeId === server.id && "bg-primary text-white")}><span className={cn("absolute -left-3 z-10 w-1 rounded-r-full bg-white transition-all", activeId === server.id ? "h-8" : "h-0 group-hover:h-5")} />{server.avatar ? <Image src={server.avatar} alt="" width={48} height={48} unoptimized className="size-12 rounded-xl object-cover" /> : initials(server.name)}</button>)}</div>
     {showCreate && <button title={t.server.create} onClick={onCreate} className="grid size-11 shrink-0 place-items-center rounded-[17px] bg-emerald-400/8 text-emerald-400 transition hover:rounded-[13px] hover:bg-emerald-500 hover:text-white"><Plus className="size-5" /></button>}
     <button title={t.server.connect} onClick={onConnect} className="grid size-11 shrink-0 place-items-center rounded-[17px] bg-cyan-400/8 text-cyan-300 transition hover:rounded-[13px] hover:bg-cyan-500 hover:text-white"><LogIn className="size-4" /></button>
+    {menu && <div role="menu" aria-label={t.nav.serverMenu(menu.server.name)} onPointerDown={(event) => event.stopPropagation()} className="glass fixed z-[80] w-56 rounded-xl p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.5)]" style={{ left: menu.x, top: menu.y }}>
+      {canManageServer(menu.server) && <button role="menuitem" onClick={() => { const server = menu.server; setMenu(null); onManage(server); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-300 hover:bg-white/[.06] hover:text-white"><Settings className="size-3.5" />{t.nav.openServerSettings}</button>}
+      <button role="menuitem" onClick={() => { const server = menu.server; setMenu(null); onDisconnect(server); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-red-300 hover:bg-red-400/10"><LogOut className="size-3.5" />{t.nav.disconnectServer}</button>
+    </div>}
   </nav>;
 }
 
@@ -663,7 +769,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const displayName = member?.displayName ?? (isCurrentUser ? profile.displayName : t.voice.participant);
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
-  return <ProfilePreview side="right" wrapperClassName="ml-6 flex" triggerClassName="flex min-h-9 w-[224px] max-w-full items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200" profile={{ displayName, avatar, banner: member?.banner ?? (isCurrentUser ? profile.banner : undefined), color: member?.avatarColor, status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"), role: member?.role, bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined), isCurrentUser }}>
+  return <ProfilePreview side="right" wrapperClassName="ml-6 flex" triggerClassName="flex min-h-9 w-[224px] max-w-full items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200" profile={{ displayName, username: member?.username ?? (isCurrentUser ? profile.username : undefined), discriminator: member?.discriminator ?? (isCurrentUser ? profile.discriminator : undefined), fingerprint: member?.fingerprint, avatar, banner: member?.banner ?? (isCurrentUser ? profile.banner : undefined), color: member?.avatarColor, status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"), role: member?.role, bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined), isCurrentUser }}>
     <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#1d1f23] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
     <span className="min-w-0 flex-1 truncate">{displayName}{isCurrentUser && ` ${t.voice.youSuffix}`}</span>
     {sharing && <span title={t.voice.viewScreen(displayName)} aria-label={t.voice.viewScreen(displayName)} onClick={(event) => { event.stopPropagation(); onViewScreenShare?.(participant.userId); }} className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-cyan-400/10 text-cyan-300 hover:bg-cyan-400/20"><MonitorUp className="size-3.5" /></span>}
@@ -717,11 +823,14 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
   const availableScreenShares = connectedHere ? screenShares : [];
   const viewedStream = screenShares.find((stream) => stream.participantIdentity === viewingScreenShareId);
   const statusLabel = status === "reconnecting" ? t.voice.reconnecting : status === "connecting" ? t.voice.connecting : connectedHere && status === "connected" ? t.voice.connected : status === "error" ? t.voice.error : t.voice.idle;
-  const participantProfile = (identity: string, fallbackName?: string): { name: string; avatar: string | null; banner?: string | null; color?: string; status: PublicMemberStatus; role?: string; bio?: string; isCurrentUser: boolean } => {
+  const participantProfile = (identity: string, fallbackName?: string): { name: string; avatar: string | null; banner?: string | null; color?: string; status: PublicMemberStatus; role?: string; bio?: string; username?: string; discriminator?: string; fingerprint?: string; isCurrentUser: boolean } => {
     const member = server.members.find((item) => item.id === identity);
     const isCurrentUser = identity === currentUserId;
     return {
       name: member?.displayName ?? (isCurrentUser ? profile.displayName : fallbackName ?? t.voice.participant),
+      username: member?.username ?? (isCurrentUser ? profile.username : undefined),
+      discriminator: member?.discriminator ?? (isCurrentUser ? profile.discriminator : undefined),
+      fingerprint: member?.fingerprint,
       avatar: member?.avatar ?? (isCurrentUser ? profile.avatar : null),
       banner: member?.banner ?? (isCurrentUser ? profile.banner : null),
       color: member?.avatarColor,
@@ -776,7 +885,7 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
               {canDisconnect && <button type="button" aria-label={participant.serverMuted ? t.voice.removeServerMuteOf(participantData.name) : t.voice.muteForAllOf(participantData.name)} title={participant.serverMuted ? t.voice.removeServerMute : t.voice.muteForAll} aria-pressed={participant.serverMuted} onClick={() => onServerMuted(participant.userId, !participant.serverMuted)} className={cn("absolute right-12 top-3 grid size-8 place-items-center rounded-lg border transition", participant.serverMuted ? "border-red-400/30 bg-red-400/15 text-red-200 hover:bg-red-400/20" : "border-amber-300/20 bg-amber-300/[.07] text-amber-200 hover:bg-amber-300/15")}><MicOff className="size-4" /></button>}
               {canDisconnect && <button type="button" aria-label={t.voice.disconnectOf(participantData.name)} title={t.voice.disconnect} onClick={() => onDisconnectParticipant(participant.userId)} className="absolute right-3 top-3 grid size-8 place-items-center rounded-lg border border-red-400/20 bg-red-400/[.07] text-red-300 transition hover:bg-red-400/15"><UserMinus className="size-4" /></button>}
               <ProfilePreview
-                profile={{ displayName: participantData.name, avatar: participantData.avatar, banner: participantData.banner, color: participantData.color, status: participantData.status, role: participantData.role, bio: participantData.bio, isCurrentUser: participantData.isCurrentUser }}
+                profile={{ displayName: participantData.name, username: participantData.username, discriminator: participantData.discriminator, fingerprint: participantData.fingerprint, avatar: participantData.avatar, banner: participantData.banner, color: participantData.color, status: participantData.status, role: participantData.role, bio: participantData.bio, isCurrentUser: participantData.isCurrentUser }}
                 wrapperClassName="w-full justify-center"
                 triggerClassName="flex max-w-full flex-col items-center rounded-lg px-2 py-1 outline-none transition hover:bg-white/[.035] focus-visible:ring-2 focus-visible:ring-violet-400/70"
               >
@@ -855,8 +964,9 @@ function DeleteChannelDialog({ channel, open, onOpenChange, onConfirm }: { chann
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><div className="mb-3 grid size-11 place-items-center rounded-2xl bg-red-400/10 text-red-300"><Trash2 className="size-5" /></div><DialogTitle>{t.channel.deleteTitle}</DialogTitle><DialogDescription>{t.channel.deleteDescription(channel.name)}</DialogDescription></DialogHeader><div className="flex gap-3"><Button variant="secondary" onClick={() => onOpenChange(false)} className="flex-1">{t.common.cancel}</Button><Button variant="danger" onClick={onConfirm} className="flex-1"><Trash2 className="size-4" />{t.channel.deleteConfirm}</Button></div></DialogContent></Dialog>;
 }
 
-export function LeaveServerDialog({ server, canManageServer, canUpdate, canDeleteForAll, canRemoveLocal, open, onOpenChange, onAvatar, onUpdate, onSaveSettings, onConfirm, onRemoveLocal, onDeleteForAll }: { server: MockServer; canManageServer: boolean; canUpdate: boolean; canDeleteForAll: boolean; canRemoveLocal: boolean; open: boolean; onOpenChange: (open: boolean) => void; onAvatar: () => void; onUpdate: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onConfirm: () => void; onRemoveLocal: () => void; onDeleteForAll: () => void }): React.ReactElement {
+export function LeaveServerDialog({ server, canManageServer, canViewSettings, canUpdate, canDeleteForAll, canRemoveLocal, open, onOpenChange, onAvatar, onUpdate, onSaveSettings, onConfirm, onRemoveLocal, onDeleteForAll }: { server: MockServer; canManageServer: boolean; canViewSettings: boolean; canUpdate: boolean; canDeleteForAll: boolean; canRemoveLocal: boolean; open: boolean; onOpenChange: (open: boolean) => void; onAvatar: () => void; onUpdate: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onConfirm: () => void; onRemoveLocal: () => void; onDeleteForAll: () => void }): React.ReactElement {
   const { t } = useI18n();
+  const showServerSettings = Boolean(server.address) && canViewSettings;
   const sliderMax = 2025;
   const currentMegabytes = server.maxAttachmentBytes === null ? sliderMax : Math.round(server.maxAttachmentBytes / MEBIBYTE);
   const [limitStep, setLimitStep] = useState(currentMegabytes);
@@ -893,8 +1003,8 @@ export function LeaveServerDialog({ server, canManageServer, canUpdate, canDelet
         <div className="absolute -bottom-10 left-6"><Avatar image={server.avatar} name={server.name} color={server.accent} size="xl" className="ring-4 ring-panel shadow-md" /></div>
       </div>
       <div className="space-y-5 pb-1">
-        <DialogHeader><DialogTitle className="text-xl">{server.address ? t.server.manage : t.server.leaveTitle}</DialogTitle><DialogDescription>{server.address ? t.server.manageDescription(server.name) : t.server.leaveLocalDescription(server.name)}</DialogDescription></DialogHeader>
-        {server.address && <section className="space-y-5 rounded-2xl border border-white/[.07] bg-black/15 p-4">
+        <DialogHeader><DialogTitle className="text-xl">{showServerSettings ? t.server.manage : t.server.leaveTitle}</DialogTitle><DialogDescription>{showServerSettings ? t.server.manageDescription(server.name) : server.address ? t.server.leaveRemoteDescription(server.name) : t.server.leaveLocalDescription(server.name)}</DialogDescription></DialogHeader>
+        {showServerSettings && <section className="space-y-5 rounded-2xl border border-white/[.07] bg-black/15 p-4">
           <div>
             <label className="mb-2 block text-sm font-semibold text-slate-200" htmlFor="server-settings-name">{t.server.settingsName}</label>
             <Input id="server-settings-name" aria-label={t.server.settingsName} value={serverName} onChange={(event) => setServerName(event.target.value)} minLength={2} maxLength={48} disabled={!canManageServer} />
@@ -921,10 +1031,10 @@ export function LeaveServerDialog({ server, canManageServer, canUpdate, canDelet
 
           {canManageServer ? <Button type="button" onClick={saveSettings} disabled={!validLimit || serverName.trim().length < 2} className="w-full"><Settings className="size-4" />{t.server.saveSettings}</Button> : <p className="text-xs text-slate-500">{t.server.onlyOwner}</p>}
         </section>}
-        <section className="grid gap-2 sm:grid-cols-2">
-          {canManageServer && server.address && <button type="button" onClick={onAvatar} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-white/[.025] p-4 text-left text-sm font-semibold text-slate-200 transition hover:bg-white/[.06]"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Camera className="size-4" /></span>{t.server.serverAvatar}</button>}
-          {canUpdate && server.address && <button type="button" onClick={onUpdate} className="flex items-center gap-3 rounded-2xl border border-violet-400/20 bg-violet-400/[.06] p-4 text-left text-sm font-semibold text-violet-200 transition hover:bg-violet-400/10"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10"><ServerCog className="size-4" /></span>{t.server.update}</button>}
-        </section>
+        {(canManageServer || canUpdate) && server.address && <section className="grid gap-2 sm:grid-cols-2">
+          {canManageServer && <button type="button" onClick={onAvatar} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-white/[.025] p-4 text-left text-sm font-semibold text-slate-200 transition hover:bg-white/[.06]"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Camera className="size-4" /></span>{t.server.serverAvatar}</button>}
+          {canUpdate && <button type="button" onClick={onUpdate} className="flex items-center gap-3 rounded-2xl border border-violet-400/20 bg-violet-400/[.06] p-4 text-left text-sm font-semibold text-violet-200 transition hover:bg-violet-400/10"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10"><ServerCog className="size-4" /></span>{t.server.update}</button>}
+        </section>}
         <section className="rounded-2xl border border-red-400/15 bg-red-400/[.035] p-4"><p className="mb-3 text-[10px] font-bold uppercase tracking-[.14em] text-red-300/70">{t.server.dangerZone}</p><div className="flex gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)} className="flex-1">{t.server.leaveCancel}</Button><Button variant="danger" onClick={onConfirm} className="flex-1"><LogOut className="size-4" />{t.server.leaveConfirm}</Button></div>{canDeleteForAll && server.address && <button onClick={onDeleteForAll} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/20 bg-red-400/5 px-4 py-3 text-xs font-semibold text-red-300 hover:bg-red-400/10"><Trash2 className="size-4" />{t.server.deleteForAll}</button>}{canRemoveLocal && <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/5 p-3"><p className="text-xs leading-5 text-amber-200/75">{t.server.removeLocalHint}</p><button onClick={onRemoveLocal} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[.04] px-4 py-2.5 text-xs font-semibold text-slate-200 transition hover:bg-white/[.08]"><Trash2 className="size-4" />{t.server.removeLocal}</button></div>}</section>
       </div>
     </DialogContent>
@@ -973,7 +1083,7 @@ export function ProtocolNotice({ status }: { status: ConnectionStatus }): React.
 
 function ChannelIntro({ name, description, networked }: { name: string; description: string; networked: boolean }): React.ReactElement { const { t } = useI18n(); return <div className="mb-6 mt-auto pt-8"><div className="mb-3 grid size-14 place-items-center rounded-2xl bg-white/7 text-slate-300"><Hash className="size-7" /></div><h1 className="text-2xl font-bold tracking-tight text-white">{t.chat.welcome(name)}</h1><p className="mt-1 text-sm text-slate-500">{description}</p><p className="mt-3 inline-flex items-center gap-2 rounded-lg bg-violet-400/6 px-2.5 py-1.5 text-[11px] text-violet-200/60"><MessageCircle className="size-3.5" />{networked ? t.chat.serverNotice : t.chat.mockNotice}</p></div>; }
 
-export function Message({ message, member, profile, compact, grouped, ownAvatar, currentUserId, canManageMessages, previewAvailable, canAttach, attachmentLimitLabel, uploading, onAttach, onEdit, onDelete, onDownload, onPreview }: { message: MockMessage; member?: MockMember; profile?: LocalProfile | null; compact: boolean; grouped: boolean; ownAvatar: string | null; currentUserId?: string; canManageMessages: boolean; previewAvailable: boolean; canAttach: boolean; attachmentLimitLabel?: string; uploading: boolean; onAttach: () => Promise<Attachment | null>; onEdit: (message: MockMessage, content: string, attachments: Attachment[]) => boolean; onDelete: (message: MockMessage) => boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string> }): React.ReactElement {
+export function Message({ message, member, members, profile, compact, grouped, ownAvatar, currentUserId, canManageMessages, previewAvailable, canAttach, attachmentLimitLabel, uploading, onAttach, onEdit, onDelete, onDownload, onPreview }: { message: MockMessage; member?: MockMember; members: MockMember[]; profile?: LocalProfile | null; compact: boolean; grouped: boolean; ownAvatar: string | null; currentUserId?: string; canManageMessages: boolean; previewAvailable: boolean; canAttach: boolean; attachmentLimitLabel?: string; uploading: boolean; onAttach: () => Promise<Attachment | null>; onEdit: (message: MockMessage, content: string, attachments: Attachment[]) => boolean; onDelete: (message: MockMessage) => boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string> }): React.ReactElement {
   const { t, locale } = useI18n();
   const effectiveAttachmentLimitLabel = attachmentLimitLabel ?? t.attachments.mb("10");
   const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date(message.createdAt));
@@ -985,7 +1095,7 @@ export function Message({ message, member, profile, compact, grouped, ownAvatar,
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const own = currentUserId === message.authorId;
   const canDelete = own || canManageMessages;
-  const previewProfile = { displayName: message.authorName, avatar: message.authorAvatar ?? ownAvatar, banner: member?.banner ?? (own ? profile?.banner : undefined), color: message.authorColor, status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : "offline" as const), role: member?.role, bio: member?.bio ?? (own ? profile?.bio : undefined), isCurrentUser: own };
+  const previewProfile = { displayName: message.authorName, username: member?.username ?? (own ? profile?.username : undefined), discriminator: member?.discriminator ?? (own ? profile?.discriminator : undefined), fingerprint: member?.fingerprint, avatar: message.authorAvatar ?? ownAvatar, banner: member?.banner ?? (own ? profile?.banner : undefined), color: message.authorColor, status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : "offline" as const), role: member?.role, bio: member?.bio ?? (own ? profile?.bio : undefined), isCurrentUser: own };
   useEffect(() => {
     if (!menuOpen) return;
     const closeOutside = (event: PointerEvent): void => {
@@ -1022,7 +1132,9 @@ export function Message({ message, member, profile, compact, grouped, ownAvatar,
     setMenuOpen(false);
   };
   const startEditing = (): void => {
-    setEditDraft(message.content);
+    // Маркеры <@userId> раскрываются в читаемый тег @username#1234; при сохранении
+    // editMessage снова резолвит их в маркеры и собирает список упоминаний.
+    setEditDraft(expandMentionsForEditing(message.content, members.map(memberToMentionCandidate)));
     setEditAttachments(message.attachments ?? []);
     setEditing(true);
     setMenuOpen(false);
@@ -1032,9 +1144,9 @@ export function Message({ message, member, profile, compact, grouped, ownAvatar,
     const attachment = await onAttach();
     if (attachment) setEditAttachments((current) => current.some((item) => item.id === attachment.id) ? current : [...current, attachment].slice(0, 5));
   };
-  return <article id={`message-${message.id}`} onContextMenu={(event) => { if (editing || (!own && !canDelete)) return; event.preventDefault(); setMenuOpen(true); }} className={cn("group relative flex gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0")}>
-    {!grouped || compact ? <ProfilePreview profile={previewProfile} wrapperClassName="shrink-0 self-start" triggerClassName="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"><Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} /></ProfilePreview> : <span className="w-9 shrink-0 text-right text-[9px] text-transparent group-hover:text-slate-600">{time}</span>}
-    <div className="min-w-0 flex-1">{(!grouped || compact) && <div className="flex items-baseline gap-2"><ProfilePreview profile={previewProfile} wrapperClassName="min-w-0" triggerClassName="truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">{message.authorName}</ProfilePreview><time className="text-[10px] text-slate-600">{time}</time>{message.editedAt && <span className="text-[10px] text-slate-600">{t.chat.edited}</span>}</div>}{editing ? <div className="mt-1 rounded-xl border border-violet-400/40 bg-[#212327] p-2 focus-within:border-violet-400">{editAttachments.length ? <div className="mb-2 flex flex-wrap gap-2">{editAttachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-lg border border-white/8 bg-[#26282c] px-2.5 py-1.5 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={t.chat.detach(attachment.fileName)} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className="flex items-start gap-2"><button type="button" title={t.chat.attachWithLimit(effectiveAttachmentLimitLabel)} aria-label={t.chat.attachToEdit} onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#212327] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><textarea autoFocus aria-label={t.chat.editMessage} value={editDraft} maxLength={4000} onChange={(event) => setEditDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") cancelEdit(); else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); saveEdit(); } }} className="min-h-20 w-full resize-y bg-transparent px-1 py-1 text-sm text-slate-200 outline-none" /></div><div className="mt-1 pl-9 text-[10px] text-slate-500">{t.chat.editHint}</div></div> : <>{message.content && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{message.content}{grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">{t.chat.edited}</span>}</p>}{message.attachments?.length ? <div className="mt-2 flex max-w-2xl flex-wrap gap-2">{message.attachments.map((attachment) => <AttachmentView key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onDownload={onDownload} onPreview={onPreview} />)}</div> : null}</>}</div>
+  return <article id={`message-${message.id}`} onContextMenu={(event) => { if (editing || (!own && !canDelete)) return; event.preventDefault(); setMenuOpen(true); }} className={cn("group relative flex gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0", message.kind && message.kind !== "chat" && "bg-amber-400/[.045] hover:bg-amber-400/[.075]")}>
+    {!grouped || compact ? <ProfilePreview profile={previewProfile} wrapperClassName="shrink-0 self-start" triggerClassName="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"><Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} /></ProfilePreview> : <span className="w-9 shrink-0 self-start text-right text-[9px] leading-6 text-transparent group-hover:text-slate-600">{time}</span>}
+    <div className="min-w-0 flex-1">{(!grouped || compact) && <div className="flex items-baseline gap-2"><ProfilePreview profile={previewProfile} wrapperClassName="min-w-0" triggerClassName="truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">{message.authorName}</ProfilePreview><time className="text-[10px] text-slate-600">{time}</time>{message.editedAt && <span className="text-[10px] text-slate-600">{t.chat.edited}</span>}</div>}{editing ? <div className="mt-1 rounded-xl border border-violet-400/40 bg-[#212327] p-2 focus-within:border-violet-400">{editAttachments.length ? <div className="mb-2 flex flex-wrap gap-2">{editAttachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-lg border border-white/8 bg-[#26282c] px-2.5 py-1.5 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={t.chat.detach(attachment.fileName)} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className="flex items-start gap-2"><button type="button" title={t.chat.attachWithLimit(effectiveAttachmentLimitLabel)} aria-label={t.chat.attachToEdit} onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#212327] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><textarea autoFocus aria-label={t.chat.editMessage} value={editDraft} maxLength={4000} onChange={(event) => setEditDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") cancelEdit(); else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); saveEdit(); } }} className="min-h-20 w-full resize-y bg-transparent px-1 py-1 text-sm text-slate-200 outline-none" /></div><div className="mt-1 pl-9 text-[10px] text-slate-500">{t.chat.editHint}</div></div> : <>{message.kind && message.kind !== "chat" && <p className="mb-0.5 text-[9px] font-bold uppercase tracking-[.14em] text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</p>}{message.content && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{splitMessageContent(message.content).map((segment, index) => segment.kind === "text" ? <span key={index}>{segment.text}</span> : <MessageMention key={index} userId={segment.userId} mentioned={Boolean(message.mentions?.includes(segment.userId))} members={members} />)}{grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">{t.chat.edited}</span>}</p>}{message.attachments?.length ? <div className="mt-2 flex max-w-2xl flex-wrap gap-2">{message.attachments.map((attachment) => <AttachmentView key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onDownload={onDownload} onPreview={onPreview} />)}</div> : null}</>}</div>
     {!editing && (own || canDelete) && <button ref={menuTriggerRef} type="button" aria-label={t.chat.messageActions(message.authorName)} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-1 hidden rounded-md border border-white/7 bg-[#2b2d32] p-1 text-slate-500 hover:text-slate-200 group-hover:block focus:block"><MoreHorizontal className="size-3.5" /></button>}
     {!editing && menuOpen && <div ref={menuRef} role="menu" className="glass absolute right-2 top-8 z-30 min-w-40 rounded-xl p-1.5 text-xs shadow-xl">
       {own && <button type="button" role="menuitem" onClick={startEditing} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-slate-300 hover:bg-white/5"><Pencil className="size-3.5" />{t.chat.edit}</button>}
@@ -1043,10 +1155,182 @@ export function Message({ message, member, profile, compact, grouped, ownAvatar,
   </article>;
 }
 
-export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, onAttach, onRemoveAttachment, onDraft, onSubmit }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; onAttach: () => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void }): React.ReactElement {
+function MessageMention({ userId, mentioned, members }: { userId: string; mentioned: boolean; members: MockMember[] }): React.ReactElement {
+  const { t } = useI18n();
+  const member = members.find((candidate) => candidate.id === userId);
+  if (!mentioned || !member) return <span className="rounded bg-violet-400/10 px-1 text-violet-200/80">@{t.chat.unknownUser}</span>;
+  return <ProfilePreview side="right" wrapperClassName="inline-flex align-baseline" triggerClassName="rounded bg-violet-400/15 px-1 font-medium text-violet-200 transition hover:bg-violet-400/25 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50" profile={{ displayName: member.displayName, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, color: member.avatarColor, status: member.status, role: member.role, bio: member.bio }} label={t.chat.mentionAria(member.displayName)}>
+    <span>@{member.displayName}</span>
+  </ProfilePreview>;
+}
+
+function memberToMentionCandidate(member: MockMember): MentionCandidate {
+  return { id: member.id, username: member.username, discriminator: member.discriminator, displayName: member.displayName, avatar: member.avatar ?? null, banner: member.banner ?? null, color: member.avatarColor, status: member.status, role: member.role, bio: member.bio, fingerprint: member.fingerprint };
+}
+
+export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, onAttach, onRemoveAttachment, onDraft, onSubmit, members, chatMuted = false, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; onAttach: () => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; canModerateChat?: boolean }): React.ReactElement {
   const { t } = useI18n();
   const effectiveAttachmentLimitLabel = attachmentLimitLabel ?? t.attachments.mb("10");
   const inputRef = useRef<HTMLInputElement>(null);
+  const [mentionQuery, setMentionQuery] = useState<{ query: string; discriminator: string; start: number; end: number } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionIndexRef = useRef(0);
+  // После выбора из автокомплита курсор стоит сразу за вставленным тегом @name#1234 —
+  // подавляем повторное открытие списка, пока пользователь не начнёт печатать дальше.
+  const insertedMentionRef = useRef<string | null>(null);
+  const suggestions = mentionQuery ? matchMentionCandidates(members, mentionQuery.query, mentionQuery.discriminator) : [];
+  const composerDisabled = disabled || chatMuted;
+  const [commandQuery, setCommandQuery] = useState<{ query: string; tokenStart: number; tokenEnd: number } | null>(null);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const commandIndexRef = useRef(0);
+  const commandDefinitions = [
+    { name: "pm", description: t.chat.commandDescription.pm },
+    { name: "apm", description: t.chat.commandDescription.apm },
+    { name: "roll", description: t.chat.commandDescription.roll },
+    ...(canModerateChat ? [{ name: "mute", description: t.chat.commandDescription.mute }, { name: "unmute", description: t.chat.commandDescription.unmute }] : []),
+  ];
+  const commandMatches = commandQuery ? commandDefinitions.filter((command) => command.name.startsWith(commandQuery.query)) : [];
+  const commandOpen = !composerDisabled && commandQuery !== null && commandMatches.length > 0;
+  const [muteDurationDismissed, setMuteDurationDismissed] = useState(false);
+  const muteDurationDismissedRef = useRef(false);
+  const [muteDurationIndex, setMuteDurationIndex] = useState(0);
+  const muteDurationIndexRef = useRef(0);
+  const muteDurationPresets = [
+    ...t.chat.mutePresets.map((preset) => ({ label: preset.label, token: `${preset.minutes}m`, minutes: preset.minutes })),
+    { label: t.chat.muteForever, token: null as string | null, minutes: null as number | null },
+  ];
+  function dismissMuteDurationPicker(): void {
+    muteDurationDismissedRef.current = true;
+    setMuteDurationDismissed(true);
+  }
+  // Попап выбора срока после «/mute @получатель»; Enter при открытом попапе отправляет
+  // бессрочный мут, Tab/клик — добавляет выбранный срок.
+  const muteDurationOpen = !composerDisabled && canModerateChat && !muteDurationDismissed && /^\/mute\s+@[a-z0-9_.-]{2,32}(?:#[0-9]{4})?$/iu.test(draft.trim());
+  // Упоминание не пересекается с выбором срока мута.
+  const mentionOpen = mentionQuery !== null && suggestions.length > 0 && !muteDurationOpen;
+  const previousDraftRef = useRef(draft);
+
+  function refreshAutocomplete(): void {
+    const input = inputRef.current;
+    const cursor = input?.selectionStart ?? draft.length;
+    if (previousDraftRef.current !== draft) {
+      previousDraftRef.current = draft;
+      // Закрытый попап срока («Навсегда») снова доступен, как только черновик изменился.
+      if (muteDurationDismissedRef.current) { muteDurationDismissedRef.current = false; setMuteDurationDismissed(false); }
+    }
+    if (insertedMentionRef.current !== null && draft !== insertedMentionRef.current) insertedMentionRef.current = null;
+    if (insertedMentionRef.current === draft && cursor >= draft.length) { setMentionQuery(null); return; }
+    const mention = mentionQueryAtCursor(draft, cursor);
+    if (JSON.stringify(mention) !== JSON.stringify(mentionQuery)) {
+      setMentionQuery(mention);
+      if (mention) { mentionIndexRef.current = 0; setMentionIndex(0); }
+    }
+    const command = commandQueryAtCursor(draft, cursor);
+    if (JSON.stringify(command) !== JSON.stringify(commandQuery)) {
+      setCommandQuery(command);
+      if (command) { commandIndexRef.current = 0; setCommandIndex(0); }
+    }
+  }
+  // Зависимость только от draft: сравнение с текущими значениями query уже сбрасывает
+  // индекс только при реальном изменении токена, а не при каждом отпускании клавиши.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(refreshAutocomplete, [draft]);
+
+  function applyMention(candidate: MentionCandidate): void {
+    if (!mentionQuery) return;
+    const token = `@${candidate.username ?? candidate.displayName}${candidate.discriminator ? `#${candidate.discriminator}` : ""}`;
+    const next = `${draft.slice(0, mentionQuery.start)}${token}${draft.slice(mentionQuery.end)}`;
+    onDraft(next);
+    insertedMentionRef.current = next;
+    setMentionQuery(null);
+    const cursor = mentionQuery.start + token.length;
+    window.requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(cursor, cursor); });
+  }
+
+  function applyCommand(command: { name: string; description: string }): void {
+    if (!commandQuery) return;
+    const next = `${draft.slice(0, commandQuery.tokenStart)}/${command.name} ${draft.slice(commandQuery.tokenEnd)}`;
+    onDraft(next);
+    setCommandQuery(null);
+    const cursor = commandQuery.tokenStart + command.name.length + 2;
+    window.requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(cursor, cursor); });
+  }
+
+  function applyMuteDuration(preset: { label: string; token: string | null }): void {
+    if (preset.token) {
+      const next = `${draft} ${preset.token}`;
+      onDraft(next);
+      const cursor = next.length;
+      window.requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(cursor, cursor); });
+      return;
+    }
+    // «Навсегда»: черновик не меняется, закрываем попап — Enter отправит бессрочный мут.
+    dismissMuteDurationPicker();
+    inputRef.current?.focus();
+  }
+
+  function handleAutocompleteKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (muteDurationOpen) {
+      if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+        event.preventDefault();
+        const next = (muteDurationIndexRef.current + 1) % muteDurationPresets.length;
+        muteDurationIndexRef.current = next;
+        setMuteDurationIndex(next);
+      }
+      else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+        event.preventDefault();
+        const next = (muteDurationIndexRef.current - 1 + muteDurationPresets.length) % muteDurationPresets.length;
+        muteDurationIndexRef.current = next;
+        setMuteDurationIndex(next);
+      }
+      else if (event.key === "Tab") {
+        const preset = muteDurationPresets[muteDurationIndexRef.current];
+        if (preset) { event.preventDefault(); applyMuteDuration(preset); }
+      }
+      else if (event.key === "Escape") { event.preventDefault(); dismissMuteDurationPicker(); }
+      // Enter не перехватываем: отправка формы = бессрочный мут.
+      return;
+    }
+    if (mentionOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        const next = (mentionIndexRef.current + 1) % suggestions.length;
+        mentionIndexRef.current = next;
+        setMentionIndex(next);
+      }
+      else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        const next = (mentionIndexRef.current - 1 + suggestions.length) % suggestions.length;
+        mentionIndexRef.current = next;
+        setMentionIndex(next);
+      }
+      else if (event.key === "Enter" || event.key === "Tab") {
+        const candidate = suggestions[mentionIndexRef.current];
+        if (candidate) { event.preventDefault(); applyMention(candidate); }
+      }
+      else if (event.key === "Escape") { event.preventDefault(); setMentionQuery(null); }
+      return;
+    }
+    if (!commandOpen) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const next = (commandIndexRef.current + 1) % commandMatches.length;
+      commandIndexRef.current = next;
+      setCommandIndex(next);
+    }
+    else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const next = (commandIndexRef.current - 1 + commandMatches.length) % commandMatches.length;
+      commandIndexRef.current = next;
+      setCommandIndex(next);
+    }
+    else if (event.key === "Enter" || event.key === "Tab") {
+      const command = commandMatches[commandIndexRef.current];
+      if (command) { event.preventDefault(); applyCommand(command); }
+    }
+    else if (event.key === "Escape") { event.preventDefault(); setCommandQuery(null); }
+  }
+
   function insertEmoji(emoji: string): void {
     const input = inputRef.current;
     const start = input?.selectionStart ?? draft.length;
@@ -1057,7 +1341,37 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
     const cursor = start + emoji.length;
     window.requestAnimationFrame(() => { input?.focus(); input?.setSelectionRange(cursor, cursor); });
   }
-  return <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 sm:px-5 sm:pb-5">{attachments.length ? <div className="mb-2 flex flex-wrap gap-2">{attachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-xl border border-white/8 bg-[#26282c] px-2.5 py-2 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={t.chat.remove(attachment.fileName)} onClick={() => onRemoveAttachment(attachment.id)} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-panel px-3 shadow-[0_1px_3px_rgba(0,0,0,.3)] focus-within:border-violet-400/40", disabled && "opacity-55")}><button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={disabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 place-items-center rounded-full bg-slate-500 text-[#26282c] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={disabled} value={draft} onChange={(event) => onDraft(event.target.value)} maxLength={4000} placeholder={disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" /><EmojiPicker disabled={disabled} onSelect={insertEmoji} /><button type="submit" disabled={disabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label={t.chat.send} className="rounded-lg p-2 text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30"><Send className="size-4" /></button></div></form>;
+  return <form onSubmit={onSubmit} className="relative shrink-0 px-3 pb-3 sm:px-5 sm:pb-5">{muteDurationOpen && <MuteDurationSuggestions presets={muteDurationPresets} activeIndex={muteDurationIndex} onSelect={applyMuteDuration} onHover={(index) => { muteDurationIndexRef.current = index; setMuteDurationIndex(index); }} />}{mentionOpen && <MentionSuggestions suggestions={suggestions} activeIndex={mentionIndex} onSelect={applyMention} onHover={(index) => { mentionIndexRef.current = index; setMentionIndex(index); }} />}{commandOpen && <CommandSuggestions commands={commandMatches} activeIndex={commandIndex} onSelect={applyCommand} onHover={(index) => { commandIndexRef.current = index; setCommandIndex(index); }} />}{attachments.length ? <div className="mb-2 flex flex-wrap gap-2">{attachments.map((attachment) => <span key={attachment.id} className="flex max-w-64 items-center gap-2 rounded-xl border border-white/8 bg-[#26282c] px-2.5 py-2 text-xs text-slate-300"><Paperclip className="size-3.5 shrink-0 text-violet-300" /><span className="truncate">{attachment.fileName}</span><button type="button" aria-label={t.chat.remove(attachment.fileName)} onClick={() => onRemoveAttachment(attachment.id)} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300"><X className="size-3.5" /></button></span>)}</div> : null}<div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-panel px-3 shadow-[0_1px_3px_rgba(0,0,0,.3)] focus-within:border-violet-400/40", composerDisabled && "opacity-55")}><button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 place-items-center rounded-full bg-slate-500 text-[#26282c] hover:bg-slate-300 disabled:opacity-40">{uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</button><input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={chatMuted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" /><EmojiPicker disabled={composerDisabled} onSelect={insertEmoji} /><button type="submit" disabled={composerDisabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label={t.chat.send} className="rounded-lg p-2 text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30"><Send className="size-4" /></button></div></form>;
+}
+
+function MuteDurationSuggestions({ presets, activeIndex, onSelect, onHover }: { presets: { label: string; token: string | null }[]; activeIndex: number; onSelect: (preset: { label: string; token: string | null }) => void; onHover: (index: number) => void }): React.ReactElement {
+  const { t } = useI18n();
+  return <div role="listbox" aria-label={t.chat.muteDuration} className="glass absolute bottom-[calc(100%+4px)] left-3 z-30 w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.5)] sm:left-5">
+    {presets.map((preset, index) => <button key={preset.label} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => onHover(index)} onClick={() => onSelect(preset)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition", index === activeIndex ? "bg-violet-400/10" : "hover:bg-white/[.04]")}>
+      <Clock className="size-3.5 shrink-0 text-violet-300/70" />
+      <span className="min-w-0 flex-1 truncate text-xs text-slate-300">{preset.label}</span>
+    </button>)}
+  </div>;
+}
+
+function CommandSuggestions({ commands, activeIndex, onSelect, onHover }: { commands: { name: string; description: string }[]; activeIndex: number; onSelect: (command: { name: string; description: string }) => void; onHover: (index: number) => void }): React.ReactElement {
+  const { t } = useI18n();
+  return <div role="listbox" aria-label={t.chat.commands} className="glass absolute bottom-[calc(100%+4px)] left-3 z-30 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.5)] sm:left-5">
+    {commands.map((command, index) => <button key={command.name} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => onHover(index)} onClick={() => onSelect(command)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition", index === activeIndex ? "bg-violet-400/10" : "hover:bg-white/[.04]")}>
+      <code className="shrink-0 rounded-md bg-white/[.05] px-1.5 py-0.5 text-[11px] font-semibold text-violet-200">/{command.name}</code>
+      <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{command.description}</span>
+    </button>)}
+  </div>;
+}
+
+function MentionSuggestions({ suggestions, activeIndex, onSelect, onHover }: { suggestions: MentionCandidate[]; activeIndex: number; onSelect: (candidate: MentionCandidate) => void; onHover: (index: number) => void }): React.ReactElement {
+  const { t } = useI18n();
+  return <div role="listbox" aria-label={t.chat.mentionUsers} className="glass absolute bottom-[calc(100%+4px)] left-3 z-30 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.5)] sm:left-5">
+    {suggestions.map((candidate, index) => <button key={candidate.id} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => onHover(index)} onClick={() => onSelect(candidate)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition", index === activeIndex ? "bg-violet-400/10" : "hover:bg-white/[.04]")}>
+      <Avatar name={candidate.displayName} image={candidate.avatar} color={candidate.color} size="sm" status={candidate.status} />
+      <span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold text-slate-200">{candidate.displayName}</span><span className="block truncate text-[10px] text-slate-500">{candidate.username ? `@${candidate.username}${candidate.discriminator ? `#${candidate.discriminator}` : ""}` : t.chat.mentionCandidate}{candidate.fingerprint ? ` · ${candidate.fingerprint.slice(0, 4)}…` : ""}</span></span>
+    </button>)}
+  </div>;
 }
 
 export function AttachmentView({ attachment, previewAvailable = true, onDownload, onPreview }: { attachment: Attachment; previewAvailable?: boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string> }): React.ReactElement {
@@ -1156,20 +1470,32 @@ function MemberList({ server, profile, access, onSetRole, onKickMember }: { serv
   const { t } = useI18n();
   const members: MockMember[] = useMemo(() => server.address
     ? server.members.map((member) => member.id === access?.id ? { ...member, role: t.roles.youWith(member.role) } : member)
-    : [{ id: profile.id, displayName: profile.displayName, role: t.roles.you, status: visibleProfileStatus(profile.status), avatarColor: "#4d6bfe", avatar: profile.avatar }, ...server.members], [access?.id, profile, server, t]);
-  return <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#1d1f23] px-3 py-5"><h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">{t.chat.members} — {members.length}</h3><div className="space-y-1">{members.map((member) => {
-    const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
-    const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
-    const canKick = canKickServerMember(access?.permissions.includes("KICK_MEMBERS") === true, access?.role, member.serverRole, access?.id ?? profile.id, member.id);
-    return <div key={member.id} className="group flex w-full items-center rounded-lg hover:bg-white/[.045]">
-      <ProfilePreview side="left" wrapperClassName="min-w-0 flex-1" triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2" profile={{ displayName: member.displayName, avatar, banner: member.banner ?? (isCurrentUser ? profile.banner : undefined), color: member.avatarColor, status: member.status, role: member.role, bio: member.bio ?? (isCurrentUser ? profile.bio : undefined), isCurrentUser }}>
-        <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
-        <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}><span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">{member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}{member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}{member.displayName}</span><span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span></span>
-      </ProfilePreview>
-      {access?.permissions.includes("MANAGE_ROLES") && member.id !== access.id && member.serverRole !== "owner" && <button title={member.serverRole === "administrator" ? t.members.removeAdmin : t.members.makeAdmin} aria-label={`${member.serverRole === "administrator" ? t.members.removeAdmin : t.members.makeAdmin}: ${member.displayName}`} onClick={() => onSetRole(member.id, member.serverRole === "administrator" ? "member" : "administrator")} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-violet-400/10 hover:text-violet-300 group-hover:opacity-100 focus:opacity-100"><UserCog className="size-3.5" /></button>}
-      {canKick && <button title={t.members.kick} aria-label={t.members.kickOf(member.displayName)} onClick={() => onKickMember(member.id)} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-red-400/10 hover:text-red-300 group-hover:opacity-100 focus:opacity-100"><UserMinus className="size-3.5" /></button>}
-    </div>;
-  })}</div></aside>;
+    : [{ id: profile.id, displayName: profile.displayName, role: t.roles.you, serverRole: "owner" as const, status: visibleProfileStatus(profile.status), avatarColor: "#4d6bfe", avatar: profile.avatar }, ...server.members], [access?.id, profile, server, t]);
+  const groups = useMemo(() => {
+    const roleOrder = { owner: 0, administrator: 1, member: 2 } as const;
+    const sorted = [...members].sort((left, right) => roleOrder[left.serverRole ?? "member"] - roleOrder[right.serverRole ?? "member"] || left.displayName.localeCompare(right.displayName));
+    return ([
+      { key: "owner", label: t.roles.owner },
+      { key: "administrator", label: t.roles.adminsGroup },
+      { key: "member", label: t.roles.membersGroup },
+    ] as const).map((group) => ({ ...group, items: sorted.filter((member) => (member.serverRole ?? "member") === group.key) })).filter((group) => group.items.length > 0);
+  }, [members, t]);
+  return <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#1d1f23] px-3 py-5"><h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">{t.chat.members} — {members.length}</h3>{groups.map((group) => <section key={group.key} className="mb-3">
+    <h4 className="mb-1 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">{group.label} — {group.items.length}</h4>
+    <div className="space-y-1">{group.items.map((member) => {
+      const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
+      const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
+      const canKick = canKickServerMember(access?.permissions.includes("KICK_MEMBERS") === true, access?.role, member.serverRole, access?.id ?? profile.id, member.id);
+      return <div key={member.id} className="group flex w-full items-center rounded-lg hover:bg-white/[.045]">
+        <ProfilePreview side="left" wrapperClassName="min-w-0 flex-1" triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2" profile={{ displayName: member.displayName, username: member.username ?? (isCurrentUser ? profile.username : undefined), discriminator: member.discriminator ?? (isCurrentUser ? profile.discriminator : undefined), fingerprint: member.fingerprint, avatar, banner: member.banner ?? (isCurrentUser ? profile.banner : undefined), color: member.avatarColor, status: member.status, role: member.role, bio: member.bio ?? (isCurrentUser ? profile.bio : undefined), isCurrentUser }}>
+          <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
+          <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}><span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">{member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}{member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}{member.displayName}{isChatMutedNow(member) && <MessageCircleOff aria-label={t.members.chatMuted} className="size-3 shrink-0 text-red-300" />}</span><span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span></span>
+        </ProfilePreview>
+        {access?.permissions.includes("MANAGE_ROLES") && member.id !== access.id && member.serverRole !== "owner" && <button title={member.serverRole === "administrator" ? t.members.removeAdmin : t.members.makeAdmin} aria-label={`${member.serverRole === "administrator" ? t.members.removeAdmin : t.members.makeAdmin}: ${member.displayName}`} onClick={() => onSetRole(member.id, member.serverRole === "administrator" ? "member" : "administrator")} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-violet-400/10 hover:text-violet-300 group-hover:opacity-100 focus:opacity-100"><UserCog className="size-3.5" /></button>}
+        {canKick && <button title={t.members.kick} aria-label={t.members.kickOf(member.displayName)} onClick={() => onKickMember(member.id)} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-red-400/10 hover:text-red-300 group-hover:opacity-100 focus:opacity-100"><UserMinus className="size-3.5" /></button>}
+      </div>;
+    })}</div>
+  </section>)}</aside>;
 }
 
 function formatAttachmentLimit(maxAttachmentBytes: number | null, t: Dictionary): string {
@@ -1203,7 +1529,7 @@ function searchLocalMessages(messages: MockMessage[], filters: MessageSearchFilt
   }).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const page = filtered.slice(filters.offset, filters.offset + filters.limit);
   return {
-    messages: page.map((message) => ({ id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar ?? null, content: message.content, createdAt: message.createdAt, editedAt: message.editedAt ?? null, attachments: message.attachments ?? [] })),
+    messages: page.map((message) => ({ id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar ?? null, content: message.content, createdAt: message.createdAt, editedAt: message.editedAt ?? null, attachments: message.attachments ?? [], mentions: (message.mentions ?? []).map((userId) => ({ userId })), kind: "chat" as const, targetUserId: null, anonymous: false })),
     total: filtered.length,
     offset: filters.offset,
     hasMore: filters.offset + page.length < filtered.length,
@@ -1219,7 +1545,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
   const channels = snapshot.channels.map((channel) => ({ ...channel, serverId: targetId }));
   const currentChannelIds = new Set(channels.map((channel) => channel.id));
   const removedChannelIds = new Set(previousServer?.channels.filter((channel) => !currentChannelIds.has(channel.id)).map((channel) => channel.id) ?? []);
-  const members = snapshot.members.map((member) => ({ id: member.id, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner }));
+  const members = snapshot.members.map((member) => ({ id: member.id, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner, chatMuted: member.chatMuted, chatMutedUntil: member.chatMutedUntil }));
   return {
     ...current,
     servers: current.servers.map((server) => server.id === targetId ? { ...server, name: snapshot.name, avatar: snapshot.avatar, maxAttachmentBytes: snapshot.maxAttachmentBytes, screenShareMaxResolution: snapshot.screenShareMaxResolution, screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate, channels, members, ...(server.deployment ? { deployment: { ...server.deployment, serverName: snapshot.name } } : {}) } : server),
@@ -1285,7 +1611,7 @@ function roleLabel(role: MemberRole): string {
 }
 
 function toLocalMessage(message: import("@opencord/shared").ChatMessage): MockMessage {
-  return { id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar, authorColor: colorFromId(message.authorId), content: message.content, createdAt: message.createdAt, editedAt: message.editedAt, attachments: message.attachments };
+  return { id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar, authorColor: colorFromId(message.authorId), content: message.content, createdAt: message.createdAt, editedAt: message.editedAt, attachments: message.attachments, mentions: message.mentions.map((mention) => mention.userId), kind: message.kind, targetUserId: message.targetUserId, anonymous: message.anonymous };
 }
 
 function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {

@@ -29,7 +29,7 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[]): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[]): boolean; deleteMessage(messageId: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -198,17 +198,31 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     };
   }, [connectionKey, endpoint]);
 
-  const sendMessage = useCallback((channelId: string, content: string, attachmentIds: string[] = []): boolean => {
+  const sendMessage = useCallback((channelId: string, content: string, attachmentIds: string[] = [], mentions: string[] = []): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
-    sendEvent(socket, { type: "chat.send", requestId: crypto.randomUUID(), channelId, content, attachmentIds });
+    sendEvent(socket, { type: "chat.send", requestId: crypto.randomUUID(), channelId, content, attachmentIds, mentions });
     return true;
   }, [status]);
 
-  const updateMessage = useCallback((messageId: string, content: string, attachmentIds: string[] = []): boolean => {
+  const sendPrivateMessage = useCallback((kind: "pm" | "apm", channelId: string, content: string, targetUserId: string): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
-    sendEvent(socket, { type: "message.update", requestId: crypto.randomUUID(), messageId, content, attachmentIds });
+    sendEvent(socket, { type: kind === "pm" ? "chat.pm" : "chat.apm", requestId: crypto.randomUUID(), channelId, content, targetUserId });
+    return true;
+  }, [status]);
+
+  const setChatMuted = useCallback((userId: string, muted: boolean, durationMinutes: number | null = null): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "chat.mute.set", requestId: crypto.randomUUID(), userId, muted, durationMinutes });
+    return true;
+  }, [status]);
+
+  const updateMessage = useCallback((messageId: string, content: string, attachmentIds: string[] = [], mentions: string[] = []): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "message.update", requestId: crypto.randomUUID(), messageId, content, attachmentIds, mentions });
     return true;
   }, [status]);
 
@@ -332,7 +346,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sessionToken, sendMessage, updateMessage, deleteMessage, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
+  return { status, sessionToken, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {
@@ -348,7 +362,9 @@ async function authenticate(socket: WebSocket, requestId: string, challenge: str
     protocolVersion: PROTOCOL_VERSION,
     publicKey: publicIdentity.publicKey,
     signature,
-    profile: { displayName: profile.displayName, bio: profile.bio, avatar: parsedAvatar.success ? parsedAvatar.data : null, banner: parsedBanner.success ? parsedBanner.data : null, status: profile.status ?? "online" },
+    // Дискриминатор берётся из идентичности (генерируется вместе с ключами),
+    // username — из локального профиля (редактируется в диалоге профиля).
+    profile: { username: profile.username, discriminator: publicIdentity.discriminator, displayName: profile.displayName, bio: profile.bio, avatar: parsedAvatar.success ? parsedAvatar.data : null, banner: parsedBanner.success ? parsedBanner.data : null, status: profile.status ?? "online" },
   });
 }
 
