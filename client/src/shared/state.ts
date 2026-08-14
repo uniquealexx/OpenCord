@@ -66,11 +66,13 @@ export const mockMessageSchema = z.object({
   if (!message.content && !message.attachments?.length) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
 
+export const UI_SCALE_OPTIONS = [0.9, 1, 1.1, 1.2] as const;
 export const clientPreferencesSchema = z.object({
   language: z.enum(LANGUAGES).default(DEFAULT_LANGUAGE),
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
   notifications: z.boolean(),
+  uiScale: z.number().min(0.8).max(1.4).default(1),
   voiceInputMode: z.enum(["voice", "push-to-talk"]),
   voiceInputDeviceId: z.string().max(500).nullable(),
   voiceOutputDeviceId: z.string().max(500).nullable(),
@@ -127,7 +129,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { language: DEFAULT_LANGUAGE, compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
+    preferences: { language: DEFAULT_LANGUAGE, compactMode: false, showMemberList: true, notifications: true, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
   };
 }
 

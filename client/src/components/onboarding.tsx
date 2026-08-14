@@ -22,13 +22,13 @@ export function Onboarding({ language, onLanguageChange, onComplete }: { languag
   }
 
   return (
-    <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-4 sm:p-8">
-      <div role="group" aria-label={t.onboarding.language} className="absolute right-3 top-3 flex items-center gap-1 rounded-xl border border-white/8 bg-white/[.04] p-1 sm:right-5 sm:top-5">
+    <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-4 sm:p-8 max-sm:block max-sm:overflow-y-auto">
+      <div role="group" aria-label={t.onboarding.language} className="mb-4 grid w-full grid-cols-3 gap-1 rounded-xl border border-white/8 bg-white/[.04] p-1 sm:absolute sm:right-5 sm:top-5 sm:mb-0 sm:flex sm:w-auto sm:items-center">
         {LANGUAGES.map((option) => (
-          <button key={option} type="button" aria-pressed={language === option} onClick={() => onLanguageChange(option)} className={cn("rounded-lg px-2.5 py-1.5 text-xs font-semibold transition sm:px-3", language === option ? "bg-violet-500 text-white" : "text-slate-500 hover:text-slate-200")}>{LANGUAGE_LABELS[option]}</button>
+          <button key={option} type="button" aria-pressed={language === option} onClick={() => onLanguageChange(option)} className={cn("rounded-lg px-2.5 py-2 text-center text-xs font-semibold transition sm:px-3 sm:py-1.5", language === option ? "bg-violet-500 text-white" : "text-slate-500 hover:text-slate-200")}>{LANGUAGE_LABELS[option]}</button>
         ))}
       </div>
-      <section className="glass relative grid w-full max-w-5xl overflow-hidden rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,.45)] lg:grid-cols-[1.05fr_.95fr] max-sm:bg-transparent max-sm:shadow-none">
+      <section className="glass relative w-full max-w-5xl overflow-hidden rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,.45)] lg:grid-cols-[1.05fr_.95fr] max-sm:bg-transparent max-sm:shadow-none sm:grid">
         <div className="relative hidden min-h-[610px] overflow-hidden border-r border-white/10 p-12 lg:flex lg:flex-col lg:justify-between">
           <div className="relative"><div className="mb-6 grid size-14 place-items-center rounded-xl bg-primary text-2xl font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)]">O</div><p className="max-w-sm text-4xl font-bold leading-tight tracking-[-.04em] text-white">{t.onboarding.hero}</p></div>
           <div className="relative grid gap-3 text-sm text-slate-400"><Feature icon={<LockKeyhole />} text={t.onboarding.featureProfile} /><Feature icon={<Sparkles />} text={t.onboarding.featureOpen} /></div>

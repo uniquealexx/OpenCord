@@ -298,6 +298,8 @@ export const en = {
     compactHint: "Reduces vertical spacing in the history",
     members: "Show member list",
     notifications: "Local notifications",
+    uiScale: "Interface scale",
+    uiScaleHint: "Scales the whole interface on phones. Applied immediately.",
     voice: "Voice",
     voiceActivation: "Voice activation",
     pushToTalk: "Push-to-Talk (V)",

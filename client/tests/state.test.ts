@@ -36,6 +36,17 @@ describe("persisted client state", () => {
     expect(restored.preferences).toMatchObject({ automaticInputSensitivity: false, manualInputSensitivityDb: -37 });
   });
 
+  it("adds the default interface scale to older states and persists a chosen scale", () => {
+    const state = createDefaultState();
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.uiScale;
+    const upgraded = parsePersistedState({ ...state, preferences: olderPreferences });
+    expect(upgraded.preferences.uiScale).toBe(1);
+
+    const restored = parsePersistedState({ ...state, preferences: { ...state.preferences, uiScale: 1.2 } });
+    expect(restored.preferences.uiScale).toBe(1.2);
+  });
+
   it("persists a selected user status and accepts profiles saved before statuses existed", () => {
     const state = createDefaultState();
     const profile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };

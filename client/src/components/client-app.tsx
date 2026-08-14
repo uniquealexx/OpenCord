@@ -184,6 +184,28 @@ export function ClientApp(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Мобильная оболочка: при входе запрашиваем доступ к микрофону (системный диалог
+  // Android), пока пользователь его не предоставит. Без разрешения запрос повторяется
+  // при следующем запуске; поток немедленно останавливается, голос это не затрагивает.
+  useEffect(() => {
+    if (!isMobilePlatform()) return;
+    try { if (localStorage.getItem("opencord.mic-permission-granted")) return; } catch { /* хранилище недоступно — просто запросим */ }
+    const media = navigator.mediaDevices;
+    if (!media?.getUserMedia) return;
+    void media.getUserMedia({ audio: true }).then((stream) => {
+      for (const track of stream.getTracks()) track.stop();
+      try { localStorage.setItem("opencord.mic-permission-granted", "1"); } catch { /* ignore */ }
+    }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Мобильная оболочка: масштаб интерфейса из настроек применяется к корню документа,
+  // поэтому масштабируются и порталы (диалоги). На десктопе зум не трогаем.
+  useEffect(() => {
+    const scale = isMobilePlatform() ? state?.preferences.uiScale ?? 1 : 1;
+    document.documentElement.style.zoom = scale === 1 ? "" : String(scale);
+  }, [state?.preferences.uiScale]);
+
   useEffect(() => {
     const language = state?.preferences.language;
     if (language) setActiveLanguage(language);

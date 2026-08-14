@@ -299,6 +299,8 @@ export const zh = {
     compactHint: "减少消息历史中的垂直间距",
     members: "显示成员列表",
     notifications: "本地通知",
+    uiScale: "界面缩放",
+    uiScaleHint: "在手机上缩放整个界面。立即生效。",
     voice: "语音",
     voiceActivation: "语音激活",
     pushToTalk: "按键说话 (V)",

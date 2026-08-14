@@ -299,6 +299,8 @@ export const ru = {
     compactHint: "Уменьшает вертикальные отступы в истории",
     members: "Показывать участников",
     notifications: "Локальные уведомления",
+    uiScale: "Масштаб интерфейса",
+    uiScaleHint: "Изменяет масштаб всего интерфейса на телефоне. Применяется сразу.",
     voice: "Голос",
     voiceActivation: "Активация голосом",
     pushToTalk: "Push-to-Talk (V)",
