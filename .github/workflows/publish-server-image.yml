@@ -372,7 +372,7 @@ jobs:
             --pattern "opencord-server-${version}.tar.gz.sha256" \
             --pattern "release-manifest.json" \
             --dir "server-release" --clobber
-          assets=(server-release/opencord-server-${version}.tar.gz server-release/opencord-server-${version}.tar.gz.sha256 server-release/release-manifest.json deploy/scripts/bootstrap.sh)
+          assets=("server-release/opencord-server-${version}.tar.gz" "server-release/opencord-server-${version}.tar.gz.sha256" "server-release/release-manifest.json" "deploy/scripts/bootstrap.sh")
           if gh release view "${server_tag}" >/dev/null 2>&1; then
             gh release upload "${server_tag}" "${assets[@]}" --clobber
             gh release edit "${server_tag}" --title "${server_title}"

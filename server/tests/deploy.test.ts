@@ -57,10 +57,17 @@ describe("production deployment", () => {
     expect(workflow).toContain("release-input/release-manifest.json");
     expect(workflow).toContain("--draft=false");
     expect(workflow).toContain("Publish separate server release");
-    expect(workflow).toContain('$serverTag = "server-v$version"');
+    expect(workflow).toContain('server_tag="server-v${version}"');
     expect(workflow).toContain('"deploy/scripts/bootstrap.sh"');
     expect(workflow).toContain("release/release-manifest.json");
     expect(workflow).toContain("gh release create");
+    expect(workflow).toContain("publish-client-linux");
+    expect(workflow).toContain("publish-client-macos");
+    expect(workflow).toContain("finalize-release");
+    expect(workflow).toContain("latest-linux.yml");
+    expect(workflow).toContain("latest-mac.yml");
+    expect(workflow).toContain("pnpm package:linux");
+    expect(workflow).toContain("pnpm package:mac");
     expect(workflow).not.toMatch(/uses:\s+[^\s]+@(main|master|v\d+)\s*$/mu);
   });
 
