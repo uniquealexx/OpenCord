@@ -70,6 +70,12 @@ input[type="range"] { accent-color: #4d6bfe; }
 button, a { touch-action: manipulation; }
 * { -webkit-tap-highlight-color: transparent; }
 
+/* На мобильных WebView авто-зумирует поля с font-size < 16px при фокусе.
+   16px на узких экранах также удобнее для попадания пальцем. */
+@media (max-width: 639px) {
+  input, textarea, select { font-size: 16px !important; }
+}
+
 .titlebar-drag { -webkit-app-region: drag; }
 .titlebar-no-drag, .titlebar-no-drag * { -webkit-app-region: no-drag; }
 .scrollbar-none { scrollbar-width: none; }

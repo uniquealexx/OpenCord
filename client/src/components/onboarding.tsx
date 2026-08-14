@@ -22,20 +22,20 @@ export function Onboarding({ language, onLanguageChange, onComplete }: { languag
   }
 
   return (
-    <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-8">
-      <div role="group" aria-label={t.onboarding.language} className="absolute right-5 top-5 flex items-center gap-1 rounded-xl border border-white/8 bg-white/[.04] p-1">
+    <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-4 sm:p-8">
+      <div role="group" aria-label={t.onboarding.language} className="absolute right-3 top-3 flex items-center gap-1 rounded-xl border border-white/8 bg-white/[.04] p-1 sm:right-5 sm:top-5">
         {LANGUAGES.map((option) => (
-          <button key={option} type="button" aria-pressed={language === option} onClick={() => onLanguageChange(option)} className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition", language === option ? "bg-violet-500 text-white" : "text-slate-500 hover:text-slate-200")}>{LANGUAGE_LABELS[option]}</button>
+          <button key={option} type="button" aria-pressed={language === option} onClick={() => onLanguageChange(option)} className={cn("rounded-lg px-2.5 py-1.5 text-xs font-semibold transition sm:px-3", language === option ? "bg-violet-500 text-white" : "text-slate-500 hover:text-slate-200")}>{LANGUAGE_LABELS[option]}</button>
         ))}
       </div>
-      <section className="glass relative grid w-full max-w-5xl overflow-hidden rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,.45)] lg:grid-cols-[1.05fr_.95fr]">
+      <section className="glass relative grid w-full max-w-5xl overflow-hidden rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,.45)] lg:grid-cols-[1.05fr_.95fr] max-sm:bg-transparent max-sm:shadow-none">
         <div className="relative hidden min-h-[610px] overflow-hidden border-r border-white/10 p-12 lg:flex lg:flex-col lg:justify-between">
           <div className="relative"><div className="mb-6 grid size-14 place-items-center rounded-xl bg-primary text-2xl font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)]">O</div><p className="max-w-sm text-4xl font-bold leading-tight tracking-[-.04em] text-white">{t.onboarding.hero}</p></div>
           <div className="relative grid gap-3 text-sm text-slate-400"><Feature icon={<LockKeyhole />} text={t.onboarding.featureProfile} /><Feature icon={<Sparkles />} text={t.onboarding.featureOpen} /></div>
         </div>
-        <form onSubmit={submit} className="flex flex-col justify-center p-8 sm:p-12">
+        <form onSubmit={submit} className="flex flex-col justify-center p-5 sm:p-12">
           <p className="mb-3 text-xs font-bold uppercase tracking-[.2em] text-violet-300">{t.onboarding.eyebrow}</p>
-          <h1 className="text-3xl font-bold tracking-tight text-white">{t.onboarding.title}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{t.onboarding.title}</h1>
           <p className="mt-3 text-sm leading-6 text-slate-400">{t.onboarding.description}</p>
           <div className="mt-8 space-y-5">
             <label className="grid gap-2 text-sm font-medium text-slate-300">{t.onboarding.name}<Input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder={t.onboarding.namePlaceholder} maxLength={32} /></label>
