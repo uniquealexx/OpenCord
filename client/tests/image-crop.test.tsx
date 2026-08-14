@@ -18,14 +18,14 @@ describe("image crop", () => {
   });
 
   it("rejects unsupported and oversized crop sources before decoding", () => {
-    expect(() => validateCropSource(new File(["svg"], "image.svg", { type: "image/svg+xml" }))).toThrow("PNG, JPEG и WebP");
-    expect(() => validateCropSource({ type: "image/png", size: 21 * 1024 * 1024 } as Blob)).toThrow("меньше 20 МБ");
+    expect(() => validateCropSource(new File(["svg"], "image.svg", { type: "image/svg+xml" }))).toThrow("PNG, JPEG and WebP are supported");
+    expect(() => validateCropSource({ type: "image/png", size: 21 * 1024 * 1024 } as Blob)).toThrow("under 20 MB");
   });
 
   it("converts an installed data URL back into a crop source", () => {
     const file = imageDataUrlToFile("data:image/webp;base64,QUJD", "current.webp");
     expect(file).toMatchObject({ name: "current.webp", type: "image/webp", size: 3 });
-    expect(() => imageDataUrlToFile("https://example.test/avatar.webp", "current.webp")).toThrow("установленное изображение");
+    expect(() => imageDataUrlToFile("https://example.test/avatar.webp", "current.webp")).toThrow("Could not read the saved image");
   });
 
   it("returns the selected zoom from the crop dialog", async () => {

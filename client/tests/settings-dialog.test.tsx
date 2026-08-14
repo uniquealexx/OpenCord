@@ -158,4 +158,18 @@ describe("SettingsDialog microphone test", () => {
     expect(screen.getByTestId("mic-level-threshold").style.left).toBe("50%");
     expect(screen.getByTestId("mic-level-fill").style.width).toBe("0%");
   });
+
+  it("copies the public key for manual server installation", async () => {
+    const writeText = vi.fn(async () => undefined);
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+      await user.click(await screen.findByRole("button", { name: "Скопировать публичный ключ" }));
+      expect(writeText).toHaveBeenCalledWith("public-key");
+      expect(await screen.findByText("Скопировано")).toBeInTheDocument();
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
 });

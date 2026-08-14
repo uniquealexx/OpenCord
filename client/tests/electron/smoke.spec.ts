@@ -5,6 +5,7 @@ import path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
 
 test("packaged renderer exposes only the typed OpenCord bridge", async () => {
+  test.setTimeout(60_000);
   const userData = await mkdtemp(path.join(tmpdir(), "opencord-electron-test-"));
   const serverData = await mkdtemp(path.join(tmpdir(), "opencord-server-test-"));
   const port = 33210;
@@ -26,7 +27,8 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   }));
   expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "screenShare", "server", "storage", "updates", "window"], hasNodeRequire: false });
 
-  const onboardingName = page.getByPlaceholder("Отображаемое имя");
+  // Свежая установка стартует на английском языке.
+  const onboardingName = page.getByPlaceholder("Display name");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);
   if (!(await onboardingName.isVisible())) {
     const diagnostics = await page.evaluate(() => ({ href: location.href, scripts: [...document.scripts].map((script) => script.src), readyState: document.readyState }));
@@ -34,8 +36,21 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   }
   await expect(onboardingName).toBeVisible();
   await page.screenshot({ path: "test-results/onboarding.png" });
-  await onboardingName.fill("Лина");
+  // Выбор языка на экране первого запуска: переключаемся на русский до создания профиля.
+  await page.getByRole("button", { name: "Русский" }).click();
+  const russianOnboardingName = page.getByPlaceholder("Отображаемое имя");
+  await expect(russianOnboardingName).toBeVisible();
+  await russianOnboardingName.fill("Лина");
   await page.getByRole("button", { name: "Создать локальный профиль" }).click();
+  await expect(page.getByRole("heading", { name: "Главный экран" })).toBeVisible();
+  // Кнопка настроек доступна и на главном экране.
+  await page.getByTitle("Настройки").click();
+  await expect(page.getByRole("heading", { name: "Настройки" })).toBeVisible();
+  await page.getByRole("button", { name: "中文" }).click();
+  await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
+  await page.getByRole("button", { name: "Русский" }).click();
+  await expect(page.getByRole("heading", { name: "Настройки" })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Главный экран" })).toBeVisible();
   await page.getByTitle("Подключиться").click();
   await page.getByLabel("Адрес сервера").fill(`http://127.0.0.1:${port}`);

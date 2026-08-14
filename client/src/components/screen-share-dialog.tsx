@@ -9,6 +9,7 @@ import type { ScreenShareSource } from "@/shared/screen-share";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 
 const resolutions: Record<ScreenShareResolution, { width: number; height: number }> = {
   480: { width: 854, height: 480 },
@@ -24,8 +25,8 @@ const bitrates: Record<ScreenShareResolution, Record<ScreenShareFrameRate, numbe
   1440: { 15: 5_000_000, 30: 10_000_000, 60: 16_000_000 },
 };
 
-export function screenShareResolutionLabel(resolution: ScreenShareResolution): string {
-  return resolution === 1440 ? "Источник" : `${resolution}p`;
+export function screenShareResolutionLabel(resolution: ScreenShareResolution, t?: Dictionary): string {
+  return resolution === 1440 ? (t ?? currentDictionary()).screenShare.source : `${resolution}p`;
 }
 
 export const SCREEN_SHARE_SURFACE_CLASS_NAME = "relative grid min-h-0 w-full place-items-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl fullscreen:h-screen fullscreen:w-screen fullscreen:max-h-none fullscreen:rounded-none fullscreen:border-0";
@@ -48,6 +49,7 @@ export function screenShareSettings(resolution: ScreenShareResolution, frameRate
 }
 
 export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, maxFrameRate = DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, onOpenChange, onStart }: { open: boolean; maxResolution?: ScreenShareResolution; maxFrameRate?: ScreenShareFrameRate; onOpenChange: (open: boolean) => void; onStart: (settings: ScreenShareSettings) => Promise<void> }): React.ReactElement {
+  const { t } = useI18n();
   const [sources, setSources] = useState<ScreenShareSource[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [resolution, setResolution] = useState<ScreenShareResolution>(720);
@@ -72,7 +74,7 @@ export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_M
       const bridge = window.openCord?.screenShare;
       if (!bridge) {
         setLoading(false);
-        setError("Выбор экрана доступен только в приложении OpenCord для Windows");
+        setError(currentDictionary().screenShare.desktopOnly);
         return;
       }
       try {
@@ -81,7 +83,7 @@ export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_M
         setSources(nextSources);
         setSelectedId((current) => nextSources.some((source) => source.id === current) ? current : nextSources[0]?.id ?? null);
       } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Не удалось получить список экранов и окон");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : currentDictionary().screenShare.listFailed);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -100,17 +102,17 @@ export function ScreenShareDialog({ open, maxResolution = DEFAULT_SCREEN_SHARE_M
       await onStart(selectedSettings);
       onOpenChange(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Не удалось запустить демонстрацию экрана");
+      setError(reason instanceof Error ? reason.message : t.screenShare.startFailed);
     } finally { setStarting(false); }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-4xl"><DialogHeader><div className="mb-2 grid size-11 place-items-center rounded-2xl bg-cyan-400/10 text-cyan-300"><MonitorUp className="size-5" /></div><DialogTitle>Демонстрация экрана</DialogTitle><DialogDescription>Выберите экран или приложение, затем настройте качество трансляции.</DialogDescription></DialogHeader>
-    {loading ? <div className="grid min-h-52 place-items-center text-sm text-slate-500"><LoaderCircle className="mb-2 size-6 animate-spin text-violet-300" />Получаем доступные окна…</div> : <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
-      <section><div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Что показать</h3><span className="text-[10px] text-slate-600">{sources.length} источников</span></div><div className="scrollbar-thin grid max-h-[360px] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">{sources.map((source) => <button key={source.id} type="button" onClick={() => setSelectedId(source.id)} className={cn("group overflow-hidden rounded-2xl border bg-black/20 p-1.5 text-left transition", selectedId === source.id ? "border-violet-400/70 ring-2 ring-violet-400/20" : "border-white/8 hover:border-white/20")}><div className="relative aspect-video overflow-hidden rounded-xl bg-[#191b1e]"><Image unoptimized fill sizes="240px" src={source.thumbnail} alt="" className="object-cover" /></div><div className="flex items-center gap-2 px-1.5 pb-1 pt-2">{source.appIcon ? <Image unoptimized width={16} height={16} src={source.appIcon} alt="" className="size-4 rounded" /> : source.kind === "screen" ? <MonitorUp className="size-4 text-cyan-300" /> : <Square className="size-4 text-violet-300" />}<span className="min-w-0 truncate text-xs font-medium text-slate-300">{source.name}</span></div></button>)}</div>{!sources.length && !error && <p className="rounded-2xl border border-white/8 bg-black/15 p-5 text-sm text-slate-500">Не найдено доступных экранов или окон.</p>}</section>
-      <aside className="space-y-4 rounded-xl border border-white/10 bg-white/[.03] p-4"><OptionGroup label="Качество" values={availableResolutions} value={selectedResolution} format={(value) => screenShareResolutionLabel(value as ScreenShareResolution)} onChange={(value) => setResolution(value as ScreenShareResolution)} /><OptionGroup label="Кадров в секунду" values={availableFrameRates} value={selectedFrameRate} format={String} onChange={(value) => { const next = value as ScreenShareFrameRate; setFrameRate(next); if (next === 60) setContentHint("motion"); }} /><div><p className="mb-2 text-xs font-semibold text-slate-400">Содержимое</p><div className="grid grid-cols-2 gap-1 rounded-lg bg-white/[.04] p-1"><button type="button" onClick={() => setContentHint("detail")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "detail" ? "bg-violet-500 text-white" : "text-slate-500")}>Текст</button><button type="button" onClick={() => setContentHint("motion")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "motion" ? "bg-violet-500 text-white" : "text-slate-500")}>Движение</button></div></div><label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/8 bg-white/[.025] p-3 text-xs text-slate-300"><input type="checkbox" checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} className="size-4 accent-violet-500" /><Volume2 className="size-4 text-cyan-300" /><span>Системный звук</span></label><div className="rounded-xl bg-violet-400/[.06] p-3 text-[11px] leading-5 text-violet-100/65"><strong className="block text-violet-200">{screenShareResolutionLabel(selectedResolution)} · {selectedFrameRate} FPS</strong>Кадр {selectedSettings.width}×{selectedSettings.height} · до {(selectedSettings.maxBitrate / 1_000_000).toFixed(1)} Мбит/с<span className="block">{contentHint === "motion" ? "Приоритет плавности" : "Приоритет чёткости"}</span><span className="mt-1 block text-[10px] text-slate-500">Лимит сервера: {screenShareResolutionLabel(maxResolution)} · {maxFrameRate} FPS</span></div></aside>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-4xl"><DialogHeader><div className="mb-2 grid size-11 place-items-center rounded-2xl bg-cyan-400/10 text-cyan-300"><MonitorUp className="size-5" /></div><DialogTitle>{t.screenShare.title}</DialogTitle><DialogDescription>{t.screenShare.description}</DialogDescription></DialogHeader>
+    {loading ? <div className="grid min-h-52 place-items-center text-sm text-slate-500"><LoaderCircle className="mb-2 size-6 animate-spin text-violet-300" />{t.screenShare.loadingSources}</div> : <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
+      <section><div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">{t.screenShare.chooseWhat}</h3><span className="text-[10px] text-slate-600">{t.screenShare.sourcesCount(sources.length)}</span></div><div className="scrollbar-thin grid max-h-[360px] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">{sources.map((source) => <button key={source.id} type="button" onClick={() => setSelectedId(source.id)} className={cn("group overflow-hidden rounded-2xl border bg-black/20 p-1.5 text-left transition", selectedId === source.id ? "border-violet-400/70 ring-2 ring-violet-400/20" : "border-white/8 hover:border-white/20")}><div className="relative aspect-video overflow-hidden rounded-xl bg-[#191b1e]"><Image unoptimized fill sizes="240px" src={source.thumbnail} alt="" className="object-cover" /></div><div className="flex items-center gap-2 px-1.5 pb-1 pt-2">{source.appIcon ? <Image unoptimized width={16} height={16} src={source.appIcon} alt="" className="size-4 rounded" /> : source.kind === "screen" ? <MonitorUp className="size-4 text-cyan-300" /> : <Square className="size-4 text-violet-300" />}<span className="min-w-0 truncate text-xs font-medium text-slate-300">{source.name}</span></div></button>)}</div>{!sources.length && !error && <p className="rounded-2xl border border-white/8 bg-black/15 p-5 text-sm text-slate-500">{t.screenShare.noSources}</p>}</section>
+      <aside className="space-y-4 rounded-xl border border-white/10 bg-white/[.03] p-4"><OptionGroup label={t.screenShare.quality} values={availableResolutions} value={selectedResolution} format={(value) => screenShareResolutionLabel(value as ScreenShareResolution, t)} onChange={(value) => setResolution(value as ScreenShareResolution)} /><OptionGroup label={t.screenShare.fps} values={availableFrameRates} value={selectedFrameRate} format={String} onChange={(value) => { const next = value as ScreenShareFrameRate; setFrameRate(next); if (next === 60) setContentHint("motion"); }} /><div><p className="mb-2 text-xs font-semibold text-slate-400">{t.screenShare.content}</p><div className="grid grid-cols-2 gap-1 rounded-lg bg-white/[.04] p-1"><button type="button" onClick={() => setContentHint("detail")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "detail" ? "bg-violet-500 text-white" : "text-slate-500")}>{t.screenShare.text}</button><button type="button" onClick={() => setContentHint("motion")} className={cn("rounded-lg px-2 py-2 text-[11px] font-semibold", contentHint === "motion" ? "bg-violet-500 text-white" : "text-slate-500")}>{t.screenShare.motion}</button></div></div><label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/8 bg-white/[.025] p-3 text-xs text-slate-300"><input type="checkbox" checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} className="size-4 accent-violet-500" /><Volume2 className="size-4 text-cyan-300" /><span>{t.screenShare.systemAudio}</span></label><div className="rounded-xl bg-violet-400/[.06] p-3 text-[11px] leading-5 text-violet-100/65"><strong className="block text-violet-200">{screenShareResolutionLabel(selectedResolution, t)} · {selectedFrameRate} FPS</strong>{t.screenShare.frame(selectedSettings.width, selectedSettings.height)} · {t.screenShare.bitrate((selectedSettings.maxBitrate / 1_000_000).toFixed(1))}<span className="block">{contentHint === "motion" ? t.screenShare.prioritySmoothness : t.screenShare.prioritySharpness}</span><span className="mt-1 block text-[10px] text-slate-500">{t.screenShare.serverLimit(screenShareResolutionLabel(maxResolution), maxFrameRate)}</span></div></aside>
     </div>}
     {error && <p role="alert" className="rounded-xl border border-red-400/20 bg-red-400/[.07] px-4 py-3 text-xs text-red-200">{error}</p>}
-    <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)}>Отмена</Button><Button onClick={() => void start()} disabled={!selected || loading || starting}>{starting ? <LoaderCircle className="size-4 animate-spin" /> : <ScreenShare className="size-4" />}Начать демонстрацию</Button></div>
+    <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)}>{t.screenShare.cancel}</Button><Button onClick={() => void start()} disabled={!selected || loading || starting}>{starting ? <LoaderCircle className="size-4 animate-spin" /> : <ScreenShare className="size-4" />}{t.screenShare.start}</Button></div>
   </DialogContent></Dialog>;
 }
 
@@ -119,6 +121,7 @@ function OptionGroup({ label, values, value, format, onChange }: { label: string
 }
 
 export function ScreenShareSurface({ stream, className, fullscreenControls }: { stream: ScreenShareStream; className?: string; fullscreenControls?: ReactNode }): React.ReactElement {
+  const { t } = useI18n();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -226,9 +229,10 @@ export function ScreenShareSurface({ stream, className, fullscreenControls }: { 
     if (document.fullscreenElement === surfaceRef.current) await document.exitFullscreen();
     else await surfaceRef.current?.requestFullscreen();
   }
-  return <div ref={surfaceRef} className={cn(SCREEN_SHARE_SURFACE_CLASS_NAME, className)}><video ref={attachVideo} autoPlay playsInline muted className="pointer-events-none absolute size-px opacity-0" /><canvas ref={attachCanvas} aria-label="Демонстрация экрана" className={SCREEN_SHARE_CANVAS_CLASS_NAME} />{fullscreen && fullscreenControls && <div data-testid="fullscreen-voice-controls" className="absolute inset-x-0 bottom-5 z-20 flex justify-center px-4">{fullscreenControls}</div>}<button type="button" aria-label={fullscreen ? "Выйти из полноэкранного режима" : "На весь экран"} onClick={() => void toggleFullscreen()} className={cn("absolute right-3 z-30 rounded-xl bg-black/60 p-2 text-white backdrop-blur transition hover:bg-black/80", fullscreen ? "top-3" : "bottom-3")} >{fullscreen ? <Minimize2 className="size-5" /> : <Maximize2 className="size-5" />}</button></div>;
+  return <div ref={surfaceRef} className={cn(SCREEN_SHARE_SURFACE_CLASS_NAME, className)}><video ref={attachVideo} autoPlay playsInline muted className="pointer-events-none absolute size-px opacity-0" /><canvas ref={attachCanvas} aria-label={t.screenShare.canvasAria} className={SCREEN_SHARE_CANVAS_CLASS_NAME} />{fullscreen && fullscreenControls && <div data-testid="fullscreen-voice-controls" className="absolute inset-x-0 bottom-5 z-20 flex justify-center px-4">{fullscreenControls}</div>}<button type="button" aria-label={fullscreen ? t.screenShare.exitFullscreen : t.screenShare.enterFullscreen} onClick={() => void toggleFullscreen()} className={cn("absolute right-3 z-30 rounded-xl bg-black/60 p-2 text-white backdrop-blur transition hover:bg-black/80", fullscreen ? "top-3" : "bottom-3")} >{fullscreen ? <Minimize2 className="size-5" /> : <Maximize2 className="size-5" />}</button></div>;
 }
 
 export function ScreenShareViewer({ stream, open, onOpenChange }: { stream?: ScreenShareStream; open: boolean; onOpenChange: (open: boolean) => void }): React.ReactElement {
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-6xl"><DialogHeader><DialogTitle>{stream?.local ? "Ваша демонстрация" : `Экран: ${stream?.participantName ?? "участник"}`}</DialogTitle><DialogDescription>LiveKit автоматически адаптирует принимаемое качество под размер окна и соединение.</DialogDescription></DialogHeader>{stream && <ScreenShareSurface stream={stream} className="h-[68vh] max-h-[68vh]" />}</DialogContent></Dialog>;
+  const { t } = useI18n();
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-6xl"><DialogHeader><DialogTitle>{stream?.local ? t.screenShare.yourShare : t.screenShare.screenOf(stream?.participantName ?? t.screenShare.participant)}</DialogTitle><DialogDescription>{t.screenShare.adaptiveHint}</DialogDescription></DialogHeader>{stream && <ScreenShareSurface stream={stream} className="h-[68vh] max-h-[68vh]" />}</DialogContent></Dialog>;
 }

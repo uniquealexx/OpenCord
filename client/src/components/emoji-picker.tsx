@@ -3,24 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import { Smile } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 
 const emojiFont = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
 const recentStorageKey = "opencord.recent-emojis";
 
-const emojiCategories = [
-  { id: "faces", label: "Смайлы", icon: "😀", emojis: ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🥸", "🤩", "🥳", "😏", "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🫣", "🤭", "🫢", "🫡", "🤫", "🫠", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕"] },
-  { id: "gestures", label: "Жесты", icon: "👋", emojis: ["👋", "🤚", "🖐️", "✋", "🖖", "🫱", "🫲", "🫳", "🫴", "👌", "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "👈", "👉", "👆", "👇", "☝️", "🫵", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "🫶", "👐", "🤲", "🤝", "🙏", "✍️", "💅", "🤳", "💪", "🦾", "🫂", "👀", "👁️", "🧠", "🫀", "🫁"] },
-  { id: "people", label: "Люди", icon: "🧑", emojis: ["👶", "🧒", "👦", "👧", "🧑", "👱", "👨", "🧔", "👩", "🧓", "👴", "👵", "🙍", "🙎", "🙅", "🙆", "💁", "🙋", "🧏", "🙇", "🤦", "🤷", "👮", "👷", "💂", "🕵️", "👩‍⚕️", "👨‍🎓", "👩‍🏫", "👨‍⚖️", "👩‍🌾", "👨‍🍳", "👩‍🔧", "👨‍💻", "👩‍🎨", "👨‍🚀", "👩‍🚒", "🧙", "🧚", "🧛", "🧜", "🧝", "🧞", "🧟", "💆", "💇", "🚶", "🧍", "🧎", "🏃", "💃", "🕺"] },
-  { id: "animals", label: "Животные", icon: "🐻", emojis: ["🐵", "🐒", "🦍", "🦧", "🐶", "🐕", "🦮", "🐩", "🐺", "🦊", "🦝", "🐱", "🐈", "🦁", "🐯", "🐅", "🐆", "🐴", "🫎", "🫏", "🐎", "🦄", "🦓", "🦌", "🦬", "🐮", "🐂", "🐃", "🐄", "🐷", "🐖", "🐗", "🐽", "🐏", "🐑", "🐐", "🐪", "🐫", "🦙", "🦒", "🐘", "🦣", "🦏", "🦛", "🐭", "🐹", "🐰", "🐿️", "🦫", "🦔", "🦇", "🐻", "🐨", "🐼", "🦥", "🦦", "🦨", "🦘", "🦡", "🐾", "🐔", "🐧", "🦆", "🦅", "🦉", "🦜", "🐸", "🐊", "🐢", "🦎", "🐍", "🐲", "🐳", "🐬", "🦭", "🐟", "🐙", "🦋"] },
-  { id: "food", label: "Еда", icon: "🍕", emojis: ["🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🥑", "🍆", "🥔", "🥕", "🌽", "🌶️", "🫑", "🥒", "🥬", "🥦", "🧄", "🧅", "🍄", "🥜", "🌰", "🍞", "🥐", "🥖", "🫓", "🥨", "🥯", "🥞", "🧇", "🧀", "🍖", "🍗", "🥩", "🥓", "🍔", "🍟", "🍕", "🌭", "🥪", "🌮", "🌯", "🫔", "🥙", "🧆", "🥚", "🍳", "🥘", "🍲", "🫕", "🥣", "🥗", "🍿", "🍣", "🍤", "🍙", "🍚", "🍜", "🍦", "🍩", "🍪", "🎂", "🍫", "🍬", "☕", "🧋", "🍺", "🍷"] },
-  { id: "activities", label: "Занятия", icon: "⚽", emojis: ["⚽", "🏀", "🏈", "⚾", "🥎", "🎾", "🏐", "🏉", "🥏", "🎱", "🪀", "🏓", "🏸", "🏒", "🏑", "🥍", "🏏", "🪃", "🥅", "⛳", "🪁", "🏹", "🎣", "🤿", "🥊", "🥋", "🎽", "🛹", "🛼", "🛷", "⛸️", "🥌", "🎿", "🏂", "🪂", "🏋️", "🤸", "⛹️", "🤺", "🤾", "🏌️", "🏇", "🧘", "🏄", "🏊", "🚴", "🏆", "🥇", "🎮", "🕹️", "🎲", "♟️", "🎯", "🎳", "🎨", "🎭", "🎤", "🎧", "🎸", "🎹", "🥁"] },
-  { id: "travel", label: "Путешествия", icon: "🚀", emojis: ["🚗", "🚕", "🚙", "🚌", "🚎", "🏎️", "🚓", "🚑", "🚒", "🚐", "🛻", "🚚", "🚛", "🚜", "🛵", "🏍️", "🚲", "🛴", "🚨", "🚔", "🚍", "🚘", "🚖", "🚡", "🚠", "🚟", "🚃", "🚋", "🚞", "🚝", "🚄", "🚅", "🚈", "🚂", "✈️", "🛫", "🛬", "🛩️", "💺", "🚁", "🚀", "🛸", "🚢", "⛵", "🚤", "🛥️", "🗺️", "🗿", "🗽", "🗼", "🏰", "🏯", "🏟️", "🎡", "🎢", "🎠", "⛲", "⛺", "🌋", "🏖️", "🏝️", "🏜️", "🏕️", "🌍", "🌎", "🌏", "🌙", "⭐", "🌈", "🔥"] },
-  { id: "symbols", label: "Символы", icon: "❤️", emojis: ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔", "❤️‍🔥", "❤️‍🩹", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟", "❣️", "💋", "💯", "💢", "💥", "💫", "💦", "💨", "🕳️", "💣", "💬", "👁️‍🗨️", "🗨️", "🗯️", "💭", "💤", "✅", "❌", "❓", "❗", "‼️", "⁉️", "⭕", "🚫", "🔞", "♻️", "⚠️", "🔱", "⚜️", "🔆", "✨", "🎉", "🎊", "🎈", "🎁", "🔔", "📌", "📍", "💡", "🔒", "🔑", "🛡️", "⚡", "☀️", "☁️", "❄️"] },
-] as const;
+type EmojiCategoryId = "faces" | "gestures" | "people" | "animals" | "food" | "activities" | "travel" | "symbols";
 
-type CategoryId = "recent" | (typeof emojiCategories)[number]["id"];
+const emojiCategories: { id: EmojiCategoryId; icon: string; emojis: string[] }[] = [
+  { id: "faces", icon: "😀", emojis: ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🥸", "🤩", "🥳", "😏", "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🫣", "🤭", "🫢", "🫡", "🤫", "🫠", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕"] },
+  { id: "gestures", icon: "👋", emojis: ["👋", "🤚", "🖐️", "✋", "🖖", "🫱", "🫲", "🫳", "🫴", "👌", "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "👈", "👉", "👆", "👇", "☝️", "🫵", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "🫶", "👐", "🤲", "🤝", "🙏", "✍️", "💅", "🤳", "💪", "🦾", "🫂", "👀", "👁️", "🧠", "🫀", "🫁"] },
+  { id: "people", icon: "🧑", emojis: ["👶", "🧒", "👦", "👧", "🧑", "👱", "👨", "🧔", "👩", "🧓", "👴", "👵", "🙍", "🙎", "🙅", "🙆", "💁", "🙋", "🧏", "🙇", "🤦", "🤷", "👮", "👷", "💂", "🕵️", "👩‍⚕️", "👨‍🎓", "👩‍🏫", "👨‍⚖️", "👩‍🌾", "👨‍🍳", "👩‍🔧", "👨‍💻", "👩‍🎨", "👨‍🚀", "👩‍🚒", "🧙", "🧚", "🧛", "🧜", "🧝", "🧞", "🧟", "💆", "💇", "🚶", "🧍", "🧎", "🏃", "💃", "🕺"] },
+  { id: "animals", icon: "🐻", emojis: ["🐵", "🐒", "🦍", "🦧", "🐶", "🐕", "🦮", "🐩", "🐺", "🦊", "🦝", "🐱", "🐈", "🦁", "🐯", "🐅", "🐆", "🐴", "🫎", "🫏", "🐎", "🦄", "🦓", "🦌", "🦬", "🐮", "🐂", "🐃", "🐄", "🐷", "🐖", "🐗", "🐽", "🐏", "🐑", "🐐", "🐪", "🐫", "🦙", "🦒", "🐘", "🦣", "🦏", "🦛", "🐭", "🐹", "🐰", "🐿️", "🦫", "🦔", "🦇", "🐻", "🐨", "🐼", "🦥", "🦦", "🦨", "🦘", "🦡", "🐾", "🐔", "🐧", "🦆", "🦅", "🦉", "🦜", "🐸", "🐊", "🐢", "🦎", "🐍", "🐲", "🐳", "🐬", "🦭", "🐟", "🐙", "🦋"] },
+  { id: "food", icon: "🍕", emojis: ["🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🥑", "🍆", "🥔", "🥕", "🌽", "🌶️", "🫑", "🥒", "🥬", "🥦", "🧄", "🧅", "🍄", "🥜", "🌰", "🍞", "🥐", "🥖", "🫓", "🥨", "🥯", "🥞", "🧇", "🧀", "🍖", "🍗", "🥩", "🥓", "🍔", "🍟", "🍕", "🌭", "🥪", "🌮", "🌯", "🫔", "🥙", "🧆", "🥚", "🍳", "🥘", "🍲", "🫕", "🥣", "🥗", "🍿", "🍣", "🍤", "🍙", "🍚", "🍜", "🍦", "🍩", "🍪", "🎂", "🍫", "🍬", "☕", "🧋", "🍺", "🍷"] },
+  { id: "activities", icon: "⚽", emojis: ["⚽", "🏀", "🏈", "⚾", "🥎", "🎾", "🏐", "🏉", "🥏", "🎱", "🪀", "🏓", "🏸", "🏒", "🏑", "🥍", "🏏", "🪃", "🥅", "⛳", "🪁", "🏹", "🎣", "🤿", "🥊", "🥋", "🎽", "🛹", "🛼", "🛷", "⛸️", "🥌", "🎿", "🏂", "🪂", "🏋️", "🤸", "⛹️", "🤺", "🤾", "🏌️", "🏇", "🧘", "🏄", "🏊", "🚴", "🏆", "🥇", "🎮", "🕹️", "🎲", "♟️", "🎯", "🎳", "🎨", "🎭", "🎤", "🎧", "🎸", "🎹", "🥁"] },
+  { id: "travel", icon: "🚀", emojis: ["🚗", "🚕", "🚙", "🚌", "🚎", "🏎️", "🚓", "🚑", "🚒", "🚐", "🛻", "🚚", "🚛", "🚜", "🛵", "🏍️", "🚲", "🛴", "🚨", "🚔", "🚍", "🚘", "🚖", "🚡", "🚠", "🚟", "🚃", "🚋", "🚞", "🚝", "🚄", "🚅", "🚈", "🚂", "✈️", "🛫", "🛬", "🛩️", "💺", "🚁", "🚀", "🛸", "🚢", "⛵", "🚤", "🛥️", "🗺️", "🗿", "🗽", "🗼", "🏰", "🏯", "🏟️", "🎡", "🎢", "🎠", "⛲", "⛺", "🌋", "🏖️", "🏝️", "🏜️", "🏕️", "🌍", "🌎", "🌏", "🌙", "⭐", "🌈", "🔥"] },
+  { id: "symbols", icon: "❤️", emojis: ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔", "❤️‍🔥", "❤️‍🩹", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟", "❣️", "💋", "💯", "💢", "💥", "💫", "💦", "💨", "🕳️", "💣", "💬", "👁️‍🗨️", "🗨️", "🗯️", "💭", "💤", "✅", "❌", "❓", "❗", "‼️", "⁉️", "⭕", "🚫", "🔞", "♻️", "⚠️", "🔱", "⚜️", "🔆", "✨", "🎉", "🎊", "🎈", "🎁", "🔔", "📌", "📍", "💡", "🔒", "🔑", "🛡️", "⚡", "☀️", "☁️", "❄️"] },
+];
+
+type CategoryId = "recent" | EmojiCategoryId;
 
 export function EmojiPicker({ disabled = false, onSelect }: { disabled?: boolean; onSelect: (emoji: string) => void }): React.ReactElement {
+  const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<CategoryId>("faces");
@@ -44,7 +48,7 @@ export function EmojiPicker({ disabled = false, onSelect }: { disabled?: boolean
 
   const activeCategory = emojiCategories.find((item) => item.id === category);
   const emojis = category === "recent" ? recent : activeCategory?.emojis ?? [];
-  const label = category === "recent" ? "Недавние" : activeCategory?.label ?? "Смайлы";
+  const label = category === "recent" ? t.emoji.recent : t.emoji[activeCategory?.id ?? "faces"];
 
   function choose(emoji: string): void {
     onSelect(emoji);
@@ -54,15 +58,15 @@ export function EmojiPicker({ disabled = false, onSelect }: { disabled?: boolean
   }
 
   return <div ref={rootRef} className="relative shrink-0">
-    <button type="button" disabled={disabled} aria-label="Открыть панель эмодзи" aria-expanded={open} onClick={() => setOpen((value) => !value)} className={cn("grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-white/[.055] hover:text-amber-300 disabled:opacity-30", open && "bg-white/[.055] text-amber-300")}><Smile className="size-5" /></button>
-    {open && <div role="dialog" aria-label="Панель эмодзи" className="glass absolute bottom-12 right-0 z-50 w-[344px] overflow-hidden rounded-2xl shadow-[0_22px_70px_rgba(0,0,0,.55)]">
-      <div className="flex h-11 items-center justify-between border-b border-white/[.07] px-4"><span className="text-sm font-semibold text-slate-200">{label}</span><span className="text-[10px] text-slate-600">Нажмите для вставки</span></div>
+    <button type="button" disabled={disabled} aria-label={t.emoji.openPicker} aria-expanded={open} onClick={() => setOpen((value) => !value)} className={cn("grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-white/[.055] hover:text-amber-300 disabled:opacity-30", open && "bg-white/[.055] text-amber-300")}><Smile className="size-5" /></button>
+    {open && <div role="dialog" aria-label={t.emoji.panel} className="glass absolute bottom-12 right-0 z-50 w-[344px] overflow-hidden rounded-2xl shadow-[0_22px_70px_rgba(0,0,0,.55)]">
+      <div className="flex h-11 items-center justify-between border-b border-white/[.07] px-4"><span className="text-sm font-semibold text-slate-200">{label}</span><span className="text-[10px] text-slate-600">{t.emoji.clickToInsert}</span></div>
       <div className="scrollbar-thin h-64 overflow-y-auto p-2.5">
-        {emojis.length ? <div className="grid grid-cols-8 gap-0.5">{emojis.map((emoji, index) => <button key={`${emoji}-${index}`} type="button" aria-label={`Вставить ${emoji}`} onClick={() => choose(emoji)} className="grid size-10 place-items-center rounded-xl text-[25px] leading-none hover:bg-white/[.075] focus:bg-violet-400/15 focus:outline-none" style={{ fontFamily: emojiFont }}>{emoji}</button>)}</div> : <div className="grid h-full place-items-center text-center text-xs text-slate-500">Здесь появятся недавно<br />использованные эмодзи</div>}
+        {emojis.length ? <div className="grid grid-cols-8 gap-0.5">{emojis.map((emoji, index) => <button key={`${emoji}-${index}`} type="button" aria-label={t.emoji.insert(emoji)} onClick={() => choose(emoji)} className="grid size-10 place-items-center rounded-xl text-[25px] leading-none hover:bg-white/[.075] focus:bg-violet-400/15 focus:outline-none" style={{ fontFamily: emojiFont }}>{emoji}</button>)}</div> : <div className="grid h-full place-items-center whitespace-pre-line text-center text-xs text-slate-500">{t.emoji.recentHint}</div>}
       </div>
       <div className="flex h-12 items-center justify-between border-t border-white/[.07] px-2">
-        <button type="button" aria-label="Недавние эмодзи" title="Недавние" onClick={() => setCategory("recent")} className={cn("grid size-9 place-items-center rounded-lg text-xl grayscale hover:bg-white/[.06] hover:grayscale-0", category === "recent" && "bg-violet-400/15 grayscale-0")} style={{ fontFamily: emojiFont }}>🕘</button>
-        {emojiCategories.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} onClick={() => setCategory(item.id)} className={cn("grid size-9 place-items-center rounded-lg text-xl grayscale hover:bg-white/[.06] hover:grayscale-0", category === item.id && "bg-violet-400/15 grayscale-0")} style={{ fontFamily: emojiFont }}>{item.icon}</button>)}
+        <button type="button" aria-label={t.emoji.recentAria} title={t.emoji.recent} onClick={() => setCategory("recent")} className={cn("grid size-9 place-items-center rounded-lg text-xl grayscale hover:bg-white/[.06] hover:grayscale-0", category === "recent" && "bg-violet-400/15 grayscale-0")} style={{ fontFamily: emojiFont }}>🕘</button>
+        {emojiCategories.map((item) => <button key={item.id} type="button" aria-label={t.emoji[item.id]} title={t.emoji[item.id]} onClick={() => setCategory(item.id)} className={cn("grid size-9 place-items-center rounded-lg text-xl grayscale hover:bg-white/[.06] hover:grayscale-0", category === item.id && "bg-violet-400/15 grayscale-0")} style={{ fontFamily: emojiFont }}>{item.icon}</button>)}
       </div>
     </div>}
   </div>;

@@ -68,7 +68,7 @@ describe("server connection", () => {
     const socket = FakeWebSocket.instances[0];
     act(() => socket?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "old", expiresAt: new Date().toISOString() }));
     expect(result.current.status).toBe("server-outdated");
-    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining("подключимся автоматически"));
+    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining("reconnect automatically"));
     await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
     expect(FakeWebSocket.instances).toHaveLength(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });

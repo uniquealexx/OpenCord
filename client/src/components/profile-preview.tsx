@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/avatar";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { PublicMemberStatus } from "@opencord/shared";
 
@@ -20,13 +21,6 @@ export interface PreviewProfile {
   isCurrentUser?: boolean;
 }
 
-const statusLabels: Record<PreviewStatus, string> = {
-  online: "В сети",
-  idle: "Недоступен",
-  dnd: "Не беспокоить",
-  offline: "Не в сети",
-};
-
 const statusColors: Record<PreviewStatus, string> = {
   online: "bg-emerald-400",
   idle: "bg-amber-300",
@@ -39,6 +33,7 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
   const cardRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 8, top: 8 });
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!open) return;
@@ -83,9 +78,9 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
 
   const status = profile.status ?? "offline";
   return <span className={cn("relative inline-flex", wrapperClassName)}>
-    <button ref={triggerRef} type="button" aria-label={label ?? `Открыть профиль ${profile.displayName}`} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
+    <button ref={triggerRef} type="button" aria-label={label ?? t.preview.openProfile(profile.displayName)} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
     {open && typeof document !== "undefined" && createPortal(
-      <div ref={cardRef} role="dialog" aria-label={`Профиль ${profile.displayName}`} className="glass fixed z-[100] w-[300px] overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={position}>
+      <div ref={cardRef} role="dialog" aria-label={t.preview.profile(profile.displayName)} className="glass fixed z-[100] w-[300px] overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={position}>
         <div data-testid="profile-banner" className="relative h-[96px] overflow-hidden bg-primary/15">
           {/* Public profile banners are compact data URLs supplied by OpenCord Server. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -94,13 +89,13 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
         <div className="px-4 pb-4">
           <div className="-mt-9 flex items-end justify-between">
             <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
-            {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">Это вы</span>}
+            {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">{t.preview.thisIsYou}</span>}
           </div>
           <h3 className="mt-2 truncate text-base font-bold text-white">{profile.displayName}</h3>
-          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{statusLabels[status]}</span></div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{t.statuses[status]}</span></div>
           <div className="mt-4 rounded-xl border border-white/[.06] bg-black/15 px-3 py-2.5">
             {profile.role && <div className="flex items-center gap-2 text-xs text-slate-300"><ShieldCheck className="size-3.5 text-violet-300" /><span>{profile.role}</span></div>}
-            <p className={cn("text-xs leading-5 text-slate-400", profile.role && "mt-2 border-t border-white/[.06] pt-2")}>{profile.bio?.trim() || "Публичный профиль участника OpenCord"}</p>
+            <p className={cn("text-xs leading-5 text-slate-400", profile.role && "mt-2 border-t border-white/[.06] pt-2")}>{profile.bio?.trim() || t.preview.memberProfile}</p>
           </div>
         </div>
       </div>,

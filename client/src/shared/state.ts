@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { attachmentSchema, attachmentUploadLimitSchema, DEFAULT_ATTACHMENT_LIMIT_BYTES, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema } from "@opencord/shared";
+import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
 export const STATE_VERSION = 3 as const;
@@ -66,6 +67,7 @@ export const mockMessageSchema = z.object({
 });
 
 export const clientPreferencesSchema = z.object({
+  language: z.enum(LANGUAGES).default(DEFAULT_LANGUAGE),
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
   notifications: z.boolean(),
@@ -125,7 +127,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
+    preferences: { language: DEFAULT_LANGUAGE, compactMode: false, showMemberList: true, notifications: true, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
   };
 }
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverEventSchema, userAvatarSchema, userBannerSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type PublicProfile, type ServerEvent, type ServerSettings, type VoicePresence } from "@opencord/shared";
 import type { LocalProfile, MockServer } from "@/shared/state";
+import { currentDictionary } from "@/lib/i18n";
 
 export type ConnectionStatus = "demo" | "connecting" | "authenticating" | "connected" | "reconnecting" | "server-outdated" | "client-outdated" | "error";
 
@@ -78,7 +79,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
       try {
         socket = new WebSocket(endpoint);
       } catch {
-        if (!failureReported) callbacksRef.current.onError("Не удалось открыть соединение с сервером");
+        if (!failureReported) callbacksRef.current.onError(currentDictionary().connectionErrors.openFailed);
         failureReported = true;
         scheduleReconnect();
         return;
@@ -89,7 +90,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
         // События уже закрытого или заменённого сокета не должны попадать в состояние.
         if (socketRef.current !== socket) return;
         let decoded: unknown;
-        try { decoded = JSON.parse(String(messageEvent.data)) as unknown; } catch { return callbacksRef.current.onError("Сервер отправил некорректный JSON"); }
+        try { decoded = JSON.parse(String(messageEvent.data)) as unknown; } catch { return callbacksRef.current.onError(currentDictionary().connectionErrors.badJson); }
         const incompatible = protocolCompatibility(decoded);
         if (incompatible) {
           fatal = incompatible === "client-outdated";
@@ -97,14 +98,14 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           clearHeartbeat();
           setConnectionState({ key: connectionKey, status: incompatible });
           if (!failureReported) callbacksRef.current.onError(incompatible === "server-outdated"
-            ? "Версия OpenCord Server устарела. Ожидаем обновление и подключимся автоматически"
-            : "Этот сервер использует более новый протокол. Обновите приложение OpenCord Client");
+            ? currentDictionary().connectionErrors.serverOutdatedReconnect
+            : currentDictionary().connectionErrors.clientOutdated);
           failureReported = true;
           socket.close(4002, "Protocol mismatch");
           return;
         }
         const parsed = serverEventSchema.safeParse(decoded);
-        if (!parsed.success) return callbacksRef.current.onError("Ответ сервера не соответствует протоколу");
+        if (!parsed.success) return callbacksRef.current.onError(currentDictionary().connectionErrors.badProtocolResponse);
         const event = parsed.data;
 
         if (event.type === "auth.challenge") {
@@ -114,7 +115,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           void authenticate(socket, event.requestId, event.challenge, currentProfile).catch(() => {
             fatal = true;
             setConnectionState({ key: connectionKey, status: "error" });
-            callbacksRef.current.onError("Не удалось подписать запрос сервера");
+            callbacksRef.current.onError(currentDictionary().connectionErrors.signFailed);
             socket.close(1000, "Identity error");
           });
         } else if (event.type === "auth.ok") {
@@ -171,12 +172,12 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
             setConnectionState({ key: connectionKey, status: event.code === "PROTOCOL_MISMATCH" ? "server-outdated" : "error" });
             socket.close(1000, "Authentication rejected");
           }
-          callbacksRef.current.onError(event.code === "PROTOCOL_MISMATCH" ? "Версия OpenCord Server несовместима. Сервер необходимо обновить через повторное развёртывание" : event.message);
+          callbacksRef.current.onError(event.code === "PROTOCOL_MISMATCH" ? currentDictionary().connectionErrors.protocolMismatch : event.message);
         }
       });
 
       socket.addEventListener("error", () => {
-        if (!failureReported) callbacksRef.current.onError("Не удалось подключиться к серверу — повторяем попытку");
+        if (!failureReported) callbacksRef.current.onError(currentDictionary().connectionErrors.reconnectFailed);
         failureReported = true;
       });
       socket.addEventListener("close", () => {

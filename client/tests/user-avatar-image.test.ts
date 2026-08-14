@@ -30,7 +30,7 @@ describe("user avatar compression", () => {
   });
 
   it("rejects unsupported and excessively large source files", async () => {
-    await expect(compressUserAvatar(new File(["svg"], "avatar.svg", { type: "image/svg+xml" }))).rejects.toThrow("PNG, JPEG и WebP");
-    await expect(compressUserAvatar({ type: "image/png", size: 21 * 1024 * 1024 } as Blob)).rejects.toThrow("меньше 20 МБ");
+    await expect(compressUserAvatar(new File(["svg"], "avatar.svg", { type: "image/svg+xml" }))).rejects.toThrow("PNG, JPEG and WebP are supported");
+    await expect(compressUserAvatar({ type: "image/png", size: 21 * 1024 * 1024 } as Blob)).rejects.toThrow("under 20 MB");
   });
 });

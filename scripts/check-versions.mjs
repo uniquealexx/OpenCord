@@ -16,4 +16,11 @@ if (mismatches.length > 0) {
   throw new Error(`OpenCord package versions must match ${expected}: ${mismatches.map(({ file, version }) => `${file}=${version}`).join(", ")}`);
 }
 
+const bootstrapPath = path.join(repositoryRoot, "deploy", "scripts", "bootstrap.sh");
+const bootstrapSource = readFileSync(bootstrapPath, "utf8");
+const bootstrapVersionMatch = bootstrapSource.match(/^BOOTSTRAP_VERSION="([^"]+)"$/mu);
+if (!bootstrapVersionMatch || bootstrapVersionMatch[1] !== expected) {
+  throw new Error(`deploy/scripts/bootstrap.sh must pin BOOTSTRAP_VERSION="${expected}"`);
+}
+
 process.stdout.write(`OpenCord package versions are synchronized at ${expected}.\n`);

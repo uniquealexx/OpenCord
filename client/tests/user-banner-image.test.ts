@@ -30,7 +30,7 @@ describe("user banner compression", () => {
   });
 
   it("rejects unsupported and excessively large source files", async () => {
-    await expect(compressUserBanner(new File(["svg"], "banner.svg", { type: "image/svg+xml" }))).rejects.toThrow("PNG, JPEG и WebP");
-    await expect(compressUserBanner({ type: "image/png", size: 21 * 1024 * 1024 } as Blob)).rejects.toThrow("меньше 20 МБ");
+    await expect(compressUserBanner(new File(["svg"], "banner.svg", { type: "image/svg+xml" }))).rejects.toThrow("PNG, JPEG and WebP are supported");
+    await expect(compressUserBanner({ type: "image/png", size: 21 * 1024 * 1024 } as Blob)).rejects.toThrow("under 20 MB");
   });
 });

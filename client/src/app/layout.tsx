@@ -4,5 +4,6 @@ import "./globals.css";
 export const metadata: Metadata = { title: "OpenCord", description: "Open-source communication client" };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>): React.ReactElement {
-  return <html lang="ru" className="dark"><body>{children}</body></html>;
+  // Язык по умолчанию — английский; I18nRoot обновляет атрибут при смене языка в настройках.
+  return <html lang="en" className="dark"><body>{children}</body></html>;
 }

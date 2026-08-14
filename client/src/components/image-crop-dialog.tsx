@@ -6,20 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { calculateCropRectangle, DEFAULT_IMAGE_CROP, validateCropSource, type ImageCrop } from "@/lib/image-crop";
 import { cn } from "@/lib/utils";
+import { useI18n, currentDictionary } from "@/lib/i18n";
 
 const PREVIEW_WIDTH = 600;
 
 interface ImageCropDialogProps { source: File | null; title: string; description: string; aspectRatio: number; rounded?: boolean; onCancel(): void; onApply(crop: ImageCrop): Promise<void> }
 
 export function ImageCropDialog(props: ImageCropDialogProps): React.ReactElement {
+  const { t } = useI18n();
   if (!props.source) return <Dialog open={false} onOpenChange={() => undefined} />;
   let initialError = "";
   try { validateCropSource(props.source); }
-  catch (reason) { initialError = reason instanceof Error ? reason.message : "Не удалось открыть изображение"; }
+  catch (reason) { initialError = reason instanceof Error ? reason.message : t.crop.openFailed; }
   return <ImageCropEditor key={`${props.source.name}:${props.source.size}:${props.source.lastModified}`} {...props} source={props.source} initialError={initialError} />;
 }
 
 function ImageCropEditor({ source, title, description, aspectRatio, rounded = false, onCancel, onApply, initialError }: Omit<ImageCropDialogProps, "source"> & { source: File; initialError: string }): React.ReactElement {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bitmapRef = useRef<ImageBitmap | null>(null);
   const dragRef = useRef<{ pointerId: number; clientX: number; clientY: number; x: number; y: number } | null>(null);
@@ -33,14 +36,14 @@ function ImageCropEditor({ source, title, description, aspectRatio, rounded = fa
     let active = true;
     void createImageBitmap(source).then((bitmap) => {
       if (!active) { bitmap.close(); return; }
-      if (!bitmap.width || !bitmap.height || bitmap.width > 16_384 || bitmap.height > 16_384) { bitmap.close(); throw new Error("Слишком большое разрешение изображения"); }
+      if (!bitmap.width || !bitmap.height || bitmap.width > 16_384 || bitmap.height > 16_384) { bitmap.close(); throw new Error(currentDictionary().crop.tooLargeResolution); }
       bitmapRef.current?.close();
       bitmapRef.current = bitmap;
       setLoading(false);
     }).catch((reason: unknown) => {
       if (!active) return;
       setLoading(false);
-      setError(reason instanceof Error ? reason.message : "Не удалось открыть изображение");
+      setError(reason instanceof Error ? reason.message : currentDictionary().crop.openFailed);
     });
     return () => {
       active = false;
@@ -82,7 +85,7 @@ function ImageCropEditor({ source, title, description, aspectRatio, rounded = fa
     if (!bitmapRef.current || applying) return;
     setApplying(true); setError("");
     try { await onApply(crop); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось кадрировать изображение"); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t.crop.applyFailed); }
     finally { setApplying(false); }
   }
 
@@ -92,19 +95,19 @@ function ImageCropEditor({ source, title, description, aspectRatio, rounded = fa
       <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{description}</DialogDescription></DialogHeader>
       <div className="space-y-4">
         <div className={cn("relative mx-auto w-full overflow-hidden border border-white/10 bg-black shadow-inner", rounded ? "max-w-[360px] rounded-full" : "rounded-2xl")} style={{ aspectRatio }}>
-          <canvas ref={canvasRef} width={PREVIEW_WIDTH} height={height} aria-label="Область кадрирования" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} className={cn("size-full touch-none object-cover", !loading && !error && "cursor-grab active:cursor-grabbing")} />
+          <canvas ref={canvasRef} width={PREVIEW_WIDTH} height={height} aria-label={t.crop.cropArea} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} className={cn("size-full touch-none object-cover", !loading && !error && "cursor-grab active:cursor-grabbing")} />
           <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-35 [&>*]:border-white/30"><span className="border-b border-r" /><span className="border-b border-r" /><span className="border-b" /><span className="border-b border-r" /><span className="border-b border-r" /><span className="border-b" /><span className="border-r" /><span className="border-r" /><span /></div>
           {loading && <div className="absolute inset-0 grid place-items-center bg-black/60"><LoaderCircle className="size-7 animate-spin text-violet-300" /></div>}
         </div>
-        <label className="grid gap-2 text-xs font-medium text-slate-400">Масштаб
-          <input aria-label="Масштаб изображения" type="range" min="1" max="3" step="0.01" value={crop.zoom} onChange={(event) => setCrop((current) => ({ ...current, zoom: Number(event.target.value) }))} className="h-2 w-full cursor-pointer accent-violet-500" />
+        <label className="grid gap-2 text-xs font-medium text-slate-400">{t.crop.zoom}
+          <input aria-label={t.crop.zoomAria} type="range" min="1" max="3" step="0.01" value={crop.zoom} onChange={(event) => setCrop((current) => ({ ...current, zoom: Number(event.target.value) }))} className="h-2 w-full cursor-pointer accent-violet-500" />
         </label>
         <div className="flex items-center justify-between gap-3">
-          <Button type="button" variant="secondary" size="sm" onClick={() => setCrop(DEFAULT_IMAGE_CROP)}><RotateCcw className="size-4" />Сбросить</Button>
-          <p className="text-right text-xs text-slate-500">Перетаскивайте изображение внутри рамки</p>
+          <Button type="button" variant="secondary" size="sm" onClick={() => setCrop(DEFAULT_IMAGE_CROP)}><RotateCcw className="size-4" />{t.crop.reset}</Button>
+          <p className="text-right text-xs text-slate-500">{t.crop.dragHint}</p>
         </div>
         {error && <p role="alert" className="rounded-xl border border-red-400/15 bg-red-400/[.06] px-3 py-2 text-xs text-red-300">{error}</p>}
-        <div className="grid grid-cols-2 gap-2"><Button type="button" variant="secondary" disabled={applying} onClick={onCancel}>Отмена</Button><Button type="button" disabled={loading || applying || Boolean(error)} onClick={() => void apply()}>{applying ? <LoaderCircle className="size-4 animate-spin" /> : <Crop className="size-4" />}{applying ? "Сохраняем…" : "Применить"}</Button></div>
+        <div className="grid grid-cols-2 gap-2"><Button type="button" variant="secondary" disabled={applying} onClick={onCancel}>{t.crop.cancel}</Button><Button type="button" disabled={loading || applying || Boolean(error)} onClick={() => void apply()}>{applying ? <LoaderCircle className="size-4 animate-spin" /> : <Crop className="size-4" />}{applying ? t.crop.saving : t.crop.apply}</Button></div>
       </div>
     </DialogContent>
   </Dialog>;

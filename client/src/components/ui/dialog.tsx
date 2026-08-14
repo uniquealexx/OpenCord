@@ -3,6 +3,7 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export const Dialog = DialogPrimitive.Root;
@@ -10,6 +11,7 @@ export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 
 export function DialogContent({ className, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>): React.ReactElement {
+  const { t } = useI18n();
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md data-[state=closed]:animate-out data-[state=open]:animate-in" />
@@ -17,7 +19,7 @@ export function DialogContent({ className, children, ...props }: React.Component
         <div className="scrollbar-thin m-1 max-h-[calc(86vh-0.5rem)] overflow-y-auto rounded-xl p-5 pr-6">
           {children}
         </div>
-        <DialogPrimitive.Close aria-label="Закрыть" className="absolute right-4 top-4 rounded-md p-2 text-slate-500 transition hover:bg-white/10 hover:text-white"><X className="size-4" /></DialogPrimitive.Close>
+        <DialogPrimitive.Close aria-label={t.common.close} className="absolute right-4 top-4 rounded-md p-2 text-slate-500 transition hover:bg-white/10 hover:text-white"><X className="size-4" /></DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );

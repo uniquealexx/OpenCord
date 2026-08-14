@@ -440,7 +440,7 @@ describe("ClientApp", () => {
     expect(next.servers[0]?.members[0]).toMatchObject({
       displayName: "Анна",
       bio: "Администрирую сообщество",
-      role: "Администратор",
+      role: "Administrator",
       serverRole: "administrator",
       avatar: "data:image/webp;base64,AA==",
       banner: "data:image/webp;base64,AQ==",
@@ -601,6 +601,16 @@ describe("ClientApp", () => {
 
     await user.click(screen.getByRole("button", { name: "Подключиться к серверу" }));
     expect(await screen.findByRole("heading", { name: "Подключиться к серверу" })).toBeInTheDocument();
+  });
+
+  it("opens the settings dialog from the home screen", async () => {
+    const user = userEvent.setup();
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+    await user.click(screen.getByRole("button", { name: "Личное пространство" }));
+    await screen.findByRole("heading", { name: "Главный экран" });
+    await user.click(screen.getByTitle("Настройки"));
+    expect(await screen.findByRole("heading", { name: "Настройки" })).toBeInTheDocument();
   });
 
   it("replaces every local duplicate when the same endpoint is redeployed", () => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, VideoQuality, createAudioAnalyser, type LocalAudioTrack, type RemoteAudioTrack, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication, type RemoteVideoTrack } from "livekit-client";
 import type { ClientPreferences, VoiceParticipantSettings } from "@/shared/state";
 import { MicrophoneTrackProcessor } from "@/shared/rnnoise-processor";
+import { currentDictionary } from "@/lib/i18n";
 
 export type VoiceSessionStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface VoiceAuthorization { channelId: string; endpoint: string; token: string; expiresAt: string }
@@ -310,7 +311,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         if (preferences.voiceInputDeviceId) await room.switchActiveDevice("audioinput", preferences.voiceInputDeviceId);
         if (preferences.voiceOutputDeviceId) await room.switchActiveDevice("audiooutput", preferences.voiceOutputDeviceId);
       } catch {
-        onError("Выбранное аудиоустройство недоступно — используется системное устройство");
+        onError(currentDictionary().voiceErrors.deviceUnavailable);
         try { await room.switchActiveDevice("audioinput", "default"); } catch { /* Browser chooses its default input. */ }
         try { await room.switchActiveDevice("audiooutput", "default"); } catch { /* Browser chooses its default output. */ }
       }
@@ -456,7 +457,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         setStatus("connected");
         await refreshDevices();
       } catch (error) {
-        if (!cancelled) { setStatus("error"); onError(error instanceof Error ? `Не удалось подключиться к голосовому каналу: ${error.message}` : "Не удалось подключиться к голосовому каналу"); }
+        if (!cancelled) { setStatus("error"); onError(error instanceof Error ? currentDictionary().voiceErrors.joinFailed(error.message) : currentDictionary().voiceErrors.joinFailedGeneric); }
       }
     };
     void connect();
@@ -578,7 +579,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, []);
   const startScreenShare = useCallback(async (settings: ScreenShareSettings): Promise<void> => {
     const room = roomRef.current;
-    if (!room || status !== "connected") throw new Error("Сначала подключитесь к голосовому каналу");
+    if (!room || status !== "connected") throw new Error(currentDictionary().voiceErrors.connectFirst);
     if (room.localParticipant.isScreenShareEnabled) await room.localParticipant.setScreenShareEnabled(false);
     const captureOptions = {
       audio: settings.includeAudio,
@@ -596,7 +597,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     const capturedVideo = capturedTracks.find((item): item is LocalVideoTrack => item instanceof LocalVideoTrack);
     if (!capturedVideo) {
       for (const item of capturedTracks) item.stop();
-      throw new Error("LiveKit не создал видеотрек демонстрации");
+      throw new Error(currentDictionary().voiceErrors.noVideoTrack);
     }
     void window.openCord?.screenShare?.report(`captured-video ${JSON.stringify({ readyState: capturedVideo.mediaStreamTrack.readyState, muted: capturedVideo.mediaStreamTrack.muted, enabled: capturedVideo.mediaStreamTrack.enabled, settings: capturedVideo.mediaStreamTrack.getSettings() })}`);
     // Keep the raw capture exclusively for local preview. Publish a clone so
@@ -612,7 +613,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     previewTrack.mediaStreamTrack.addEventListener("ended", removeLocal, { once: true });
     setScreenShares((current) => {
       for (const item of current) if (item.local) item.track.stop();
-      return [...current.filter((item) => !item.local), { participantIdentity: room.localParticipant.identity, participantName: room.localParticipant.name || "Вы", local: true, track: previewTrack }];
+      return [...current.filter((item) => !item.local), { participantIdentity: room.localParticipant.identity, participantName: room.localParticipant.name || currentDictionary().roles.you, local: true, track: previewTrack }];
     });
     try {
       await Promise.all(publishingTracks.map((item) => room.localParticipant.publishTrack(item, publishOptions)));

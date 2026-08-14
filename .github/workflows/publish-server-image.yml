@@ -253,7 +253,8 @@ jobs:
           $assets = @(
             "server-release/opencord-server-$version.tar.gz",
             "server-release/opencord-server-$version.tar.gz.sha256",
-            "server-release/release-manifest.json"
+            "server-release/release-manifest.json",
+            "deploy/scripts/bootstrap.sh"
           )
           gh release view $serverTag *> $null
           if ($LASTEXITCODE -eq 0) {

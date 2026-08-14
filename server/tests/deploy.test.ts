@@ -58,6 +58,7 @@ describe("production deployment", () => {
     expect(workflow).toContain("--draft=false");
     expect(workflow).toContain("Publish separate server release");
     expect(workflow).toContain('$serverTag = "server-v$version"');
+    expect(workflow).toContain('"deploy/scripts/bootstrap.sh"');
     expect(workflow).toContain("release/release-manifest.json");
     expect(workflow).toContain("gh release create");
     expect(workflow).not.toMatch(/uses:\s+[^\s]+@(main|master|v\d+)\s*$/mu);
@@ -90,6 +91,35 @@ describe("production deployment", () => {
     const override = await readFile(path.join(repositoryRoot, "deploy", "compose.insecure.yml"), "utf8");
     expect(override).toContain('"3210:3210"');
     expect(override).not.toMatch(/(?:80|443):(?:80|443)/);
+  });
+
+  it("bootstraps a fresh VPS from one pinned command without compiling on the server", async () => {
+    const bootstrap = await readFile(path.join(repositoryRoot, "deploy", "scripts", "bootstrap.sh"), "utf8");
+    const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8"));
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(-beta\.\d+)?$/u);
+    expect(bootstrap).toContain(`BOOTSTRAP_VERSION="${packageJson.version}"`);
+    expect(bootstrap).toContain("GITHUB_REPOSITORY=\"uniquealexx/OpenCord\"");
+    expect(bootstrap).toContain("releases/download/v${BOOTSTRAP_VERSION}/release-manifest.json");
+    expect(bootstrap).toContain("--proto '=https'");
+    expect(bootstrap).toContain("--max-filesize");
+    expect(bootstrap).toContain("sha256sum");
+    expect(bootstrap).toContain("stat --format='%s'");
+    expect(bootstrap).toContain("mktemp -d /tmp/opencord-bootstrap.XXXXXXXX");
+    expect(bootstrap).toContain("trap cleanup EXIT");
+    expect(bootstrap).toContain("--no-same-owner --no-same-permissions");
+    expect(bootstrap).toContain("deploy/scripts/install-ubuntu.sh");
+    expect(bootstrap).toContain("deploy/scripts/install-native-ubuntu.sh");
+    expect(bootstrap).toContain("--owner-public-key");
+    expect(bootstrap).toContain("--server-name");
+    expect(bootstrap).toContain("--mode");
+    expect(bootstrap).toContain("docker compose version");
+    expect(bootstrap).toContain("download.docker.com");
+    expect(bootstrap).toContain("Данные для подключения");
+    expect(bootstrap).toContain("sudo opencordctl status");
+    expect(bootstrap).not.toContain("get.docker.com");
+    expect(bootstrap).not.toContain("pnpm install");
+    expect(bootstrap).not.toContain("docker compose build");
+    expect(bootstrap).not.toMatch(/down[^\n]*(?:--volumes|-v)/u);
   });
 
   it("builds versioned native releases with a systemd rollback path", async () => {

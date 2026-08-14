@@ -30,7 +30,7 @@ describe("server avatar compression", () => {
   });
 
   it("rejects unsupported and unreasonably large source files", async () => {
-    await expect(compressServerAvatar(new File(["text"], "avatar.svg", { type: "image/svg+xml" }))).rejects.toThrow("PNG, JPEG и WebP");
-    await expect(compressServerAvatar({ type: "image/png", size: 21 * 1024 * 1024 } as File)).rejects.toThrow("меньше 20 МБ");
+    await expect(compressServerAvatar(new File(["text"], "avatar.svg", { type: "image/svg+xml" }))).rejects.toThrow("PNG, JPEG and WebP are supported");
+    await expect(compressServerAvatar({ type: "image/png", size: 21 * 1024 * 1024 } as File)).rejects.toThrow("under 20 MB");
   });
 });

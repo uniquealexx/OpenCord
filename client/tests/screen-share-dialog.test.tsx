@@ -26,7 +26,7 @@ describe("ScreenShareDialog", () => {
     expect(screenShareSettings(1080, 30, false, "detail", 1_280, 720)).toEqual({ width: 1_280, height: 720, frameRate: 30, maxBitrate: 2_300_000, includeAudio: false, contentHint: "detail" });
     expect(screenShareSettings(1440, 60, true, "motion", 2_560, 1_080)).toEqual({ width: 2_560, height: 1_080, frameRate: 60, maxBitrate: 12_000_000, includeAudio: true, contentHint: "motion" });
     expect(screenShareSettings(1440, 60, true, "motion", 3_840, 2_160)).toEqual({ width: 2_560, height: 1_440, frameRate: 60, maxBitrate: 16_000_000, includeAudio: true, contentHint: "motion" });
-    expect(screenShareResolutionLabel(1440)).toBe("Источник");
+    expect(screenShareResolutionLabel(1440)).toBe("Source");
   });
 
   it("scales every received quality to the available surface and fullscreen viewport", () => {
