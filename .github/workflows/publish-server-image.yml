@@ -152,7 +152,7 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --draft --generate-notes --title "${title}"
           fi
 
-  publish-client:
+  publish-client-windows:
     name: Build and publish Windows client
     needs: publish
     runs-on: windows-2025
@@ -212,7 +212,7 @@ jobs:
             --blockmap "client/release/OpenCord-Setup-$version-x64.exe.blockmap"
           pnpm manifest:validate -- "release-input/release-manifest.json"
 
-      - name: Publish Windows assets and finalize release
+      - name: Upload Windows assets and manifest to the draft release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -220,48 +220,164 @@ jobs:
           $version = "${{ needs.publish.outputs.version }}"
           $channel = "${{ needs.publish.outputs.channel }}"
           $metadata = if ($channel -eq "beta") { "beta.yml" } else { "latest.yml" }
-          $wasDraft = gh release view "${env:GITHUB_REF_NAME}" --json isDraft --jq '.isDraft'
           gh release upload "${env:GITHUB_REF_NAME}" `
             "client/release/OpenCord-Setup-$version-x64.exe" `
             "client/release/OpenCord-Setup-$version-x64.exe.blockmap" `
             "client/release/$metadata" `
             "release-input/release-manifest.json" --clobber
-          if ($wasDraft -eq "true") {
-            if ($channel -eq "beta") {
-              gh release edit "${env:GITHUB_REF_NAME}" --draft=false --prerelease
-            } else {
-              gh release edit "${env:GITHUB_REF_NAME}" --draft=false --latest
-            }
-          }
 
-      - name: Publish separate server release
-        shell: pwsh
+  publish-client-linux:
+    name: Build and publish Linux client
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Linux AppImage and deb artifacts
+        shell: bash
+        run: pnpm package:linux
+
+      - name: Verify Linux release artifacts
+        shell: bash
+        run: |
+          version="${{ needs.publish.outputs.version }}"
+          for file in \
+            "client/release/OpenCord-${version}-x86_64.AppImage" \
+            "client/release/OpenCord-${version}-amd64.deb" \
+            "client/release/latest-linux.yml"; do
+            test -f "${file}" || { echo "Missing Linux release artifact: ${file}" >&2; exit 1; }
+          done
+
+      - name: Upload Linux assets to the draft GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $version = "${{ needs.publish.outputs.version }}"
-          $channel = "${{ needs.publish.outputs.channel }}"
-          $serverTag = "server-v$version"
-          $serverTitle = "OpenCord Server $version"
-          if ($channel -eq "beta") { $serverTitle = "$serverTitle Beta" }
-          New-Item -ItemType Directory -Path "server-release" -Force | Out-Null
-          gh release download "${env:GITHUB_REF_NAME}" `
-            --pattern "opencord-server-$version.tar.gz" `
-            --pattern "opencord-server-$version.tar.gz.sha256" `
+          version="${{ needs.publish.outputs.version }}"
+          extra=()
+          for file in client/release/*.zsync client/release/*.blockmap; do
+            [[ -f "${file}" ]] && extra+=("${file}")
+          done
+          assets=(client/release/OpenCord-${version}-x86_64.AppImage client/release/OpenCord-${version}-amd64.deb client/release/latest-linux.yml)
+          gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" "${extra[@]}" --clobber
+
+  publish-client-macos:
+    name: Build and publish macOS client
+    needs: publish
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS dmg and zip artifacts
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm package:mac
+
+      - name: Verify macOS release artifacts
+        shell: bash
+        run: |
+          test -n "$(find client/release -maxdepth 1 -type f -name '*.dmg' -print -quit)" || { echo "Missing macOS release artifact: dmg" >&2; exit 1; }
+          test -n "$(find client/release -maxdepth 1 -type f -name '*.zip' -print -quit)" || { echo "Missing macOS release artifact: zip" >&2; exit 1; }
+          test -f "client/release/latest-mac.yml" || { echo "Missing macOS release artifact: latest-mac.yml" >&2; exit 1; }
+
+      - name: Upload macOS assets to the draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dmg_file="$(find client/release -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          zip_file="$(find client/release -maxdepth 1 -type f -name '*.zip' -print -quit)"
+          test -n "${dmg_file}" && test -n "${zip_file}"
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${dmg_file}" \
+            "${zip_file}" \
+            "client/release/latest-mac.yml" --clobber
+
+  finalize-release:
+    name: Finalize and publish the GitHub Release
+    needs: [publish, publish-client-windows, publish-client-linux, publish-client-macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Publish the shared GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          channel="${{ needs.publish.outputs.channel }}"
+          was_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft')"
+          if [[ "${was_draft}" == "true" ]]; then
+            if [[ "${channel}" == "beta" ]]; then
+              gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease
+            else
+              gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
+            fi
+          fi
+
+      - name: Publish separate server release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ needs.publish.outputs.version }}"
+          channel="${{ needs.publish.outputs.channel }}"
+          server_tag="server-v${version}"
+          server_title="OpenCord Server ${version}"
+          if [[ "${channel}" == "beta" ]]; then server_title="${server_title} Beta"; fi
+          mkdir -p server-release
+          gh release download "${GITHUB_REF_NAME}" \
+            --pattern "opencord-server-${version}.tar.gz" \
+            --pattern "opencord-server-${version}.tar.gz.sha256" \
+            --pattern "release-manifest.json" \
             --dir "server-release" --clobber
-          Copy-Item -LiteralPath "release-input/release-manifest.json" -Destination "server-release/release-manifest.json" -Force
-          $assets = @(
-            "server-release/opencord-server-$version.tar.gz",
-            "server-release/opencord-server-$version.tar.gz.sha256",
-            "server-release/release-manifest.json",
-            "deploy/scripts/bootstrap.sh"
-          )
-          gh release view $serverTag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $serverTag $assets --clobber
-            gh release edit $serverTag --title $serverTitle
-          } elseif ($channel -eq "beta") {
-            gh release create $serverTag $assets --target "${env:GITHUB_SHA}" --title $serverTitle --notes "Server-only artifacts for OpenCord $version." --prerelease
-          } else {
-            gh release create $serverTag $assets --target "${env:GITHUB_SHA}" --title $serverTitle --notes "Server-only artifacts for OpenCord $version."
-          }
+          assets=(server-release/opencord-server-${version}.tar.gz server-release/opencord-server-${version}.tar.gz.sha256 server-release/release-manifest.json deploy/scripts/bootstrap.sh)
+          if gh release view "${server_tag}" >/dev/null 2>&1; then
+            gh release upload "${server_tag}" "${assets[@]}" --clobber
+            gh release edit "${server_tag}" --title "${server_title}"
+          elif [[ "${channel}" == "beta" ]]; then
+            gh release create "${server_tag}" "${assets[@]}" --target "${GITHUB_SHA}" --title "${server_title}" --notes "Server-only artifacts for OpenCord ${version}." --prerelease
+          else
+            gh release create "${server_tag}" "${assets[@]}" --target "${GITHUB_SHA}" --title "${server_title}" --notes "Server-only artifacts for OpenCord ${version}."
+          fi

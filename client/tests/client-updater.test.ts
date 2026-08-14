@@ -10,8 +10,12 @@ const installerName = `OpenCord-Setup-${version}-x64.exe`;
 const installerBytes = Buffer.from("verified OpenCord installer");
 const metadataBytes = Buffer.from(`version: ${version}\nfiles:\n  - url: ${installerName}\n`);
 const sha256 = (value: Buffer): string => createHash("sha256").update(value).digest("hex");
+const sha512 = (value: Buffer): string => createHash("sha512").update(value).digest("hex");
 const manifestUrl = `https://github.com/uniquealexx/OpenCord/releases/download/v${version}/release-manifest.json`;
 const metadataUrl = `https://github.com/uniquealexx/OpenCord/releases/download/v${version}/beta.yml`;
+const appImageName = `OpenCord-${version}-x64.AppImage`;
+const appImageBytes = Buffer.from("verified OpenCord AppImage");
+const appImageUrl = `https://github.com/uniquealexx/OpenCord/releases/download/v${version}/${appImageName}`;
 
 function manifest() {
   return {
@@ -88,7 +92,7 @@ describe("Electron client updater", () => {
     const updater = new FakeUpdater();
     updater.installerPath = installerPath;
     const states: string[] = [];
-    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", true, (state) => states.push(state.status), fetcher);
+    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "windows", (state) => states.push(state.status), fetcher);
 
     await expect(manager.check()).resolves.toMatchObject({ status: "available", version });
     await expect(manager.download()).resolves.toMatchObject({ status: "downloaded", version });
@@ -107,7 +111,7 @@ describe("Electron client updater", () => {
     const installerPath = path.join(directory, installerName);
     await writeFile(installerPath, "tampered");
     const updater = new FakeUpdater(); updater.installerPath = installerPath;
-    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", true, () => undefined, fetcher);
+    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "windows", () => undefined, fetcher);
     await manager.check();
     await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("Размер") });
   });
@@ -149,5 +153,86 @@ describe("Electron client updater", () => {
       download: vi.fn(),
     };
     await expect(runRequiredStartupUpdate(manager, async () => "quit")).resolves.toBe("quit");
+  });
+});
+
+class DirectUpdater implements ElectronUpdaterAdapter {
+  autoDownload = true;
+  autoInstallOnAppQuit = true;
+  allowPrerelease = false;
+  allowDowngrade = true;
+  channel: string | null = null;
+  filePath = "";
+  updateFiles: Array<{ url: string; size?: number; sha512?: string }> = [];
+  quitAndInstall = vi.fn();
+  on(_event: "download-progress", _listener: (progress: { percent: number }) => void): this;
+  on(_event: "error", _listener: (error: Error) => void): this;
+  on(): this { return this; }
+  async checkForUpdates() {
+    if (this.updateFiles.length === 0) return null;
+    return { updateInfo: { version, files: this.updateFiles } };
+  }
+  async downloadUpdate() { return [this.filePath]; }
+}
+
+describe("Direct updater flow (macOS and Linux AppImage)", () => {
+  it("checks, verifies and downloads an update through the update metadata", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "opencord-direct-updater-test-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, appImageName);
+    await writeFile(filePath, appImageBytes);
+    const updater = new DirectUpdater();
+    updater.filePath = filePath;
+    updater.updateFiles = [{ url: appImageUrl, size: appImageBytes.length, sha512: sha512(appImageBytes) }];
+    const states: string[] = [];
+    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "appimage", (state) => states.push(state.status), fetcher);
+
+    await expect(manager.check()).resolves.toMatchObject({
+      status: "available",
+      version,
+      sizeBytes: appImageBytes.length,
+      releaseUrl: `https://github.com/uniquealexx/OpenCord/releases/tag/v${version}`,
+    });
+    await expect(manager.download()).resolves.toMatchObject({ status: "downloaded", version });
+    manager.install();
+
+    expect(updater.allowPrerelease).toBe(true);
+    expect(updater.allowDowngrade).toBe(false);
+    expect(states).toEqual(expect.arrayContaining(["checking", "available", "downloading", "downloaded"]));
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  it("keeps the client on the current version when no update is published", async () => {
+    const updater = new DirectUpdater();
+    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "mac", () => undefined, fetcher);
+    await expect(manager.check()).resolves.toMatchObject({ status: "up-to-date" });
+  });
+
+  it("rejects update metadata with a non-canonical download URL", async () => {
+    const updater = new DirectUpdater();
+    updater.updateFiles = [{ url: `https://evil.example.com/releases/download/v${version}/${appImageName}`, size: 10 }];
+    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "mac", () => undefined, fetcher);
+    await expect(manager.check()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("недоверенный") });
+  });
+
+  it("rejects a downloaded update that does not match the update metadata", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "opencord-direct-updater-test-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, appImageName);
+    await writeFile(filePath, "tampered");
+    const updater = new DirectUpdater();
+    updater.filePath = filePath;
+    updater.updateFiles = [{ url: appImageUrl, size: appImageBytes.length, sha512: sha512(appImageBytes) }];
+    const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "appimage", () => undefined, fetcher);
+    await manager.check();
+    await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("Размер") });
+  });
+
+  it("reports a disabled state with a platform reason for deb and development flavors", async () => {
+    const deb = new ClientUpdateManager(new DirectUpdater(), version, "deb", () => undefined, fetcher);
+    expect(deb.getState()).toMatchObject({ status: "disabled", reason: expect.stringContaining("deb") });
+    await expect(deb.check()).resolves.toMatchObject({ status: "disabled" });
+    const development = new ClientUpdateManager(new DirectUpdater(), version, "development", () => undefined, fetcher);
+    expect(development.getState()).toMatchObject({ status: "disabled" });
   });
 });

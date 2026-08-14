@@ -35,14 +35,37 @@ Release, but does not yet replace a digital signature. Until Windows code signin
 a new installer is launched Windows may show a SmartScreen warning. Signing
 the client and manifest remains the mandatory next hardening step before a stable release.
 
+## Platforms and install formats
+
+The mandatory startup gate runs only in the NSIS-installed Windows x64 build. On macOS and Linux
+the gate is currently skipped: after the main window opens, the packaged build silently checks for
+an update and shows the result in the settings dialog, where the user can download and install it.
+
+- Windows: NSIS installer; the update is verified against `release-manifest.json` (name, size,
+  SHA-256) and installed silently with a forced restart.
+- macOS: universal dmg for installation and zip for updates. electron-updater discovers the release
+  through the GitHub API (prereleases are accepted only by the beta channel), downloads
+  `latest-mac.yml`, and the downloaded zip is verified by size and SHA-512 from that metadata before
+  installation. macOS builds are currently unsigned: Gatekeeper shows a warning, and reliable
+  production updates additionally require Apple code signing and notarization.
+- Linux x64: AppImage for portable launch and deb for installation. The AppImage build updates
+  itself through electron-updater with the same integrity checks as macOS (`latest-linux.yml`,
+  SHA-512). The deb build has no self-update mechanism: it shows a disabled reason and expects a
+  new version from GitHub Releases; an apt repository is a future direction.
+
+Until the update flows are verified on real macOS and Linux machines, Windows remains the only
+platform where the startup update is mandatory.
+
 ## Release pipeline
 
-The workflow for the `v*` tag first creates a draft GitHub Release with the server bundle, then on a
-Windows runner builds the NSIS installer, blockmap and update metadata. The script adds their
-SHA-256 and sizes to the shared release manifest. The draft is published only after a successful
-build of both parts, so the client does not see a partially built new release. After
-publishing the shared release, the workflow also creates a separate server-only release with the tag
-`server-v<version>` and copies of the server bundle, `.sha256` and the final manifest.
+The workflow for the `v*` tag first creates a draft GitHub Release with the server bundle, then in
+parallel builds the client on Windows (NSIS installer, blockmap, update metadata), Ubuntu
+(AppImage, deb, `latest-linux.yml`) and macOS (dmg, zip, `latest-mac.yml`) runners. The Windows
+artifacts are added to the shared release manifest with their SHA-256 and sizes. The draft is
+published only after every platform has uploaded its artifacts, so clients never see a partially
+built new release. After publishing the shared release, the workflow also creates a separate
+server-only release with the tag `server-v<version>` and copies of the server bundle, `.sha256`
+and the final manifest.
 
 ---
 
@@ -83,14 +106,37 @@ Release, но пока не заменяет цифровую подпись. Д
 запуске нового installer Windows может показывать предупреждение SmartScreen. Подпись
 клиента и manifest остаётся обязательным следующим усилением перед стабильным релизом.
 
+## Платформы и форматы установки
+
+Обязательный startup-gate выполняется только в Windows x64 сборке, установленной через NSIS.
+На macOS и Linux gate пока пропускается: после открытия основного окна установленная сборка
+молча проверяет обновление и показывает результат в настройках, откуда пользователь может
+скачать и установить его.
+
+- Windows: NSIS installer; обновление проверяется по `release-manifest.json` (имя, размер, SHA-256)
+  и устанавливается тихо с принудительным перезапуском.
+- macOS: universal dmg для установки и zip для обновлений. electron-updater находит релиз через
+  GitHub API (prerelease принимает только beta-канал), скачивает `latest-mac.yml`, а загруженный
+  zip проверяется по размеру и SHA-512 из этих метаданных до установки. Сборки macOS пока не
+  подписаны: Gatekeeper показывает предупреждение, а надёжные production-обновления дополнительно
+  требуют Apple code signing и нотаризации.
+- Linux x64: AppImage для запуска без установки и deb для установки. AppImage-сборка обновляет
+  себя через electron-updater с теми же проверками целостности, что и macOS (`latest-linux.yml`,
+  SHA-512). У deb-сборки механизма самообновления нет: она показывает причину отключения и
+  ожидает новую версию из GitHub Releases; apt-репозиторий — будущее направление.
+
+Пока потоки обновления не проверены на реальных macOS и Linux, обязательным обновление при
+запуске остаётся только на Windows.
+
 ## Release pipeline
 
-Workflow для тега `v*` сначала создаёт draft GitHub Release с server bundle, затем на
-Windows runner собирает NSIS installer, blockmap и update metadata. Скрипт добавляет их
-SHA-256 и размеры в общий release manifest. Draft публикуется только после успешной
-сборки обеих частей, поэтому клиент не видит частично собранный новый релиз. После
-публикации общего релиза workflow также создаёт отдельный server-only release с тегом
-`server-v<version>` и копиями server bundle, `.sha256` и итогового manifest.
+Workflow для тега `v*` сначала создаёт draft GitHub Release с server bundle, затем параллельно
+собирает клиент на Windows (NSIS installer, blockmap, update metadata), Ubuntu (AppImage, deb,
+`latest-linux.yml`) и macOS (dmg, zip, `latest-mac.yml`) runner'ах. Windows-артефакты добавляются
+в общий release manifest с их SHA-256 и размерами. Draft публикуется только после того, как все
+платформы загрузили свои артефакты, поэтому клиенты никогда не видят частично собранный новый
+релиз. После публикации общего релиза workflow также создаёт отдельный server-only release с
+тегом `server-v<version>` и копиями server bundle, `.sha256` и итогового manifest.
 
 ---
 
@@ -130,11 +176,29 @@ Release 内部的工件损坏或不匹配，但尚不能替代数字签名。在
 启动新的 installer 时 Windows 可能显示 SmartScreen 警告。对
 客户端和 manifest 进行签名仍然是稳定版本发布前必须执行的下一步加固措施。
 
+## 平台与安装格式
+
+强制启动检查仅在使用 NSIS 安装的 Windows x64 构建中执行。macOS 和 Linux 目前跳过该检查：
+主窗口打开后，已打包的构建会静默检查更新并在设置对话框中显示结果，用户可在其中下载和安装。
+
+- Windows：NSIS 安装程序；更新根据 `release-manifest.json`（名称、大小、SHA-256）验证，
+  静默安装并强制重启。
+- macOS：universal dmg 用于安装，zip 用于更新。electron-updater 通过 GitHub API 发现版本
+  （prerelease 仅限 beta 渠道接受），下载 `latest-mac.yml`，并在安装前根据该元数据验证所下载
+  zip 的大小和 SHA-512。macOS 构建目前未签名：Gatekeeper 会显示警告，可靠的生产更新还需要
+  Apple 代码签名和公证。
+- Linux x64：AppImage 用于便携启动，deb 用于安装。AppImage 构建通过 electron-updater 自动更新，
+  完整性检查与 macOS 相同（`latest-linux.yml`、SHA-512）。deb 构建没有自动更新机制：它会显示
+  禁用原因，并期望从 GitHub Releases 获取新版本；apt 仓库是未来的方向。
+
+在真实的 macOS 和 Linux 机器上验证更新流程之前，Windows 仍是唯一在启动时强制更新的平台。
+
 ## Release pipeline
 
-针对 `v*` 标签的 workflow 首先创建包含 server bundle 的 draft GitHub Release，然后在
-Windows runner 上构建 NSIS installer、blockmap 和 update metadata。脚本将它们的
-SHA-256 和大小添加到共享的 release manifest 中。只有在
-两部分都成功构建后才会发布 draft，因此客户端看不到部分构建的新版本。在
-发布共享 release 之后，workflow 还会创建一个单独的 server-only release，其标签为
-`server-v<version>`，并附带 server bundle、`.sha256` 和最终 manifest 的副本。
+针对 `v*` 标签的 workflow 首先创建包含 server bundle 的 draft GitHub Release，然后并行在
+Windows（NSIS installer、blockmap、update metadata）、Ubuntu（AppImage、deb、
+`latest-linux.yml`）和 macOS（dmg、zip、`latest-mac.yml`）runner 上构建客户端。Windows
+工件及其 SHA-256 和大小会被添加到共享的 release manifest 中。只有在所有平台都上传了各自
+工件之后才会发布 draft，因此客户端永远不会看到部分构建的新版本。在发布共享 release 之后，
+workflow 还会创建一个单独的 server-only release，其标签为 `server-v<version>`，并附带
+server bundle、`.sha256` 和最终 manifest 的副本。

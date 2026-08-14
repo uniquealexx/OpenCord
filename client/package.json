@@ -1,8 +1,15 @@
 {
   "name": "@opencord/client",
-  "version": "0.1.0-beta.13",
+  "version": "0.1.0-beta.14",
   "private": true,
+  "license": "MIT",
   "description": "OpenCord desktop client prototype",
+  "homepage": "https://github.com/uniquealexx/OpenCord",
+  "desktopName": "opencord.desktop",
+  "author": {
+    "name": "OpenCord maintainers",
+    "email": "maintainers@opencord.local"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "pnpm build && electron .",
@@ -10,6 +17,8 @@
     "build:renderer": "next build",
     "build": "pnpm build:renderer && pnpm build:electron",
     "package:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
+    "package:linux": "pnpm build && node scripts/package-linux.mjs",
+    "package:mac": "pnpm build && electron-builder --mac dmg zip --universal --publish never",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -60,6 +69,7 @@
     "appId": "org.opencord.desktop",
     "productName": "OpenCord",
     "asar": true,
+    "npmRebuild": false,
     "generateUpdatesFilesForAllChannels": true,
     "publish": [
       {
@@ -86,7 +96,8 @@
           ]
         }
       ],
-      "artifactName": "OpenCord-Setup-${version}-${arch}.${ext}"
+      "artifactName": "OpenCord-Setup-${version}-${arch}.${ext}",
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -94,6 +105,20 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": ["AppImage", "deb"],
+      "executableName": "opencord",
+      "category": "Network",
+      "syncDesktopName": true,
+      "artifactName": "OpenCord-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.social-networking",
+      "artifactName": "OpenCord-${version}-${arch}.${ext}"
     }
   }
 }

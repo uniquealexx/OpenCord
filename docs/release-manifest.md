@@ -36,6 +36,8 @@ For anonymous downloading, the repository and GitHub Release assets must be publ
 
 The Windows release pipeline fills in `artifacts.windowsClient`: the NSIS installer, its blockmap, and `beta.yml` or `latest.yml`. The installed client validates the manifest and update metadata before launching `electron-updater`, and the downloaded installer is additionally verified by size and SHA-256. Details are described in [client-updates.md](./client-updates.md).
 
+The same workflow also attaches the Linux x64 client (AppImage, deb, and `latest-linux.yml`) and the universal macOS client (dmg, zip, and `latest-mac.yml`) to the same GitHub Release. These artifacts are intentionally not yet part of manifest schema v1: existing clients parse the `artifacts` object strictly, so adding new sections would break their mandatory startup check and requires a coordinated client migration instead. Until then the macOS and Linux clients verify updates through electron-updater against the update metadata of the canonical GitHub Release (HTTPS plus size and SHA-512 from `latest-mac.yml`/`latest-linux.yml`). Manifest sections for these platforms are planned for schema v2.
+
 ---
 
 # OpenCord release manifest v1 (Русский)
@@ -76,6 +78,8 @@ Electron запрашивает manifest конкретной версии кл�
 
 Windows release pipeline заполняет `artifacts.windowsClient`: NSIS installer, его blockmap и `beta.yml` либо `latest.yml`. Установленный клиент проверяет manifest и update metadata до запуска `electron-updater`, а скачанный installer дополнительно сверяет по размеру и SHA-256. Подробности описаны в [client-updates.md](./client-updates.md).
 
+Тот же workflow прикладывает к общему GitHub Release Linux x64 клиент (AppImage, deb и `latest-linux.yml`) и универсальный macOS клиент (dmg, zip и `latest-mac.yml`). Эти артефакты намеренно пока не входят в manifest schema v1: существующие клиенты разбирают объект `artifacts` строго, поэтому добавление новых секций сломало бы их обязательную проверку при запуске и требует согласованной миграции клиента. До этого macOS и Linux клиенты проверяют обновления через electron-updater по update metadata канонического GitHub Release (HTTPS плюс размер и SHA-512 из `latest-mac.yml`/`latest-linux.yml`). Секции manifest для этих платформ запланированы в schema v2.
+
 ---
 
 # OpenCord 发布清单 v1 (中文)
@@ -115,3 +119,5 @@ Electron 从 `https://github.com/uniquealexx/OpenCord/releases/download/v<versio
 `deploy/scripts/bootstrap.sh` 是在没有 Node.js、也没有已安装服务器的 VPS 上进行手动一键安装的脚本。该脚本固定 `BOOTSTRAP_VERSION`（与包版本的一致性由 `pnpm check:versions` 检查），从规范 URL 下载精确版本的清单，并用纯 bash 的有限规则集验证它：`schemaVersion`、产品、`beta`/`stable` 渠道、版本与 pin 相等、整数 `protocolVersion`、`commit` 格式、规范的 bundle `releaseUrl` 和 `downloadUrl`、`sha256` 格式和 `sizeBytes` 范围、platform 以及 `installModes`。与已安装版本的比较有意缺失——在干净的 VPS 上没有已安装版本；完整 resolver 用于 `opencordctl update`。验证后，bootstrap 在解包前核对 bundle 的实际大小和 SHA-256 以及 tar 条目的安全性。该脚本以 `bootstrap.sh` 发布到 server-only GitHub Release，也可通过不可变标签经 `raw.githubusercontent.com` 获取。
 
 Windows release pipeline 填充 `artifacts.windowsClient`：NSIS installer、其 blockmap 以及 `beta.yml` 或 `latest.yml`。已安装的客户端在启动 `electron-updater` 之前验证清单和 update metadata，下载的 installer 还额外按大小和 SHA-256 核对。详情见 [client-updates.md](./client-updates.md)。
+
+同一个 workflow 还会将 Linux x64 客户端（AppImage、deb 和 `latest-linux.yml`）以及 universal macOS 客户端（dmg、zip 和 `latest-mac.yml`）附加到同一个 GitHub Release。这些工件目前有意不纳入 manifest schema v1：现有客户端会严格解析 `artifacts` 对象，因此添加新 section 会破坏它们的强制启动检查，需要协调一致的客户端迁移。在此之前，macOS 和 Linux 客户端通过 electron-updater 根据规范 GitHub Release 的 update metadata 验证更新（HTTPS 加上来自 `latest-mac.yml`/`latest-linux.yml` 的大小和 SHA-512）。这些平台的清单 section 计划在 schema v2 中加入。

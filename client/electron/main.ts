@@ -11,7 +11,7 @@ import { GitHubReleaseBundleProvider, githubReleaseManifestUrl, LocalServerBundl
 import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
 import { downloadAttachment, prepareAttachmentPreviewDirectory, previewAttachment, setAttachmentLatencySensitive, uploadAttachment } from "./attachments";
 import { autoUpdater } from "electron-updater";
-import { ClientUpdateManager, runRequiredStartupUpdate } from "./client-updater";
+import { ClientUpdateManager, runRequiredStartupUpdate, type ClientUpdateFlavor } from "./client-updater";
 import type { ClientUpdateState } from "../src/shared/updater";
 import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 import { isAllowedRendererPermission } from "./permissions";
@@ -364,10 +364,15 @@ void app.whenReady().then(async () => {
     app.getPath("temp"),
   );
   serverBundleProvider = new ReleaseAwareServerBundleProvider(localBundleProvider, releaseBundleProvider);
+  const clientUpdateFlavor: ClientUpdateFlavor = !app.isPackaged ? "development"
+    : process.platform === "win32" ? "windows"
+    : process.platform === "darwin" ? "mac"
+    : process.platform === "linux" && process.env.APPIMAGE ? "appimage"
+    : "deb";
   clientUpdateManager = new ClientUpdateManager(
     autoUpdater,
     app.getVersion(),
-    app.isPackaged && process.platform === "win32",
+    clientUpdateFlavor,
     emitClientUpdateState,
   );
   deploymentManager = new DeploymentManager(serverBundleProvider, (credentialId) => {
@@ -406,6 +411,11 @@ void app.whenReady().then(async () => {
   });
   registerIpc();
   await passStartupUpdateGate();
+  if (clientUpdateFlavor === "mac" || clientUpdateFlavor === "appimage") {
+    // No mandatory startup gate on macOS/Linux yet: check silently in the background,
+    // the result appears in the updates section of the settings dialog.
+    void clientUpdateManager.check();
+  }
   app.on("activate", () => { if (startupGateCompleted) showMainWindow(); });
 });
 
