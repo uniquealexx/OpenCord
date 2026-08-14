@@ -64,6 +64,12 @@
 - Cleartext HTTP разрешён только в debug-сборках (манифест `src/debug/`); release подключается только к `https://`-адресам.
 - Ключ не синхронизируется между устройствами: мобильное устройство создаёт собственную идентичность (как и любая новая установка клиента).
 
+## Публикация APK
+
+Android APK публикуется **отдельным GitHub Release**, в котором находится ровно один артефакт — `OpenCord-Android-<version>.apk`. Для этого создаётся тег `android-vX.Y.Z` (или `android-vX.Y.Z-beta.N` — тогда релиз получает флаг prerelease), точно совпадающий с версией `package.json`; тег не начинается с `v`, поэтому основной release workflow на него не срабатывает. Публикацию выполняет workflow `.github/workflows/publish-android-apk.yml` (JDK 17 + Android SDK на ubuntu-24.04, `pnpm typecheck/lint/test`, `pnpm --filter @opencord/client android:release`, загрузка APK через `gh`).
+
+Локальная сборка release-APK: `pnpm package:android` (проверка версий + `android:release`). Release-сборка подписана debug-ключом (`signingConfigs.debug` в `client/android/app/build.gradle`), чтобы APK устанавливался без хранения секретов подписи; продакшен-подпись — отдельный этап. Артефакт: `client/android/app/build/outputs/apk/release/app-release.apk`. В `release-manifest.json` секция для Android не добавляется: существующие клиенты строго разбирают schema v1, новые секции добавляются только согласованной миграцией (см. `docs/release-manifest.md`).
+
 ## Сборка и запуск
 
 Требования: JDK 17+ (подходит JBR из Android Studio), Android SDK (`ANDROID_HOME`), принятые лицензии SDK.

@@ -38,6 +38,8 @@ The Windows release pipeline fills in `artifacts.windowsClient`: the NSIS instal
 
 The same workflow also attaches the Linux x64 client (AppImage, deb, and `latest-linux.yml`) and the universal macOS client (dmg, zip, and `latest-mac.yml`) to the same GitHub Release. These artifacts are intentionally not yet part of manifest schema v1: existing clients parse the `artifacts` object strictly, so adding new sections would break their mandatory startup check and requires a coordinated client migration instead. Until then the macOS and Linux clients verify updates through electron-updater against the update metadata of the canonical GitHub Release (HTTPS plus size and SHA-512 from `latest-mac.yml`/`latest-linux.yml`). Manifest sections for these platforms are planned for schema v2.
 
+The Android prototype is published separately: pushing the `android-vX.Y.Z` (or `android-vX.Y.Z-beta.N`) tag triggers `.github/workflows/publish-android-apk.yml`, which creates a dedicated GitHub Release containing only the signed `OpenCord-Android-<version>.apk` (signed with the debug key until production signing is added). The tag intentionally does not match the `v*` filter of the main workflow, so the Android release never receives server or desktop artifacts. For the same reason as the Linux/macOS clients, the Android artifact is not added to manifest schema v1.
+
 ---
 
 # OpenCord release manifest v1 (Русский)
@@ -80,6 +82,8 @@ Windows release pipeline заполняет `artifacts.windowsClient`: NSIS inst
 
 Тот же workflow прикладывает к общему GitHub Release Linux x64 клиент (AppImage, deb и `latest-linux.yml`) и универсальный macOS клиент (dmg, zip и `latest-mac.yml`). Эти артефакты намеренно пока не входят в manifest schema v1: существующие клиенты разбирают объект `artifacts` строго, поэтому добавление новых секций сломало бы их обязательную проверку при запуске и требует согласованной миграции клиента. До этого macOS и Linux клиенты проверяют обновления через electron-updater по update metadata канонического GitHub Release (HTTPS плюс размер и SHA-512 из `latest-mac.yml`/`latest-linux.yml`). Секции manifest для этих платформ запланированы в schema v2.
 
+Android-прототип публикуется отдельно: отправка тега `android-vX.Y.Z` (или `android-vX.Y.Z-beta.N`) запускает `.github/workflows/publish-android-apk.yml`, который создаёт отдельный GitHub Release, содержащий только подписанный `OpenCord-Android-<version>.apk` (подписан debug-ключом до добавления продакшен-подписи). Тег намеренно не попадает под фильтр `v*` основного workflow, поэтому Android-релиз никогда не получает серверные или десктопные артефакты. По той же причине, что и для Linux/macOS клиентов, Android-артефакт не добавляется в manifest schema v1.
+
 ---
 
 # OpenCord 发布清单 v1 (中文)
@@ -121,3 +125,5 @@ Electron 从 `https://github.com/uniquealexx/OpenCord/releases/download/v<versio
 Windows release pipeline 填充 `artifacts.windowsClient`：NSIS installer、其 blockmap 以及 `beta.yml` 或 `latest.yml`。已安装的客户端在启动 `electron-updater` 之前验证清单和 update metadata，下载的 installer 还额外按大小和 SHA-256 核对。详情见 [client-updates.md](./client-updates.md)。
 
 同一个 workflow 还会将 Linux x64 客户端（AppImage、deb 和 `latest-linux.yml`）以及 universal macOS 客户端（dmg、zip 和 `latest-mac.yml`）附加到同一个 GitHub Release。这些工件目前有意不纳入 manifest schema v1：现有客户端会严格解析 `artifacts` 对象，因此添加新 section 会破坏它们的强制启动检查，需要协调一致的客户端迁移。在此之前，macOS 和 Linux 客户端通过 electron-updater 根据规范 GitHub Release 的 update metadata 验证更新（HTTPS 加上来自 `latest-mac.yml`/`latest-linux.yml` 的大小和 SHA-512）。这些平台的清单 section 计划在 schema v2 中加入。
+
+Android 原型单独发布：推送 `android-vX.Y.Z`（或 `android-vX.Y.Z-beta.N`）标签会触发 `.github/workflows/publish-android-apk.yml`，该工作流创建一个独立的 GitHub Release，其中只包含签名的 `OpenCord-Android-<version>.apk`（在添加生产签名之前使用 debug 密钥签名）。该标签有意不匹配主工作流的 `v*` 过滤器，因此 Android 发布永远不会收到服务器或桌面工件。与 Linux/macOS 客户端相同的原因，Android 工件不会加入 manifest schema v1。

@@ -9,7 +9,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-const variant = process.argv[2] === "release" ? "assembleRelease" : "assembleDebug";
+const flavor = process.argv[2] === "release" ? "release" : "debug";
+const variant = flavor === "release" ? "assembleRelease" : "assembleDebug";
 const androidDir = path.resolve(import.meta.dirname, "..", "android");
 
 const sdk = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT
@@ -38,10 +39,16 @@ console.info(`JAVA_HOME=${javaHome}`);
 console.info(`ANDROID_HOME=${sdk}`);
 
 const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
-const result = spawnSync(gradlew, [variant, "--console=plain"], {
-  cwd: androidDir,
-  env,
-  stdio: "inherit",
-  shell: process.platform === "win32",
-});
-process.exit(result.status ?? 1);
+const result = process.platform === "win32"
+  ? spawnSync("cmd", ["/c", gradlew, variant, "--console=plain"], { cwd: androidDir, env, stdio: "inherit" })
+  : spawnSync(gradlew, [variant, "--console=plain"], { cwd: androidDir, env, stdio: "inherit" });
+if (result.status !== 0) process.exit(result.status ?? 1);
+
+const apkName = flavor === "release" ? "app-release.apk" : "app-debug.apk";
+const apkPath = path.join(androidDir, "app", "build", "outputs", "apk", flavor, apkName);
+if (!existsSync(apkPath)) {
+  console.error(`APK не найден после сборки: ${apkPath}`);
+  process.exit(1);
+}
+console.info(`APK: ${apkPath}`);
+

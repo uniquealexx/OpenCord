@@ -18,6 +18,7 @@
     "build": "pnpm build:renderer && pnpm build:electron",
     "android:sync": "cap sync android",
     "android:debug": "pnpm build:renderer && cap sync android && node scripts/build-android.mjs debug",
+    "android:release": "pnpm build:renderer && cap sync android && node scripts/build-android.mjs release",
     "package:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "package:linux": "pnpm build && node scripts/package-linux.mjs",
     "package:mac": "pnpm build && electron-builder --mac dmg zip --universal --publish never",

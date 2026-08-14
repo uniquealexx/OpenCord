@@ -1,0 +1,130 @@
+# Отдельный GitHub Release только с Android APK.
+#
+# Триггер — тег `android-vX.Y.Z` (или `android-vX.Y.Z-beta.N`), который обязан
+# точно совпадать с версией из package.json. Тег не начинается с `v`, поэтому
+# основной workflow publish-server-image.yml на него не срабатывает.
+#
+# Публикуется ровно один артефакт — release APK (подписан debug-ключом, см.
+# client/android/app/build.gradle); никакие manifest-файлы сюда не попадают:
+# schema v1 строго разбирается существующими клиентами, и новые секции
+# добавляются только согласованной миграцией (см. docs/release-manifest.md).
+
+name: Publish OpenCord Android APK
+
+on:
+  push:
+    tags:
+      - "android-v*"
+
+concurrency:
+  group: publish-android-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: 24.18.0
+  PNPM_VERSION: 11.9.0
+  ANDROID_SDK_ROOT: /opt/android-sdk
+
+jobs:
+  publish-android:
+    name: Build and publish Android APK release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Validate Android release metadata
+        id: release
+        shell: bash
+        run: |
+          version="$(node --print "require('./package.json').version")"
+          expected_tag="android-v${version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Git tag ${GITHUB_REF_NAME} does not match android-v${version}." >&2
+            exit 1
+          fi
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            channel="beta"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel="stable"
+          else
+            echo "Supported releases are X.Y.Z or X.Y.Z-beta.N." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Java
+        shell: bash
+        run: |
+          # ubuntu-24.04 runner содержит Temurin 17 и 21; обе подходят для AGP 8.13.
+          if [[ -d /usr/lib/jvm/temurin-17-jdk-amd64 ]]; then
+            echo "JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64" >> "${GITHUB_ENV}"
+          fi
+          java -version
+
+      - name: Set up Android SDK
+        shell: bash
+        run: |
+          mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
+          curl -fsSL -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools"
+          mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
+          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.1.0"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate packages and contracts
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+
+      - name: Build the Android release APK
+        run: pnpm --filter @opencord/client android:release
+
+      - name: Verify the APK artifact
+        shell: bash
+        run: |
+          apk="client/android/app/build/outputs/apk/release/app-release.apk"
+          test -f "${apk}" || { echo "Missing Android APK: ${apk}" >&2; exit 1; }
+          echo "APK size: $(du -h "${apk}" | cut -f1)"
+
+      - name: Publish the APK-only GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.release.outputs.version }}"
+          channel="${{ steps.release.outputs.channel }}"
+          tag="${GITHUB_REF_NAME}"
+          title="OpenCord Android ${version}"
+          if [[ "${channel}" == "beta" ]]; then title="${title} Beta"; fi
+          mkdir -p android-release
+          cp "client/android/app/build/outputs/apk/release/app-release.apk" "android-release/OpenCord-Android-${version}.apk"
+          asset="android-release/OpenCord-Android-${version}.apk"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${asset}" --clobber
+            gh release edit "${tag}" --title "${title}"
+          elif [[ "${channel}" == "beta" ]]; then
+            gh release create "${tag}" "${asset}" --target "${GITHUB_SHA}" --title "${title}" --notes "Android APK for OpenCord ${version}." --prerelease
+          else
+            gh release create "${tag}" "${asset}" --target "${GITHUB_SHA}" --title "${title}" --notes "Android APK for OpenCord ${version}."
+          fi

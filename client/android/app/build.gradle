@@ -20,6 +20,10 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Прототип: release-сборка подписывается debug-ключом, чтобы APK был
+            // устанавливаемым без хранения секретов подписи. Продакшен-подпись
+            // (keystore в secrets) будет добавлена отдельным этапом.
+            signingConfig signingConfigs.debug
         }
     }
 }

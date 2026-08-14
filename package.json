@@ -22,6 +22,7 @@
     "package:win": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
     "package:linux": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:linux",
     "package:mac": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:mac",
+    "package:android": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client android:release",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm check:versions && pnpm -r --if-present typecheck",
     "test": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm -r --workspace-concurrency=1 --if-present test"
