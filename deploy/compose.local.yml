@@ -27,5 +27,10 @@ services:
         OPENCORD_BUILD_COMMIT: ${OPENCORD_BUILD_COMMIT:-}
 
   livekit:
+    environment:
+      # За NAT Docker Desktop STUN находит публичный IP роутера, недостижимый с хоста:
+      # анонсируем 127.0.0.1 (клиент на том же хосте, порты уже проброшены на localhost).
+      LIVEKIT_USE_EXTERNAL_IP: "false"
+      LIVEKIT_NODE_IP: "127.0.0.1"
     ports:
       - "127.0.0.1:7882:7880"

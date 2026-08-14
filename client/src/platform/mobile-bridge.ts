@@ -52,6 +52,7 @@ export function createMobileBridge(): MobileBridge {
     },
     attachments: {
       selectAndUpload,
+      uploadFile,
       download,
       preview,
       setLatencySensitive: async () => { /* мобильный стек не троттлит передачу вложений */ },
@@ -181,6 +182,16 @@ async function selectAndUpload(contextInput: AttachmentTransferContext): Promise
   const context = attachmentTransferContextSchema.parse(contextInput);
   const file = await pickFile();
   if (!file) return null;
+  return uploadMobileFile(context, file);
+}
+
+/** Загрузка конкретного файла (вставка Ctrl+V, drag&drop) — тот же нативный HTTP-путь. */
+async function uploadFile(contextInput: AttachmentTransferContext, file: File): Promise<Attachment> {
+  const context = attachmentTransferContextSchema.parse(contextInput);
+  return uploadMobileFile(context, file);
+}
+
+async function uploadMobileFile(context: AttachmentTransferContext, file: File): Promise<Attachment> {
   if (file.size < 1) throw new Error("Выбран пустой файл или не обычный файл");
   if (context.maxAttachmentBytes !== null && file.size > context.maxAttachmentBytes) throw new Error(`Файл превышает лимит ${Math.floor(context.maxAttachmentBytes / 1024 / 1024)} МБ`);
   const response = await CapacitorHttp.post({

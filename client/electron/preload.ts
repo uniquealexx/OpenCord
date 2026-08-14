@@ -1,8 +1,9 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { attachmentSchema } from "@opencord/shared";
 import { IPC, type OpenCordBridge } from "../src/shared/bridge";
 import { parsePersistedState } from "../src/shared/state";
 import { deploymentConnectionSchema, deploymentEnvironmentSchema, deploymentProgressSchema, deploymentRequestSchema, deploymentStartResultSchema, selectedServerBundleSchema, selectedSshKeySchema, sshHostIdentitySchema, sshTargetSchema } from "../src/shared/deployment";
-import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
+import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachmentTransferContextSchema, attachmentUploadBytesRequestSchema, attachmentUploadRequestSchema, attachmentUploadResultSchema } from "../src/shared/attachments";
 import { clientUpdateStateSchema } from "../src/shared/updater";
 import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 import { serverProbeAddressSchema, serverProbeResultSchema } from "../src/shared/server-probe";
@@ -51,6 +52,17 @@ const bridge: OpenCordBridge = {
   },
   attachments: {
     selectAndUpload: async (context) => attachmentUploadResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentSelectAndUpload, attachmentTransferContextSchema.parse(context))),
+    uploadFile: async (context, file) => {
+      const parsedContext = attachmentTransferContextSchema.parse(context);
+      // File.path удалён из Chromium (Electron 32+); путь к файлу даёт webUtils.getPathForFile.
+      const filePath = webUtils.getPathForFile(file);
+      if (filePath) {
+        return attachmentSchema.parse(await ipcRenderer.invoke(IPC.attachmentUploadFile, attachmentUploadRequestSchema.parse({ context: parsedContext, filePath })));
+      }
+      // Файл без пути на диске (например, скриншот из буфера обмена): передаём байты целиком.
+      const contents = new Uint8Array(await file.arrayBuffer());
+      return attachmentSchema.parse(await ipcRenderer.invoke(IPC.attachmentUploadBytes, attachmentUploadBytesRequestSchema.parse({ context: parsedContext, fileName: file.name || "clipboard-image.png", mimeType: file.type || "application/octet-stream", contents })));
+    },
     download: async (request) => (await ipcRenderer.invoke(IPC.attachmentDownload, attachmentDownloadRequestSchema.parse(request))) === true,
     preview: async (request) => attachmentPreviewResultSchema.parse(await ipcRenderer.invoke(IPC.attachmentPreview, attachmentDownloadRequestSchema.parse(request))),
     setLatencySensitive: async (value) => { await ipcRenderer.invoke(IPC.attachmentSetLatencySensitive, value === true); },

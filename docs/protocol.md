@@ -1,4 +1,4 @@
-# OpenCord Protocol v28 (English)
+# OpenCord Protocol v29 (English)
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
 
@@ -20,7 +20,7 @@ The challenge is single-use within a connection. The private key is not included
 
 ## Public profiles, avatars, and banners
 
-`auth.respond.profile` contains the display name, a public description of up to 160 characters, optional public avatar and banner, and the chosen status: `online`, `idle`, `dnd`, or `invisible`. After a file is selected, the client shows a local cropping editor with panning and zoom. The selected avatar square is scaled down to 128×128 and encoded as WebP of at most 96 KB. The banner is cropped to a 5:2 ratio, scaled down to at most 600×240, and encoded as WebP of at most 256 KB. The server re-validates the format and size limits and stores a single current version of the user's profile — messages do not create separate copies. The server avatar uses the same square-frame editor before separate server-side compression.
+`auth.respond.profile` contains the display name, a public description of up to 160 characters, optional public avatar and banner, and the chosen status: `online`, `idle`, `dnd`, or `invisible`. After a file is selected, the client shows a local cropping editor with panning and zoom. The selected avatar square is scaled down to 128×128 and encoded as WebP of at most 96 KB. The banner is cropped to a 5:2 ratio, scaled down to at most 600×240, and encoded as WebP of at most 256 KB. The server re-validates the format and size limits and stores a single current version of the user's profile — messages do not create separate copies. The server avatar uses the same square-frame editor before separate server-side compression. The server banner follows the profile-banner format (5:2 crop, at most 600×240, WebP up to 256 KB): the owner updates it with `server.banner.update`, the server broadcasts `server.banner.updated`, and the snapshot includes the current `banner`.
 
 The name, description, avatar, and banner are returned in `server.snapshot.members` and `member.updated`; the current name and avatar are also used by events and the message history. Therefore one server profile is used by the member list, the text chat, and the voice room interface, while the banner is shown in the profile preview that opens. When the profile or status changes, the client sends `profile.update` over the existing WebSocket without reconnecting. The server replaces the previous public fields in the user's single record and broadcasts `member.updated` to all active clients. On explicit leave, the public description, avatar, and banner are cleared on the server.
 
@@ -128,7 +128,7 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v28 (Русский)
+# OpenCord Protocol v29 (Русский)
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
 
@@ -150,7 +150,7 @@ Challenge одноразовый в рамках соединения. Прив�
 
 ## Публичные профили, аватары и шапки
 
-`auth.respond.profile` содержит отображаемое имя, публичное описание длиной до 160 символов, необязательные публичные аватар и шапку, а также выбранный статус: `online`, `idle`, `dnd` или `invisible`. После выбора файла клиент показывает локальный редактор кадрирования с перемещением и масштабом. Выбранный квадрат аватара уменьшается до 128×128 и кодируется в WebP размером не более 96 КБ. Шапка кадрируется в пропорции 5:2, уменьшается максимум до 600×240 и кодируется в WebP размером не более 256 КБ. Сервер повторно проверяет формат и ограничения размера и хранит одну актуальную версию профиля пользователя — сообщения не создают отдельных копий. Аватар сервера использует тот же редактор квадратного кадра перед отдельным серверным сжатием.
+`auth.respond.profile` содержит отображаемое имя, публичное описание длиной до 160 символов, необязательные публичные аватар и шапку, а также выбранный статус: `online`, `idle`, `dnd` или `invisible`. После выбора файла клиент показывает локальный редактор кадрирования с перемещением и масштабом. Выбранный квадрат аватара уменьшается до 128×128 и кодируется в WebP размером не более 96 КБ. Шапка кадрируется в пропорции 5:2, уменьшается максимум до 600×240 и кодируется в WebP размером не более 256 КБ. Сервер повторно проверяет формат и ограничения размера и хранит одну актуальную версию профиля пользователя — сообщения не создают отдельных копий. Аватар сервера использует тот же редактор квадратного кадра перед отдельным серверным сжатием. Обложка сервера использует формат шапки профиля (кадр 5:2, максимум 600×240, WebP до 256 КБ): владелец меняет её событием `server.banner.update`, сервер рассылает `server.banner.updated`, а snapshot содержит актуальный `banner`.
 
 Имя, описание, аватар и шапка возвращаются в `server.snapshot.members` и `member.updated`; актуальные имя и аватар также используются событиями и историей сообщений. Поэтому один серверный профиль используется списком участников, текстовым чатом и интерфейсом голосовой комнаты, а шапка показывается в открываемом превью профиля. При смене профиля или статуса клиент отправляет `profile.update` по существующему WebSocket без переподключения. Сервер заменяет прежние публичные поля в единственной записи пользователя и рассылает `member.updated` всем активным клиентам. При явном выходе публичные описание, аватар и шапка очищаются на сервере.
 
@@ -258,7 +258,7 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v28 (中文)
+# OpenCord 协议 v29 (中文)
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
 
@@ -280,7 +280,7 @@ Challenge 在单个连接内是一次性的。私钥不会出现在任何网络�
 
 ## 公开个人资料、头像和横幅
 
-`auth.respond.profile` 包含显示名称、最长 160 个字符的公开描述、可选的公开头像和横幅，以及所选的状态：`online`、`idle`、`dnd` 或 `invisible`。选择文件后，客户端会显示一个带有平移和缩放的本地裁剪编辑器。选定的头像正方形会缩小到 128×128，并编码为不超过 96 KB 的 WebP。横幅按 5:2 的比例裁剪，最大缩小到 600×240，并编码为不超过 256 KB 的 WebP。服务器会再次验证格式和大小限制，并存储用户个人资料的一个当前版本——消息不会创建单独的副本。服务器头像在单独的服务器端压缩之前使用相同的正方形画面编辑器。
+`auth.respond.profile` 包含显示名称、最长 160 个字符的公开描述、可选的公开头像和横幅，以及所选的状态：`online`、`idle`、`dnd` 或 `invisible`。选择文件后，客户端会显示一个带有平移和缩放的本地裁剪编辑器。选定的头像正方形会缩小到 128×128，并编码为不超过 96 KB 的 WebP。横幅按 5:2 的比例裁剪，最大缩小到 600×240，并编码为不超过 256 KB 的 WebP。服务器会再次验证格式和大小限制，并存储用户个人资料的一个当前版本——消息不会创建单独的副本。服务器头像在单独的服务器端压缩之前使用相同的正方形画面编辑器。服务器封面使用个人资料横幅格式（5:2 裁剪，最大 600×240，WebP 不超过 256 KB）：所有者通过 `server.banner.update` 更新它，服务器广播 `server.banner.updated`，快照中包含当前的 `banner`。
 
 名称、描述、头像和横幅在 `server.snapshot.members` 和 `member.updated` 中返回；当前的名称和头像也会被事件和消息历史使用。因此，一个服务器个人资料被成员列表、文本聊天和语音房间界面共同使用，而横幅显示在打开的个人资料预览中。当个人资料或状态发生变化时，客户端会通过现有 WebSocket 发送 `profile.update`，无需重新连接。服务器在用户的唯一记录中替换之前的公开字段，并向所有活动客户端广播 `member.updated`。在明确退出时，服务器会清除公开描述、头像和横幅。
 

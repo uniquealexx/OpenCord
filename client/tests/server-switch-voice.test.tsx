@@ -68,7 +68,7 @@ describe("voice session on server switch", () => {
     voiceLeave.mockClear();
     window.openCord = {
       storage: { load: vi.fn(async () => stateWithTwoServers()), save: vi.fn(async () => undefined), reset: vi.fn(async () => createDefaultState()) },
-      attachments: { setLatencySensitive: vi.fn(async () => undefined) },
+      attachments: { selectAndUpload: vi.fn(async () => null), uploadFile: vi.fn(async () => { throw new Error("uploadFile не ожидается в этом тесте"); }), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     } as unknown as NonNullable<typeof window.openCord>;
   });
 

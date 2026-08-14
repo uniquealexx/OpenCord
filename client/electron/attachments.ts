@@ -18,7 +18,7 @@ export const ATTACHMENT_RATE_BYTES_PER_SECOND = 8 * 1024 * 1024;
 export const VOICE_ATTACHMENT_RATE_BYTES_PER_SECOND = 2 * 1024 * 1024;
 let attachmentLatencySensitive = false;
 
-export interface AttachmentTransferOptions { latencySensitive?: boolean }
+export interface AttachmentTransferOptions { latencySensitive?: boolean; /** Имя файла, отличное от basename пути (загрузка из буфера через временный файл). */ fileName?: string }
 
 export function attachmentTransferRate(sizeBytes: number, latencySensitive = false): number | null {
   if (sizeBytes < HEAVY_ATTACHMENT_BYTES) return null;
@@ -77,8 +77,8 @@ export async function uploadAttachment(filePath: string, serverAddress: string, 
       authorization: `Bearer ${sessionToken}`,
       "content-type": "application/octet-stream",
       "content-length": String(info.size),
-      "x-opencord-file-name": Buffer.from(path.basename(filePath), "utf8").toString("base64url"),
-      "x-opencord-mime-type": mimeTypeFor(filePath),
+      "x-opencord-file-name": Buffer.from(options.fileName ?? path.basename(filePath), "utf8").toString("base64url"),
+      "x-opencord-mime-type": mimeTypeFor(options.fileName ?? filePath),
     });
     const responsePromise = response;
     if (bytesPerSecond === null) await pipeline(createReadStream(filePath), outgoing);

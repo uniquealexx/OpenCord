@@ -59,6 +59,7 @@ export const mockServerSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1).max(48),
   avatar: z.string().max(1_500_000).nullable().optional(),
+  banner: z.string().max(500_000).nullable().optional(),
   address: z.string().max(200).nullable(),
   accent: z.string().regex(/^#[0-9a-f]{6}$/i),
   maxAttachmentBytes: attachmentUploadLimitSchema.default(DEFAULT_ATTACHMENT_LIMIT_BYTES),

@@ -2,7 +2,7 @@ import { publicKeyFingerprint, type Attachment, type Channel, type ChatMessage, 
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
-interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
+interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
 interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean }
@@ -30,15 +30,19 @@ export class ChatRepository {
     await this.database.query("UPDATE servers SET deleted_at = now() WHERE id = $1", [DEFAULT_SERVER_ID]);
   }
 
-  async getServer(): Promise<{ id: string; avatar: string | null; channels: Channel[] } & ServerSettings> {
-    const [server] = await this.database.query<ServerRow>("SELECT id, name, avatar, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
+  async getServer(): Promise<{ id: string; avatar: string | null; banner: string | null; channels: Channel[] } & ServerSettings> {
+    const [server] = await this.database.query<ServerRow>("SELECT id, name, avatar, banner, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
     if (!server) throw new Error("Default server is missing");
     const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
-    return { id: server.id, name: server.name, avatar: server.avatar, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], channels: channels.map(mapChannel) };
+    return { id: server.id, name: server.name, avatar: server.avatar, banner: server.banner, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], channels: channels.map(mapChannel) };
   }
 
   async updateServerAvatar(avatar: string | null): Promise<void> {
     await this.database.query("UPDATE servers SET avatar = $2 WHERE id = $1", [DEFAULT_SERVER_ID, avatar]);
+  }
+
+  async updateServerBanner(banner: string | null): Promise<void> {
+    await this.database.query("UPDATE servers SET banner = $2 WHERE id = $1", [DEFAULT_SERVER_ID, banner]);
   }
 
   async channelExists(channelId: string): Promise<boolean> {

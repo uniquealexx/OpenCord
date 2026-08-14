@@ -32,9 +32,9 @@ const composeArguments = [
   "--file", path.join(deployDirectory, "compose.local.yml"),
 ];
 
-if (action === "up") composeArguments.push("up", "--detach", "--build", "database", "server");
+if (action === "up") composeArguments.push("up", "--detach", "--build", "database", "server", "livekit");
 if (action === "down") composeArguments.push("down");
-if (action === "logs") composeArguments.push("logs", "--follow", "--tail", "200", "server", "database");
+if (action === "logs") composeArguments.push("logs", "--follow", "--tail", "200", "server", "database", "livekit");
 
 const result = spawnSync("docker", composeArguments, { cwd: repositoryRoot, stdio: "inherit", shell: false });
 if (result.error) throw result.error;

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
@@ -39,9 +40,12 @@ class FakeWebSocket {
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
+  static readonly instances: FakeWebSocket[] = [];
   readyState = FakeWebSocket.CONNECTING;
   readonly listeners: Record<string, ((event: { data?: string }) => void)[]> = {};
-  constructor(public readonly url: string) {}
+  constructor(public readonly url: string) {
+    FakeWebSocket.instances.push(this);
+  }
   addEventListener(type: string, handler: (event: { data?: string }) => void): void {
     (this.listeners[type] ??= []).push(handler);
   }
@@ -61,9 +65,9 @@ describe("ClientApp", () => {
     window.openCord = {
       window: { minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(), isMaximized: vi.fn(), onMaximizedChange: vi.fn(() => () => undefined) },
       storage: { load: vi.fn(async () => readyState()), save, reset: vi.fn(async () => createDefaultState()) },
-      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "test-public-key", fingerprint: "test", discriminator: "1234" })), signChallenge: vi.fn(async () => "test-signature"), reset: vi.fn(async () => ({ publicKey: "new-test-public-key", fingerprint: "new-test", discriminator: "5678" })) },
+      identity: { getOrCreate: vi.fn(async () => ({ publicKey: "test-public-key-test-public-key-test-public-key", fingerprint: "test", discriminator: "1234" })), signChallenge: vi.fn(async () => "s".repeat(64)), reset: vi.fn(async () => ({ publicKey: "new-test-public-key", fingerprint: "new-test", discriminator: "5678" })) },
       deployment: { selectServerBundle: vi.fn(async () => null), selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
-      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
+      attachments: { selectAndUpload: vi.fn(async () => null), uploadFile: vi.fn(async (_context: unknown, file: File) => ({ id: "att-1", fileName: file.name, mimeType: "text/plain", sizeBytes: 4, sha256: "a".repeat(64) })), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
   });
 
@@ -99,11 +103,11 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const server = { ...readyState().servers[0]!, address: "http://127.0.0.1:3210", deployment: { host: "127.0.0.1", port: 2222, username: "root", serverName: "Тестовый сервер", mode: "native" as const, authentication: "password" as const } };
-    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canViewSettings canUpdate canDeleteForAll canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const { rerender } = render(<LeaveServerDialog server={server} canManageServer canViewSettings canUpdate canDeleteForAll canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Обновить сервер" }));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    rerender(<LeaveServerDialog server={server} canManageServer={false} canViewSettings={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    rerender(<LeaveServerDialog server={server} canManageServer={false} canViewSettings={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={onUpdate} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Обновить сервер" })).not.toBeInTheDocument();
   });
 
@@ -192,10 +196,73 @@ describe("ClientApp", () => {
     expect(save).toHaveBeenCalled();
   });
 
+  const AUTH_UUID = "11111111-1111-4111-8111-111111111111";
+
+  /** Рендерит ClientApp с сетевым сервером и доводит фейковый сокет до auth.ok (сессия есть). */
+  async function renderConnectedClient(state: PersistedClientState): Promise<void> {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+    const socket = FakeWebSocket.instances.at(-1);
+    expect(socket).toBeDefined();
+    act(() => {
+      for (const handler of socket!.listeners.message ?? []) {
+        handler({ data: JSON.stringify({ type: "auth.challenge", requestId: AUTH_UUID, protocolVersion: PROTOCOL_VERSION, challenge: Buffer.from("test-challenge-123456").toString("base64"), expiresAt: new Date(Date.now() + 60_000).toISOString() }) });
+      }
+    });
+    act(() => {
+      for (const handler of socket!.listeners.message ?? []) {
+        handler({ data: JSON.stringify({ type: "auth.ok", requestId: AUTH_UUID, userId: "user-1", serverId: AUTH_UUID, sessionToken: "t".repeat(50), sessionExpiresAt: new Date(Date.now() + 60_000).toISOString() }) });
+      }
+    });
+    await waitFor(() => expect(screen.getByText("подключено")).toBeInTheDocument());
+  }
+
+  it("attaches files pasted into the composer and dropped onto the chat", async () => {
+    let attachmentCounter = 0;
+    const uploadFile = vi.fn(async (_context: unknown, file: File) => ({ id: `att-${++attachmentCounter}`, fileName: file.name, mimeType: "text/plain", sizeBytes: 4, sha256: "a".repeat(64) }));
+    window.openCord!.attachments.uploadFile = uploadFile;
+    const state = readyState();
+    state.servers[0]!.address = "http://127.0.0.1:3210";
+    await renderConnectedClient(state);
+
+    const composer = screen.getByLabelText(/написать в #добро-пожаловать/i);
+    // clipboardData и dataTransfer — readonly-поля нативных событий: диспатчим вручную.
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", { value: { files: [new File(["раз"], "паста.txt", { type: "text/plain" })] } });
+    composer.dispatchEvent(pasteEvent);
+    expect(await screen.findByText("паста.txt")).toBeInTheDocument();
+
+    const section = composer.closest("section");
+    expect(section).not.toBeNull();
+    const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(dropEvent, "dataTransfer", { value: { types: ["Files"], files: [new File(["два"], "перетащенный.txt", { type: "text/plain" })] } });
+    section!.dispatchEvent(dropEvent);
+    expect(await screen.findByText("перетащенный.txt")).toBeInTheDocument();
+
+    expect(uploadFile).toHaveBeenCalledTimes(2);
+    expect(uploadFile.mock.calls[0]?.[1]?.name).toBe("паста.txt");
+    expect(uploadFile.mock.calls[1]?.[1]?.name).toBe("перетащенный.txt");
+  });
+
+  it("ignores pasted files while the server is not connected", async () => {
+    const uploadFile = vi.fn();
+    window.openCord!.attachments.uploadFile = uploadFile;
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+    const composer = screen.getByLabelText(/написать в #добро-пожаловать/i);
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", { value: { files: [new File(["x"], "без-соединения.txt")] } });
+    composer.dispatchEvent(pasteEvent);
+    expect(await screen.findByText("Вложения доступны после подключения")).toBeInTheDocument();
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
   it("saves the server name, unlimited attachments and screen-share limits together", async () => {
     const user = userEvent.setup();
     const onSaveSettings = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     const nameInput = screen.getByRole("textbox", { name: "Название сервера" });
     await user.clear(nameInput);
     await user.type(nameInput, "Новый OpenCord");
@@ -212,7 +279,7 @@ describe("ClientApp", () => {
   it("saves a manually entered bounded attachment limit", async () => {
     const user = userEvent.setup();
     const onSaveSettings = vi.fn(() => true);
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={vi.fn()} onSaveSettings={onSaveSettings} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     const input = screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" });
     await user.clear(input);
     await user.type(input, "1500");
@@ -223,7 +290,7 @@ describe("ClientApp", () => {
   });
 
   it("shows server settings read-only to an administrator", () => {
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer={false} canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn()} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer={false} canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn()} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.getByRole("heading", { name: "Управление сервером" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Название сервера" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "Лимит загрузки в мегабайтах" })).toBeDisabled();
@@ -236,7 +303,7 @@ describe("ClientApp", () => {
   });
 
   it("hides server settings from regular members", () => {
-    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer={false} canViewSettings={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn()} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    render(<LeaveServerDialog server={{ ...readyState().servers[0]!, address: "http://127.0.0.1:3210" }} canManageServer={false} canViewSettings={false} canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn()} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
     expect(screen.getByRole("heading", { name: "Выйти с сервера?" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Название сервера" })).not.toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Максимальный размер загружаемого файла" })).not.toBeInTheDocument();
@@ -482,6 +549,7 @@ describe("ClientApp", () => {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
       avatar: "data:image/png;base64,AA==",
+      banner: "data:image/webp;base64,AQ==",
       maxAttachmentBytes: 25 * 1024 * 1024,
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
@@ -492,6 +560,7 @@ describe("ClientApp", () => {
 
     expect(next.servers[0]?.name).toBe("OpenCord Server");
     expect(next.servers[0]?.avatar).toBe("data:image/png;base64,AA==");
+    expect(next.servers[0]?.banner).toBe("data:image/webp;base64,AQ==");
     expect(next.servers[0]?.maxAttachmentBytes).toBe(25 * 1024 * 1024);
     expect(next.servers[0]?.screenShareMaxResolution).toBe(720);
     expect(next.servers[0]?.screenShareMaxFrameRate).toBe(30);
@@ -514,6 +583,7 @@ describe("ClientApp", () => {
       id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
       name: "OpenCord Server",
       avatar: null,
+      banner: null,
       maxAttachmentBytes: null,
       screenShareMaxResolution: 1080,
       screenShareMaxFrameRate: 60,
@@ -866,6 +936,22 @@ describe("ClientApp", () => {
     render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
     expect(screen.getByText("Личное сообщение · анонимно")).toBeInTheDocument();
     expect(screen.getByText("Это секрет")).toBeInTheDocument();
+  });
+
+  it("keeps the anonymous label on demo search results", async () => {
+    const user = userEvent.setup();
+    const state = readyState();
+    state.messages = [...state.messages, { id: "apm-demo", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "секрет-текст", createdAt: new Date().toISOString(), kind: "apm" as const, targetUserId: "member", anonymous: true }];
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    await user.click(screen.getByRole("button", { name: "Открыть поиск по серверу" }));
+    await user.type(screen.getByLabelText("Текст поиска"), "секрет");
+    await user.click(screen.getByRole("button", { name: "Найти" }));
+    // Метка анонимного сообщения появляется и в результатах поиска, и в самом чате.
+    expect(await screen.findAllByText("Личное сообщение · анонимно")).toHaveLength(2);
+    expect(within(screen.getByLabelText("Поиск по серверу")).getByText("Личное сообщение · анонимно")).toBeInTheDocument();
   });
   it("offers mute duration presets after /mute @target and applies them by click or Tab", async () => {
     const user = userEvent.setup();

@@ -1,11 +1,11 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ServerSearchPanel } from "@/components/server-search-panel";
 
 const channel = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", serverId: "server", name: "общий", kind: "text" as const, description: "", participantLimit: null };
 const member = { id: "user-1", displayName: "Лина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
-const panelProps = { previewAvailable: false, onPreview: vi.fn(async () => "data:image/png;base64,AA==") };
+const panelProps = { previewAvailable: false, onPreview: vi.fn(async () => "data:image/png;base64,AA=="), onReset: vi.fn() };
 
 afterEach(cleanup);
 
@@ -68,4 +68,62 @@ it("marks a video attachment with a clear video badge and preview placeholders",
 
   expect(screen.getByTitle("демо.mp4")).toHaveTextContent("Видео");
   expect(screen.getByTitle("фото.png")).toBeInTheDocument();
+});
+
+it("renders localized labels for private and anonymous message results", () => {
+  const apm = { id: "42959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Секрет", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], kind: "apm" as const, targetUserId: "user-2", anonymous: true };
+  const pm = { id: "52959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Личное", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], kind: "pm" as const, targetUserId: "user-2", anonymous: false };
+  render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={{ messages: [apm, pm], total: 2, offset: 0, hasMore: false }} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
+
+  expect(screen.getByText("Личное сообщение · анонимно")).toBeInTheDocument();
+  expect(screen.getByText("Личное сообщение")).toBeInTheDocument();
+});
+
+it("resets filters and reports the session reset via the reset button", async () => {
+  const user = userEvent.setup();
+  const onReset = vi.fn();
+  render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={null} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} onReset={onReset} />);
+
+  await user.type(screen.getByRole("textbox", { name: "Текст поиска" }), "котик");
+  await user.click(screen.getByRole("combobox", { name: "Автор сообщения" }));
+  await user.click(screen.getByRole("option", { name: member.displayName }));
+
+  const reset = screen.getByRole("button", { name: "Сбросить поиск" });
+  expect(reset).toBeEnabled();
+  await user.click(reset);
+
+  expect(onReset).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("textbox", { name: "Текст поиска" })).toHaveValue("");
+  expect(screen.getByRole("combobox", { name: "Автор сообщения" })).toHaveTextContent("Любой автор");
+  expect(screen.getByRole("button", { name: "Найти" })).toBeDisabled();
+  expect(reset).toBeDisabled();
+});
+
+it("disables the reset button without an active search session", () => {
+  render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={null} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
+  expect(screen.getByRole("button", { name: "Сбросить поиск" })).toBeDisabled();
+});
+
+it("clears the search session when the panel closes", async () => {
+  const user = userEvent.setup();
+  const { rerender } = render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={null} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
+  await user.type(screen.getByRole("textbox", { name: "Текст поиска" }), "котик");
+
+  rerender(<ServerSearchPanel open={false} serverName="Тестовый сервер" channels={[channel]} members={[member]} result={null} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
+  rerender(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={null} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
+
+  expect(screen.getByRole("textbox", { name: "Текст поиска" })).toHaveValue("");
+  expect(screen.getByRole("combobox", { name: "Автор сообщения" })).toHaveTextContent("Любой автор");
+});
+
+it("closes the search panel when clicking outside it", () => {
+  const onClose = vi.fn();
+  render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={null} loading={false} onClose={onClose} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
+
+  fireEvent.pointerDown(document.body);
+  expect(onClose).toHaveBeenCalledTimes(1);
+
+  // Клик внутри панели (по самой панели) не закрывает её.
+  fireEvent.pointerDown(screen.getByLabelText("Поиск по серверу"));
+  expect(onClose).toHaveBeenCalledTimes(1);
 });

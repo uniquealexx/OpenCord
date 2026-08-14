@@ -17,6 +17,10 @@ In IP/WSL mode, `ws://<адрес>:7880` is available; the OpenCord interface ma
 
 The LiveKit webhook is accepted only on an internal OpenCord route and is deliberately blocked by the public Caddy. It is signed with an API secret; the events support presence in the channel. When LiveKit is unavailable, text chat keeps working and the snapshot reports the `degraded` state.
 
+### Local development (Docker Desktop)
+
+`deploy/compose.local.yml` forces `LIVEKIT_USE_EXTERNAL_IP=false` and `LIVEKIT_NODE_IP=127.0.0.1` for the LiveKit container. Behind Docker Desktop NAT, STUN resolves the router's public IP, which the client on the same host cannot reach (hairpin NAT): signaling works, but WebRTC media does not. The local override makes LiveKit advertise 127.0.0.1 candidates; the local stack is bound to 127.0.0.1 anyway. On a VPS with a public interface, the defaults (STUN detection) remain correct.
+
 Since protocol v14, voice presence also contains the `muted` and `deafened` states. The client sends them over the controlling OpenCord WebSocket after actually entering the LiveKit room, and the server broadcasts the update to all participants. These fields are needed only for the interface; the audio stream is not transmitted over the OpenCord WebSocket. Avatar, name, description, and banner are still taken from the participant's public profile on OpenCord Server and are not duplicated in LiveKit.
 
 ## Management
@@ -47,6 +51,10 @@ OpenCord Server остаётся источником идентичности, 
 В режиме IP/WSL доступен `ws://<адрес>:7880`; интерфейс OpenCord помечает такой режим как небезопасный, потому что токен и сигналинг подвержены MITM. За строгим NAT или корпоративным firewall голос может не заработать без TURN/TLS.
 
 Вебхук LiveKit принимается только на внутреннем маршруте OpenCord и намеренно блокируется публичным Caddy. Он подписан API secret; события поддерживают присутствие в канале. При недоступности LiveKit текстовый чат продолжает работать, а snapshot сообщает состояние `degraded`.
+
+### Локальная разработка (Docker Desktop)
+
+`deploy/compose.local.yml` принудительно задаёт контейнеру LiveKit `LIVEKIT_USE_EXTERNAL_IP=false` и `LIVEKIT_NODE_IP=127.0.0.1`. За NAT Docker Desktop STUN находит публичный IP роутера, недостижимый с хоста (hairpin NAT): сигналинг работает, но WebRTC-медиа не проходит. Локальный оверрайд заставляет LiveKit анонсировать кандидаты 127.0.0.1 — локальный стек и так привязан к 127.0.0.1. На VPS с публичным интерфейсом дефолты (STUN-детект) остаются корректными.
 
 С протокола v14 голосовое присутствие также содержит состояния `muted` и `deafened`. Клиент отправляет их через управляющий WebSocket OpenCord после фактического входа в LiveKit-комнату, а сервер рассылает обновление всем участникам. Эти поля нужны только для интерфейса; аудиопоток через OpenCord WebSocket не передаётся. Аватар, имя, описание и шапка по-прежнему берутся из публичного профиля участника на OpenCord Server и не дублируются в LiveKit.
 

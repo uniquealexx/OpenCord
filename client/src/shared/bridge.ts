@@ -28,6 +28,8 @@ export const IPC = {
   deploymentCancel: "deployment:cancel",
   deploymentProgress: "deployment:progress",
   attachmentSelectAndUpload: "attachment:select-and-upload",
+  attachmentUploadFile: "attachment:upload-file",
+  attachmentUploadBytes: "attachment:upload-bytes",
   attachmentDownload: "attachment:download",
   attachmentPreview: "attachment:preview",
   attachmentSetLatencySensitive: "attachment:set-latency-sensitive",
@@ -78,6 +80,8 @@ export interface OpenCordBridge {
   };
   attachments: {
     selectAndUpload(context: AttachmentTransferContext): Promise<Attachment | null>;
+    /** Загрузка конкретного файла (вставка Ctrl+V, drag&drop): путь получается в preload через webUtils. */
+    uploadFile(context: AttachmentTransferContext, file: File): Promise<Attachment>;
     download(request: AttachmentDownloadRequest): Promise<boolean>;
     preview(request: AttachmentDownloadRequest): Promise<string>;
     setLatencySensitive(value: boolean): Promise<void>;

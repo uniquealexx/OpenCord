@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, clientEventSchema, discriminatorSchema, fingerprintSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, clientEventSchema, discriminatorSchema, fingerprintSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -80,6 +80,31 @@ describe("OpenCord protocol", () => {
     expect(userBannerSchema.parse("data:image/webp;base64,AA==")).toBe("data:image/webp;base64,AA==");
     expect(() => userBannerSchema.parse("data:image/jpeg;base64,AA==")).toThrow();
     expect(() => userBannerSchema.parse(`data:image/webp;base64,${"A".repeat(Math.ceil(USER_BANNER_MAX_BYTES / 3) * 4 + 33)}`)).toThrow();
+  });
+
+  it("accepts server banners in the same WebP format and defaults snapshots without one", () => {
+    const banner = "data:image/webp;base64,AA==";
+    expect(serverBannerSchema.parse(banner)).toBe(banner);
+    expect(serverBannerSchema.parse(null)).toBeNull();
+    expect(() => serverBannerSchema.parse("data:image/jpeg;base64,AA==")).toThrow();
+
+    const base = {
+      id: crypto.randomUUID(),
+      name: "Команда",
+      maxAttachmentBytes: null,
+      screenShareMaxResolution: 1080,
+      screenShareMaxFrameRate: 60,
+      channels: [],
+      members: [],
+      currentUser: { id: "user", role: "owner", permissions: [] },
+    };
+    const snapshot = serverEventSchema.parse({ type: "server.snapshot", server: base });
+    expect(snapshot.type === "server.snapshot" && snapshot.server.banner).toBeNull();
+    const snapshotWithBanner = serverEventSchema.parse({ type: "server.snapshot", server: { ...base, banner } });
+    expect(snapshotWithBanner.type === "server.snapshot" && snapshotWithBanner.server.banner).toBe(banner);
+
+    expect(clientEventSchema.parse({ type: "server.banner.update", requestId: crypto.randomUUID(), banner })).toMatchObject({ type: "server.banner.update", banner });
+    expect(serverEventSchema.parse({ type: "server.banner.updated", serverId: crypto.randomUUID(), banner })).toMatchObject({ type: "server.banner.updated", banner });
   });
 
   it("validates user presence and defaults older profiles to online", () => {

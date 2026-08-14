@@ -140,6 +140,16 @@ describe("ChatRepository", () => {
     expect(await repository.setMemberRole("owner", "member")).toBe("owner");
   });
 
+  it("stores and returns the server banner", async () => {
+    const banner = "data:image/webp;base64,AQ==";
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["018_server_banner"])).toHaveLength(1);
+    expect((await repository.getServer()).banner).toBeNull();
+    await repository.updateServerBanner(banner);
+    expect((await repository.getServer()).banner).toBe(banner);
+    await repository.updateServerBanner(null);
+    expect((await repository.getServer()).banner).toBeNull();
+  });
+
   it("updates a profile in place and clears its public media when a member leaves", async () => {
     const avatar = "data:image/webp;base64,AA==";
     const banner = "data:image/webp;base64,AQ==";

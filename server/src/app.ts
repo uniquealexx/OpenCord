@@ -279,6 +279,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       broadcast({ type: "server.avatar.updated", serverId: server.id, avatar: server.avatar });
       return;
     }
+    if (event.type === "server.banner.update") {
+      if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может изменить обложку сервера");
+      await repository.updateServerBanner(event.banner);
+      const server = await repository.getServer();
+      broadcast({ type: "server.banner.updated", serverId: server.id, banner: server.banner });
+      return;
+    }
     if (event.type === "member.kick") {
       if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для исключения участников");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя исключить самого себя");

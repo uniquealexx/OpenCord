@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Search, Send, ServerCog, Settings, ShieldCheck, Trash2, UserCog, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -12,6 +12,7 @@ import { ProfileDialog } from "@/components/profile-dialog";
 import { ProfilePreview } from "@/components/profile-preview";
 import { ServerDialog } from "@/components/server-dialog";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
+import { ServerBannerDialog } from "@/components/server-banner-dialog";
 import { ServerSearchPanel } from "@/components/server-search-panel";
 import { ScreenShareDialog, ScreenShareSurface, screenShareResolutionLabel } from "@/components/screen-share-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -32,7 +33,7 @@ import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 // В Electron мост уже установлен preload-скриптом, в браузере/тестах вызов ничего не делает.
 installPlatformBridge();
 
-type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "channel" | "channel-edit" | "channel-delete" | "screen-share" | null;
+type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "server-banner" | "channel" | "channel-edit" | "channel-delete" | "screen-share" | null;
 type CurrentAccess = { id: string; role: MemberRole; permissions: Permission[] };
 const VOICE_PARTICIPANT_LIMIT_MAX = 25;
 const userStatusLabels: Record<UserStatus, keyof Dictionary["statuses"]> = { online: "online", idle: "idle", dnd: "dnd", invisible: "invisible" };
@@ -85,8 +86,10 @@ export function ClientApp(): React.ReactElement {
   const [viewingScreenShareId, setViewingScreenShareId] = useState<string | null>(null);
   const [mobilePanel, setMobilePanel] = useState<"channels" | "members" | null>(null);
   const [selfIdentity, setSelfIdentity] = useState<{ publicKey: string; fingerprint: string; discriminator: string } | null>(null);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
   const searchRequestRef = useRef<string | null>(null);
-  const messageEndRef = useRef<HTMLDivElement>(null);
+  const messageScrollRef = useRef<HTMLDivElement>(null);
   const serverMuteStateRef = useRef(false);
   const mutedBeforeServerMuteRef = useRef(false);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
@@ -105,6 +108,10 @@ export function ClientApp(): React.ReactElement {
     onServerAvatarUpdated: (_serverId, avatar) => {
       if (!connectionServer) return;
       commit((current) => ({ ...current, servers: current.servers.map((server) => server.id === connectionServer.id ? { ...server, avatar } : server) }));
+    },
+    onServerBannerUpdated: (_serverId, banner) => {
+      if (!connectionServer) return;
+      commit((current) => ({ ...current, servers: current.servers.map((server) => server.id === connectionServer.id ? { ...server, banner } : server) }));
     },
     onHistory: (channelId, messages) => commit((current) => ({ ...current, messages: [...current.messages.filter((message) => message.channelId !== channelId), ...messages.map(toLocalMessage)] })),
     onMessage: (message) => commit((current) => current.messages.some((item) => item.id === message.id) ? current : { ...current, messages: [...current.messages, toLocalMessage(message)] }),
@@ -229,7 +236,35 @@ export function ClientApp(): React.ReactElement {
     if (language) setActiveLanguage(language);
   }, [state?.preferences.language]);
 
-  useEffect(() => { messageEndRef.current?.scrollIntoView?.({ block: "end" }); }, [state?.messages, state?.activeChannelId]);
+  // Прокрутка в идеальный низ при открытии канала и при новых сообщениях: scrollIntoView({block:"end"})
+  // останавливается на высоте нижнего отступа контейнера, а scrollTop = scrollHeight показывает
+  // и нижний отступ — чат открывается ровно с самого дна. Медиа-превью (видео, изображения)
+  // догружаются асинхронно и увеличивают контент уже после прокрутки: видео с preload="metadata"
+  // не шлёт "load", поэтому слушаем события медиаэлементов плюс делаем короткие контрольные
+  // прокрутки. Всё это — только пока пользователь у низа, чтобы чтение истории не дёргалось.
+  useEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    const scrollToBottom = (): void => {
+      container.scrollTop = container.scrollHeight;
+    };
+    const nearBottom = (): boolean => container.scrollHeight - container.clientHeight - container.scrollTop <= 120;
+    let frame = window.requestAnimationFrame(scrollToBottom);
+    const onMediaLoad: EventListener = () => {
+      if (!nearBottom()) return;
+      frame = window.requestAnimationFrame(scrollToBottom);
+    };
+    const mediaEvents = ["load", "loadeddata", "loadedmetadata", "canplay"];
+    for (const type of mediaEvents) container.addEventListener(type, onMediaLoad, true);
+    const settleTimers = [150, 400, 800].map((delay) => window.setTimeout(() => {
+      if (nearBottom()) frame = window.requestAnimationFrame(scrollToBottom);
+    }, delay));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      for (const type of mediaEvents) container.removeEventListener(type, onMediaLoad, true);
+      for (const timer of settleTimers) window.clearTimeout(timer);
+    };
+  }, [state?.messages, state?.activeChannelId]);
   useEffect(() => {
     if (!highlightedMessageId) return;
     const frame = window.requestAnimationFrame(() => {
@@ -265,6 +300,13 @@ export function ClientApp(): React.ReactElement {
 
   function resetSearch(): void {
     setSearchOpen(false);
+    setSearchResult(null);
+    setSearchLoading(false);
+    searchRequestRef.current = null;
+  }
+
+  /** Сброс результатов поиска без закрытия панели — для кнопки сброса в панели поиска. */
+  function resetSearchSession(): void {
     setSearchResult(null);
     setSearchLoading(false);
     searchRequestRef.current = null;
@@ -333,7 +375,7 @@ export function ClientApp(): React.ReactElement {
 
   function openSearchMessage(message: MockMessage): void {
     commit((current) => ({ ...current, activeChannelId: message.channelId, messages: current.messages.some((item) => item.id === message.id) ? current.messages : [...current.messages, message] }));
-    setSearchOpen(false);
+    resetSearch();
     setHighlightedMessageId(message.id);
   }
 
@@ -461,6 +503,12 @@ export function ClientApp(): React.ReactElement {
     return true;
   }
 
+  function updateServerBanner(banner: string | null): boolean {
+    if (!connection.updateServerBanner(banner)) { setNotice(t.notices.serverBannerUnavailable); return false; }
+    setNotice(t.notices.avatarSent);
+    return true;
+  }
+
   function saveServerSettings(settings: ServerSettings): boolean {
     if (!connection.updateServerSettings(settings)) { setNotice(t.notices.serverSettingsUnavailable); return false; }
     setNotice(t.notices.serverSettingsSaved);
@@ -559,6 +607,35 @@ export function ClientApp(): React.ReactElement {
     if (attachment) setPendingAttachments((current) => [...current, attachment].slice(0, 5));
   }
 
+  /** Вставка файлов через Ctrl+V и drag&drop: последовательная загрузка через мост вложений. */
+  async function uploadPastedFiles(files: FileList | File[]): Promise<void> {
+    const bridge = window.openCord?.attachments;
+    if (!activeServer?.address || !connection.sessionToken || !bridge?.uploadFile) {
+      setNotice(t.chat.attachAfterConnection);
+      return;
+    }
+    const remaining = 5 - pendingAttachments.length;
+    if (remaining <= 0) return;
+    const candidates = Array.from(files).filter((file) => file.size > 0).slice(0, remaining);
+    if (candidates.length === 0) return;
+    setUploadingAttachment(true);
+    try {
+      for (const file of candidates) {
+        const attachment = await bridge.uploadFile({
+          serverAddress: activeServer.address,
+          sessionToken: connection.sessionToken,
+          maxAttachmentBytes: activeServer.maxAttachmentBytes,
+          latencySensitive: ["connecting", "connected", "reconnecting"].includes(voice.status),
+        }, file);
+        setPendingAttachments((current) => current.some((item) => item.id === attachment.id) ? current : [...current, attachment].slice(0, 5));
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : t.notices.uploadFailed);
+    } finally {
+      setUploadingAttachment(false);
+    }
+  }
+
   async function saveAttachment(attachment: Attachment): Promise<void> {
     if (!activeServer?.address || !connection.sessionToken) { setNotice(t.notices.downloadRequiresConnection); return; }
     try {
@@ -626,21 +703,21 @@ export function ClientApp(): React.ReactElement {
       {mobile && mobilePanel !== null && <div aria-hidden="true" className="fixed inset-0 z-20 bg-black/45" onClick={() => setMobilePanel(null)} />}
       {activeServer ? <>
         {mobile ? <div className={cn("absolute inset-y-0 left-[76px] z-30 w-[calc(100%-76px)] max-w-[300px] [&>aside]:w-full", mobilePanel === "channels" ? "flex" : "hidden")}><ChannelSidebar mobile server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={effectiveMuted} serverMuted={serverMuted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)} isScreenSharing={voice.isScreenSharing} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => { if (!serverMuted) void voice.setMuted(value); }} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} /></div> : <ChannelSidebar server={activeServer} activeChannelId={activeChannel?.id} profile={state.profile} canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true} voiceCapability={voiceCapability} voiceParticipants={voiceParticipants} voiceChannelId={voice.channelId} voiceStatus={voice.status} muted={effectiveMuted} serverMuted={serverMuted} deafened={voice.deafened} activeSpeakerIds={voice.activeSpeakerIds} screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)} isScreenSharing={voice.isScreenSharing} currentUserId={currentAccess?.id ?? profile.id} onCreateChannel={() => setModal("channel")} onEditChannel={(channel) => openChannelModal(channel, "channel-edit")} onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")} onSelectChannel={selectChannel} onServerMenu={() => setModal("leave")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} onJoinVoice={joinVoiceChannel} onLeaveVoice={leaveVoiceChannel} onMuted={(value) => { if (!serverMuted) void voice.setMuted(value); }} onDeafened={(value) => void voice.setDeafened(value)} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} />}
-        {activeChannel?.kind === "voice" ? <VoiceChannelView mobile={mobile} channel={activeChannel} server={activeServer} profile={profile} participants={voiceParticipants} currentUserId={currentAccess?.id ?? profile.id} currentUserRole={currentAccess?.role} canModerateVoice={currentAccess?.permissions.includes("VOICE_MODERATE") === true} connectedChannelId={voice.channelId} status={voice.status} muted={effectiveMuted} serverMuted={serverMuted} deafened={voice.deafened} locallyMutedParticipantIds={voice.locallyMutedParticipantIds} participantVolumes={voice.participantVolumes} activeSpeakerIds={voice.activeSpeakerIds} screenShares={voice.screenShares} viewingScreenShareId={viewingScreenShareId} isScreenSharing={voice.isScreenSharing} onMuted={(value) => { if (!serverMuted) void voice.setMuted(value); }} onDeafened={(value) => void voice.setDeafened(value)} onParticipantMuted={voice.setParticipantMuted} onParticipantVolume={voice.setParticipantVolume} onServerMuted={setVoiceParticipantServerMuted} onDisconnectParticipant={disconnectVoiceParticipant} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} onExitScreenShare={() => setViewingScreenShareId(null)} onLeaveVoice={leaveVoiceChannel} /> : activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#212327]">
+        {activeChannel?.kind === "voice" ? <VoiceChannelView mobile={mobile} channel={activeChannel} server={activeServer} profile={profile} participants={voiceParticipants} currentUserId={currentAccess?.id ?? profile.id} currentUserRole={currentAccess?.role} canModerateVoice={currentAccess?.permissions.includes("VOICE_MODERATE") === true} connectedChannelId={voice.channelId} status={voice.status} muted={effectiveMuted} serverMuted={serverMuted} deafened={voice.deafened} locallyMutedParticipantIds={voice.locallyMutedParticipantIds} participantVolumes={voice.participantVolumes} activeSpeakerIds={voice.activeSpeakerIds} screenShares={voice.screenShares} viewingScreenShareId={viewingScreenShareId} isScreenSharing={voice.isScreenSharing} onMuted={(value) => { if (!serverMuted) void voice.setMuted(value); }} onDeafened={(value) => void voice.setDeafened(value)} onParticipantMuted={voice.setParticipantMuted} onParticipantVolume={voice.setParticipantVolume} onServerMuted={setVoiceParticipantServerMuted} onDisconnectParticipant={disconnectVoiceParticipant} onStartScreenShare={() => setModal("screen-share")} onStopScreenShare={() => void stopScreenShare()} onViewScreenShare={viewScreenShare} onExitScreenShare={() => setViewingScreenShareId(null)} onLeaveVoice={leaveVoiceChannel} /> : activeChannel ? <section className="relative flex min-w-0 flex-1 flex-col bg-[#212327]" onDragEnter={(event) => { if (event.dataTransfer.types.includes("Files")) { dragDepthRef.current += 1; setDraggingFiles(true); } }} onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDragLeave={(event) => { if (!event.dataTransfer.types.includes("Files")) return; dragDepthRef.current = Math.max(0, dragDepthRef.current - 1); if (dragDepthRef.current === 0) setDraggingFiles(false); }} onDrop={(event) => { dragDepthRef.current = 0; setDraggingFiles(false); const files = event.dataTransfer.files; if (files.length > 0) { event.preventDefault(); void uploadPastedFiles(files); } }} onPaste={(event) => { const files = event.clipboardData.files; if (files.length > 0) { event.preventDefault(); void uploadPastedFiles(files); } }}>
           <ChatHeader mobile={mobile} channelName={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} connectionStatus={activeServer.address ? connection.status : "demo"} memberList={mobile ? mobilePanel === "members" : state.preferences.showMemberList} channelsOpen={mobile && mobilePanel === "channels"} searchOpen={searchOpen} onMenu={() => setMobilePanel(mobilePanel === "channels" ? null : "channels")} onSearch={() => setSearchOpen(true)} onToggleMembers={() => { if (mobile) setMobilePanel(mobilePanel === "members" ? null : "members"); else commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } })); }} />
           <ProtocolNotice status={connection.status} />
           <div className="flex min-h-0 flex-1">
             <div className="flex min-w-0 flex-1 flex-col">
-              <div className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-sm:px-3 max-sm:py-3", state.preferences.compactMode && "py-3")}>
+              <div ref={messageScrollRef} className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-sm:px-3 max-sm:py-3", state.preferences.compactMode && "py-3")}>
                 <ChannelIntro name={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
                 {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} />) : <p className="py-8 text-center text-sm text-slate-600">{t.chat.empty}</p>}
-                <div ref={messageEndRef} />
               </div>
               <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
             </div>
             {mobile ? mobilePanel === "members" && <div className="absolute inset-y-0 right-0 z-30 flex w-[240px]"><MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} /></div> : state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
           </div>
-          <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => setSearchOpen(false)} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
+          <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => resetSearch()} onReset={resetSearchSession} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
+          {draggingFiles && <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-black/40"><div className="rounded-2xl border-2 border-dashed border-violet-400/80 bg-[#212327]/95 px-8 py-5 text-sm font-semibold text-violet-100 shadow-2xl">{t.chat.dropFiles}</div></div>}
         </section> : <NoTextChannelView server={activeServer} profile={state.profile} access={currentAccess} connectionStatus={activeServer.address ? connection.status : "demo"} showMembers={!mobile && state.preferences.showMemberList} onCreate={() => setModal("channel")} onToggleMembers={() => commit((current) => ({ ...current, preferences: { ...current.preferences, showMemberList: !current.preferences.showMemberList } }))} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
       </> : <HomeScreen showCreate={!mobile} serverCount={state.servers.length} profile={state.profile} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} />}
       {notice && <div role="status" className="glass absolute bottom-5 left-1/2 z-40 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl px-4 py-2.5 text-center text-xs font-medium text-slate-200 shadow-xl">{notice}</div>}
@@ -649,8 +726,9 @@ export function ClientApp(): React.ReactElement {
       <ServerDialog open={modal === "connect"} onOpenChange={(open) => setModal(open ? "connect" : null)} onAdd={addServer} />
       <ProfileDialog key={modal === "profile" ? "profile-open" : "profile-closed"} profile={state.profile} open={modal === "profile"} onOpenChange={(open) => setModal(open ? "profile" : null)} onSave={saveProfile} />
       {modal === "settings" && <SettingsDialog preferences={state.preferences} open confirmReset={confirmReset} onOpenChange={(open) => { setModal(open ? "settings" : null); if (!open) setConfirmReset(false); }} onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))} onRequestReset={() => setConfirmReset(true)} onCancelReset={() => setConfirmReset(false)} onReset={() => void reset()} onIdentityReset={(identity) => commit((current) => current.profile && current.profile.discriminator !== identity.discriminator ? { ...current, profile: { ...current.profile, discriminator: identity.discriminator } } : current)} />}
-      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canViewSettings={currentAccess?.role === "owner" || currentAccess?.role === "administrator"} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onUpdate={() => setModal("update")} onSaveSettings={saveServerSettings} onConfirm={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
+      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canViewSettings={currentAccess?.role === "owner" || currentAccess?.role === "administrator"} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onBanner={() => setModal("server-banner")} onUpdate={() => setModal("update")} onSaveSettings={saveServerSettings} onConfirm={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
       {activeServer && <ServerAvatarDialog key={`${activeServer.id}-${activeServer.avatar ?? "none"}`} server={activeServer} open={modal === "server-avatar"} onOpenChange={(open) => setModal(open ? "server-avatar" : null)} onSave={updateServerAvatar} />}
+      {activeServer && <ServerBannerDialog key={`${activeServer.id}-${activeServer.banner ?? "none"}`} server={activeServer} open={modal === "server-banner"} onOpenChange={(open) => setModal(open ? "server-banner" : null)} onSave={updateServerBanner} />}
       <ChannelDialog open={modal === "channel"} onOpenChange={(open) => setModal(open ? "channel" : null)} onCreate={createServerChannel} />
       {managedChannel && <EditChannelDialog key={managedChannel.id} channel={managedChannel} open={modal === "channel-edit"} onOpenChange={(open) => { setModal(open ? "channel-edit" : null); if (!open) setManagedChannel(null); }} onSave={(name, description, participantLimit) => editServerChannel(managedChannel, name, description, participantLimit)} />}
       {managedChannel && <DeleteChannelDialog channel={managedChannel} open={modal === "channel-delete"} onOpenChange={(open) => { setModal(open ? "channel-delete" : null); if (!open) setManagedChannel(null); }} onConfirm={() => deleteServerChannel(managedChannel)} />}
@@ -964,7 +1042,7 @@ function DeleteChannelDialog({ channel, open, onOpenChange, onConfirm }: { chann
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><div className="mb-3 grid size-11 place-items-center rounded-2xl bg-red-400/10 text-red-300"><Trash2 className="size-5" /></div><DialogTitle>{t.channel.deleteTitle}</DialogTitle><DialogDescription>{t.channel.deleteDescription(channel.name)}</DialogDescription></DialogHeader><div className="flex gap-3"><Button variant="secondary" onClick={() => onOpenChange(false)} className="flex-1">{t.common.cancel}</Button><Button variant="danger" onClick={onConfirm} className="flex-1"><Trash2 className="size-4" />{t.channel.deleteConfirm}</Button></div></DialogContent></Dialog>;
 }
 
-export function LeaveServerDialog({ server, canManageServer, canViewSettings, canUpdate, canDeleteForAll, canRemoveLocal, open, onOpenChange, onAvatar, onUpdate, onSaveSettings, onConfirm, onRemoveLocal, onDeleteForAll }: { server: MockServer; canManageServer: boolean; canViewSettings: boolean; canUpdate: boolean; canDeleteForAll: boolean; canRemoveLocal: boolean; open: boolean; onOpenChange: (open: boolean) => void; onAvatar: () => void; onUpdate: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onConfirm: () => void; onRemoveLocal: () => void; onDeleteForAll: () => void }): React.ReactElement {
+export function LeaveServerDialog({ server, canManageServer, canViewSettings, canUpdate, canDeleteForAll, canRemoveLocal, open, onOpenChange, onAvatar, onBanner, onUpdate, onSaveSettings, onConfirm, onRemoveLocal, onDeleteForAll }: { server: MockServer; canManageServer: boolean; canViewSettings: boolean; canUpdate: boolean; canDeleteForAll: boolean; canRemoveLocal: boolean; open: boolean; onOpenChange: (open: boolean) => void; onAvatar: () => void; onBanner: () => void; onUpdate: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onConfirm: () => void; onRemoveLocal: () => void; onDeleteForAll: () => void }): React.ReactElement {
   const { t } = useI18n();
   const showServerSettings = Boolean(server.address) && canViewSettings;
   const sliderMax = 2025;
@@ -999,7 +1077,9 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
   return <Dialog open={open} onOpenChange={(nextOpen) => { if (nextOpen) { setServerName(server.name); setLimitStep(currentMegabytes); setLimitInput(server.maxAttachmentBytes === null ? "2001" : String(currentMegabytes)); setMaxResolution(currentResolution); setMaxFrameRate(currentFrameRate); } onOpenChange(nextOpen); }}>
     <DialogContent className="overflow-hidden border-white/10 bg-[#26282c] p-0 sm:max-w-xl">
       <div className="relative -mx-5 -mt-5 mb-12">
-        <div className="relative h-32 overflow-hidden border-b border-white/10 bg-primary/15" />
+        <div className="relative h-32 overflow-hidden border-b border-white/10 bg-primary/15">
+          {server.banner && <Image src={server.banner} alt="" fill unoptimized sizes="576px" className="object-cover" />}
+        </div>
         <div className="absolute -bottom-10 left-6"><Avatar image={server.avatar} name={server.name} color={server.accent} size="xl" className="ring-4 ring-panel shadow-md" /></div>
       </div>
       <div className="space-y-5 pb-1">
@@ -1033,6 +1113,7 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
         </section>}
         {(canManageServer || canUpdate) && server.address && <section className="grid gap-2 sm:grid-cols-2">
           {canManageServer && <button type="button" onClick={onAvatar} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-white/[.025] p-4 text-left text-sm font-semibold text-slate-200 transition hover:bg-white/[.06]"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Camera className="size-4" /></span>{t.server.serverAvatar}</button>}
+          {canManageServer && <button type="button" onClick={onBanner} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-white/[.025] p-4 text-left text-sm font-semibold text-slate-200 transition hover:bg-white/[.06]"><span className="grid size-9 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300"><ImageIcon className="size-4" /></span>{t.server.serverBanner}</button>}
           {canUpdate && <button type="button" onClick={onUpdate} className="flex items-center gap-3 rounded-2xl border border-violet-400/20 bg-violet-400/[.06] p-4 text-left text-sm font-semibold text-violet-200 transition hover:bg-violet-400/10"><span className="grid size-9 place-items-center rounded-xl bg-violet-400/10"><ServerCog className="size-4" /></span>{t.server.update}</button>}
         </section>}
         <section className="rounded-2xl border border-red-400/15 bg-red-400/[.035] p-4"><p className="mb-3 text-[10px] font-bold uppercase tracking-[.14em] text-red-300/70">{t.server.dangerZone}</p><div className="flex gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)} className="flex-1">{t.server.leaveCancel}</Button><Button variant="danger" onClick={onConfirm} className="flex-1"><LogOut className="size-4" />{t.server.leaveConfirm}</Button></div>{canDeleteForAll && server.address && <button onClick={onDeleteForAll} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/20 bg-red-400/5 px-4 py-3 text-xs font-semibold text-red-300 hover:bg-red-400/10"><Trash2 className="size-4" />{t.server.deleteForAll}</button>}{canRemoveLocal && <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/5 p-3"><p className="text-xs leading-5 text-amber-200/75">{t.server.removeLocalHint}</p><button onClick={onRemoveLocal} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[.04] px-4 py-2.5 text-xs font-semibold text-slate-200 transition hover:bg-white/[.08]"><Trash2 className="size-4" />{t.server.removeLocal}</button></div>}</section>
@@ -1529,7 +1610,7 @@ function searchLocalMessages(messages: MockMessage[], filters: MessageSearchFilt
   }).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const page = filtered.slice(filters.offset, filters.offset + filters.limit);
   return {
-    messages: page.map((message) => ({ id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar ?? null, content: message.content, createdAt: message.createdAt, editedAt: message.editedAt ?? null, attachments: message.attachments ?? [], mentions: (message.mentions ?? []).map((userId) => ({ userId })), kind: "chat" as const, targetUserId: null, anonymous: false })),
+    messages: page.map((message) => ({ id: message.id, channelId: message.channelId, authorId: message.authorId, authorName: message.authorName, authorAvatar: message.authorAvatar ?? null, content: message.content, createdAt: message.createdAt, editedAt: message.editedAt ?? null, attachments: message.attachments ?? [], mentions: (message.mentions ?? []).map((userId) => ({ userId })), kind: message.kind ?? "chat", targetUserId: message.targetUserId ?? null, anonymous: message.anonymous ?? false })),
     total: filtered.length,
     offset: filters.offset,
     hasMore: filters.offset + page.length < filtered.length,
@@ -1548,7 +1629,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
   const members = snapshot.members.map((member) => ({ id: member.id, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, displayName: member.displayName, bio: member.bio, role: roleLabel(member.role), serverRole: member.role, status: member.status, avatarColor: colorFromId(member.id), avatar: member.avatar, banner: member.banner, chatMuted: member.chatMuted, chatMutedUntil: member.chatMutedUntil }));
   return {
     ...current,
-    servers: current.servers.map((server) => server.id === targetId ? { ...server, name: snapshot.name, avatar: snapshot.avatar, maxAttachmentBytes: snapshot.maxAttachmentBytes, screenShareMaxResolution: snapshot.screenShareMaxResolution, screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate, channels, members, ...(server.deployment ? { deployment: { ...server.deployment, serverName: snapshot.name } } : {}) } : server),
+    servers: current.servers.map((server) => server.id === targetId ? { ...server, name: snapshot.name, avatar: snapshot.avatar, banner: snapshot.banner, maxAttachmentBytes: snapshot.maxAttachmentBytes, screenShareMaxResolution: snapshot.screenShareMaxResolution, screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate, channels, members, ...(server.deployment ? { deployment: { ...server.deployment, serverName: snapshot.name } } : {}) } : server),
     messages: current.messages.filter((message) => !removedChannelIds.has(message.channelId)),
     activeChannelId: channels.some((channel) => channel.id === current.activeChannelId) ? current.activeChannelId : channels.find((channel) => channel.kind === "text")?.id ?? null,
   };

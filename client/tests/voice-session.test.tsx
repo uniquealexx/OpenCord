@@ -97,8 +97,8 @@ describe("voice session controls", () => {
     const changes: boolean[] = [];
     const gate = createResponsiveVoiceActivityGate((speaking) => changes.push(speaking));
 
-    gate.sample(0.011);
-    gate.sample(0.012);
+    gate.sample(0.025);
+    gate.sample(0.026);
     expect(changes).toEqual([true]);
 
     gate.sample(0.003);
@@ -108,6 +108,19 @@ describe("voice session controls", () => {
     expect(changes).toEqual([true]);
     gate.sample(0.003);
     expect(changes).toEqual([true, false]);
+  });
+
+  it("does not latch the voice ring on ambient noise during warm-up calibration", () => {
+    const changes: boolean[] = [];
+    const gate = createResponsiveVoiceActivityGate((speaking) => changes.push(speaking));
+
+    // Шум комнаты выше стартового порога, но ниже «громкого» уровня: в прогреве не открывает,
+    // а калибрует шумовой пол — и после прогрева тоже не залипает.
+    for (let index = 0; index < 60; index += 1) gate.sample(0.01);
+    expect(changes).toEqual([]);
+
+    gate.sample(0.03);
+    expect(changes).toEqual([true]);
   });
 
   it("uses hysteresis so small level changes do not flicker the voice ring", () => {
@@ -164,8 +177,20 @@ describe("voice session controls", () => {
     const beforeSpeech = gate.calibration().noiseFloor;
 
     for (let index = 0; index < 100; index += 1) gate.sample(0.03);
-
     expect(gate.calibration().noiseFloor).toBeCloseTo(beforeSpeech, 8);
+  });
+
+  it("gradually closes on steady non-loud noise while the gate is open", () => {
+    const changes: boolean[] = [];
+    const gate = createResponsiveVoiceActivityGate((speaking) => changes.push(speaking));
+
+    gate.sample(0.03); // громкий сигнал открывает гейт сразу
+    expect(changes).toEqual([true]);
+
+    // Устойчивый негромкий фон: шумовой пол медленно поднимается, порог закрытия обгоняет
+    // фон — гейт закрывается сам, без громкой речи.
+    for (let index = 0; index < 400 && !changes.includes(false); index += 1) gate.sample(0.012);
+    expect(changes).toEqual([true, false]);
   });
 
   it("uses the selected decibel threshold without automatic recalibration", () => {

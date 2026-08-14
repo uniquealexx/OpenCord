@@ -23,7 +23,9 @@ The speech indicator does not use a single fixed threshold for all microphones. 
 - in silence the threshold lowers quickly, so a quiet voice triggers without noticeable latency;
 - with a steady background the threshold raises slowly, so a fan or room noise does not light up the frame;
 - the open and close thresholds differ, and closing requires four consecutive quiet samples, so a borderline level does not cause flicker;
-- during recognized speech the noise floor is frozen, so a long phrase does not raise its own threshold and cut off in the middle.
+- during recognized speech the noise floor is frozen, so a long phrase does not raise its own threshold and cut off in the middle;
+- for the first ~300 ms after a track connects, the gate calibrates the noise floor without triggering (a very loud signal still opens it immediately) so that room noise does not latch the indicator right after joining or unmuting;
+- while the gate is open, non-loud levels (up to ~0.02 RMS) slowly pull the noise floor upward, so steady background noise eventually closes the gate and clears the ring; loud speech leaves the floor unchanged, so a long phrase is not cut off.
 
 Calibration is local, does not store microphone samples, and restarts for a new audio track or input device. The same threshold controls the voice gate: a signal below the activation threshold is not published to the channel, so in silence other participants do not hear background noise. LiveKit's built-in VAD remains a backup source of speaker state.
 
@@ -58,7 +60,9 @@ RNNoise не является полной копией коммерческог
 - в тишине порог понижается быстро, чтобы тихий голос срабатывал без заметной задержки;
 - при устойчивом фоне порог повышается медленно, чтобы вентилятор или шум комнаты не зажигал рамку;
 - пороги открытия и закрытия различаются, а закрытие требует четырёх тихих измерений подряд, поэтому пограничный уровень не вызывает мерцание;
-- на время распознанной речи шумовой пол замораживается, чтобы длинная фраза не повышала собственный порог и не обрывалась посередине.
+- на время распознанной речи шумовой пол замораживается, чтобы длинная фраза не повышала собственный порог и не обрывалась посередине;
+- первые ~300 мс после подключения трека гейт калибрует шумовой пол без срабатывания (очень громкий сигнал открывает его сразу), чтобы шум комнаты не залипал индикатор сразу после подключения или снятия мута;
+- при открытом гейте негромкие уровни (до ~0.02 RMS) медленно подтягивают шумовой пол вверх, поэтому устойчивый фоновый шум со временем закрывает гейт и гасит рамку; громкая речь пол не меняет, и длинная фраза не обрывается.
 
 Калибровка локальна, не сохраняет образцы микрофона и запускается заново для нового аудиотрека или устройства ввода. Тот же порог управляет голосовым гейтом: сигнал ниже порога активации не публикуется в канал, поэтому в тишине собеседники не слышат фоновый шум. Штатный VAD LiveKit остаётся резервным источником состояния говорящих.
 
@@ -93,7 +97,9 @@ RNNoise 并不是商业产品 Krisp 的完整复制：它是一款没有云端�
 - 在安静时，阈值会快速降低，让轻声语音能在无明显延迟的情况下触发；
 - 在背景稳定时，阈值会缓慢升高，让风扇或房间噪声不会点亮边框；
 - 打开阈值和关闭阈值不同，关闭需要连续四次安静采样，因此临界电平不会引起闪烁；
-- 在识别出语音期间，噪声底会被冻结，让长句不会抬高自身阈值并在中途被截断。
+- 在识别出语音期间，噪声底会被冻结，让长句不会抬高自身阈值并在中途被截断；
+- 音轨连接后的前约 300 ms 内，门控仅校准噪声底而不触发（非常响亮的信号仍会立即打开），以免房间噪声在加入或取消静音后立即卡住指示器；
+- 门控打开时，非响亮电平（最高约 0.02 RMS）会缓慢拉高噪声底，因此稳定的背景噪声最终会关闭门控并熄灭指示器；响亮的语音不会改变噪声底，长句也不会被截断。
 
 校准在本地进行，不保存麦克风样本，并会在新的音频轨道或输入设备上重新开始。同一阈值也控制语音门控：低于激活阈值的信号不会发布到频道，因此在安静时，其他参与者听不到背景噪声。LiveKit 的内置 VAD 仍然是说话者状态的备用来源。
 

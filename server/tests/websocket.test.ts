@@ -176,6 +176,16 @@ describe("WebSocket chat flow", () => {
     expect(await ownerAvatarUpdated).toMatchObject({ avatar: "data:image/png;base64,AA==" });
     expect(await memberAvatarUpdated).toMatchObject({ avatar: "data:image/png;base64,AA==" });
 
+    const forbiddenBanner = waitForEvent(member.socket, "error");
+    member.socket.send(JSON.stringify({ type: "server.banner.update", requestId: randomUUID(), banner: "data:image/webp;base64,AA==" }));
+    expect((await forbiddenBanner).code).toBe("FORBIDDEN");
+
+    const ownerBannerUpdated = waitForEvent(owner.socket, "server.banner.updated");
+    const memberBannerUpdated = waitForEvent(member.socket, "server.banner.updated");
+    owner.socket.send(JSON.stringify({ type: "server.banner.update", requestId: randomUUID(), banner: "data:image/webp;base64,AA==" }));
+    expect(await ownerBannerUpdated).toMatchObject({ banner: "data:image/webp;base64,AA==" });
+    expect(await memberBannerUpdated).toMatchObject({ banner: "data:image/webp;base64,AA==" });
+
     const settingsDenied = waitForEvent(member.socket, "error");
     member.socket.send(JSON.stringify({ type: "server.settings.update", requestId: randomUUID(), name: "Нельзя", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 }));
     expect((await settingsDenied).code).toBe("FORBIDDEN");

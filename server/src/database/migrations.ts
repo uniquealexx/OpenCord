@@ -286,6 +286,10 @@ const migrations = [
     id: "017_chat_mute_duration",
     sql: `ALTER TABLE server_members ADD COLUMN IF NOT EXISTS chat_muted_until timestamptz;`,
   },
+  {
+    id: "018_server_banner",
+    sql: `ALTER TABLE servers ADD COLUMN IF NOT EXISTS banner text NULL;`,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

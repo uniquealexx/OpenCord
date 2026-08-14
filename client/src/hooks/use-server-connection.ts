@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverEventSchema, userAvatarSchema, userBannerSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type PublicProfile, type ServerEvent, type ServerSettings, type VoicePresence } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type PublicProfile, type ServerEvent, type ServerSettings, type VoicePresence } from "@opencord/shared";
 import type { LocalProfile, MockServer } from "@/shared/state";
 import { currentDictionary } from "@/lib/i18n";
 
@@ -12,6 +12,7 @@ type ServerSnapshot = Extract<ServerEvent, { type: "server.snapshot" }>["server"
 interface ConnectionCallbacks {
   onSnapshot(server: ServerSnapshot): void;
   onServerAvatarUpdated(serverId: string, avatar: string | null): void;
+  onServerBannerUpdated?(serverId: string, banner: string | null): void;
   onHistory(channelId: string, messages: ChatMessage[]): void;
   onMessage(message: ChatMessage): void;
   onMessageUpdated(message: ChatMessage): void;
@@ -29,7 +30,7 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerBanner(banner: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -61,19 +62,20 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     const scheduleReconnect = (): void => {
       if (stopped || fatal || reconnectTimer) return;
       clearHeartbeat();
+      // Пока сервер outdated, статус не трогаем: повторные попытки идут «молча» каждые 2 секунды,
+      // без визуальной перезагрузки интерфейса (без мигания «переподключение…»/notice).
       if (!waitingForServerUpdate) setConnectionState({ key: connectionKey, status: "reconnecting" });
       const delay = waitingForServerUpdate ? 2_000 : reconnectDelay(retryCount);
       retryCount += 1;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
-        waitingForServerUpdate = false;
         connect();
       }, delay);
     };
 
     const connect = (): void => {
       if (stopped || fatal) return;
-      setConnectionState({ key: connectionKey, status: retryCount === 0 ? "connecting" : "reconnecting" });
+      if (!waitingForServerUpdate) setConnectionState({ key: connectionKey, status: retryCount === 0 ? "connecting" : "reconnecting" });
 
       let socket: WebSocket;
       try {
@@ -104,6 +106,9 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           socket.close(4002, "Protocol mismatch");
           return;
         }
+        // Сообщение от совместимого сервера (например, его успели обновить): снимаем флаг
+        // outdated-режима, чтобы статус и задержки ретраев вернулись к обычным.
+        if (waitingForServerUpdate) waitingForServerUpdate = false;
         const parsed = serverEventSchema.safeParse(decoded);
         if (!parsed.success) return callbacksRef.current.onError(currentDictionary().connectionErrors.badProtocolResponse);
         const event = parsed.data;
@@ -136,6 +141,8 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           }
         } else if (event.type === "server.avatar.updated") {
           callbacksRef.current.onServerAvatarUpdated(event.serverId, event.avatar);
+        } else if (event.type === "server.banner.updated") {
+          callbacksRef.current.onServerBannerUpdated?.(event.serverId, event.banner);
         } else if (event.type === "history.result") {
           callbacksRef.current.onHistory(event.channelId, event.messages);
         } else if (event.type === "message.search.result") {
@@ -290,6 +297,13 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
+  const updateServerBanner = useCallback((banner: string | null): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "server.banner.update", requestId: crypto.randomUUID(), banner: serverBannerSchema.parse(banner) });
+    return true;
+  }, [status]);
+
   const kickMember = useCallback((userId: string): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
@@ -346,7 +360,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sessionToken, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
+  return { status, sessionToken, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerBanner, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {

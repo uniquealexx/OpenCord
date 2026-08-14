@@ -38,7 +38,7 @@ describe("server connection", () => {
         reset: vi.fn(),
       },
       deployment: { selectServerBundle: vi.fn(async () => null), selectPrivateKey: vi.fn(async () => null), releasePrivateKey: vi.fn(), inspectHost: vi.fn(), inspectEnvironment: vi.fn(), start: vi.fn(), cancel: vi.fn(), onProgress: vi.fn(() => () => undefined) },
-      attachments: { selectAndUpload: vi.fn(async () => null), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
+      attachments: { selectAndUpload: vi.fn(async () => null), uploadFile: vi.fn(async () => { throw new Error("uploadFile не ожидается в этом тесте"); }), download: vi.fn(async () => true), preview: vi.fn(async () => "data:image/png;base64,AA=="), setLatencySensitive: vi.fn(async () => undefined) },
     };
   });
 
@@ -75,7 +75,8 @@ describe("server connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(result.current.status).toBe("reconnecting");
+    // Повторная попытка идёт «молча»: статус не мигает в «reconnecting», остаётся «server-outdated».
+    expect(result.current.status).toBe("server-outdated");
     const refreshed = FakeWebSocket.instances[1];
     const requestId = crypto.randomUUID();
     await act(async () => {
@@ -91,9 +92,28 @@ describe("server connection", () => {
     unmount();
   });
 
-  it("authenticates and reconnects after the socket closes", async () => {
+  it("keeps the outdated status stable while retrying every two seconds", async () => {
     vi.useFakeTimers();
     const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
+    const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
+    act(() => FakeWebSocket.instances[0]?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "old", expiresAt: new Date().toISOString() }));
+    expect(result.current.status).toBe("server-outdated");
+
+    // Несколько циклов: каждые 2 секунды новый сокет, но статус не покидает «server-outdated».
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      const latest = FakeWebSocket.instances.at(-1);
+      expect(FakeWebSocket.instances).toHaveLength(2 + cycle);
+      expect(result.current.status).toBe("server-outdated");
+      act(() => latest?.receive({ type: "auth.challenge", requestId: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION - 1, challenge: "still-old", expiresAt: new Date().toISOString() }));
+      expect(result.current.status).toBe("server-outdated");
+    }
+    unmount();
+  });
+
+  it("authenticates and reconnects after the socket closes", async () => {
+    vi.useFakeTimers();
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onServerBannerUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
     const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const first = FakeWebSocket.instances[0];
     expect(first?.url).toBe("ws://127.0.0.1:3210/ws");
@@ -132,6 +152,7 @@ describe("server connection", () => {
       expect(result.current.updateProfile({ username: "lina", discriminator: "1234", displayName: "Новое имя", bio: "Описание профиля", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "dnd" })).toBe(true);
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
+      expect(result.current.updateServerBanner("data:image/webp;base64,AQ==")).toBe(true);
       expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 })).toBe(true);
       expect(result.current.updateVoiceState(true, false, "screen-owner")).toBe(true);
       expect(result.current.disconnectVoiceMember("voice-member")).toBe(true);
@@ -149,6 +170,7 @@ describe("server connection", () => {
     expect(sentEvents.find((event) => event.type === "profile.update")?.profile).toMatchObject({ status: "dnd", bio: "Описание профиля", banner: "data:image/webp;base64,AQ==" });
     expect(sentEvents.some((event) => event.type === "server.leave")).toBe(true);
     expect(sentEvents.some((event) => event.type === "server.avatar.update")).toBe(true);
+    expect(sentEvents.some((event) => event.type === "server.banner.update")).toBe(true);
     expect(sentEvents.find((event) => event.type === "server.settings.update")).toMatchObject({ name: "Новая команда", screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
     expect(sentEvents.find((event) => event.type === "voice.state.update")?.viewingScreenShareUserId).toBe("screen-owner");
     expect(sentEvents.find((event) => event.type === "voice.member.disconnect")?.userId).toBe("voice-member");
@@ -162,6 +184,9 @@ describe("server connection", () => {
 
     act(() => first?.receive({ type: "server.avatar.updated", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", avatar: "data:image/webp;base64,AA==" }));
     expect(callbacks.onServerAvatarUpdated).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253", "data:image/webp;base64,AA==");
+
+    act(() => first?.receive({ type: "server.banner.updated", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", banner: "data:image/webp;base64,AQ==" }));
+    expect(callbacks.onServerBannerUpdated).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253", "data:image/webp;base64,AQ==");
 
     const voiceParticipant = { userId: "voice-member", channelId, muted: true, deafened: false, serverMuted: true, viewingScreenShareUserId: "screen-owner" };
     act(() => first?.receive({ type: "voice.participant.updated", participant: voiceParticipant }));

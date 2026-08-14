@@ -1,5 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray, type DesktopCapturerSource, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
 import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { IPC } from "../src/shared/bridge";
 import { selectedSshKeySchema } from "../src/shared/deployment";
@@ -8,7 +9,7 @@ import { ClientStateStore } from "./storage";
 import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
 import { GitHubReleaseBundleProvider, githubReleaseManifestUrl, LocalServerBundleProvider, ReleaseAwareServerBundleProvider } from "./server-bundle";
-import { attachmentDownloadRequestSchema, attachmentTransferContextSchema } from "../src/shared/attachments";
+import { attachmentDownloadRequestSchema, attachmentTransferContextSchema, attachmentUploadBytesRequestSchema, attachmentUploadRequestSchema } from "../src/shared/attachments";
 import { downloadAttachment, prepareAttachmentPreviewDirectory, previewAttachment, setAttachmentLatencySensitive, uploadAttachment } from "./attachments";
 import { autoUpdater } from "electron-updater";
 import { ClientUpdateManager, runRequiredStartupUpdate, type ClientUpdateFlavor } from "./client-updater";
@@ -319,6 +320,25 @@ function registerIpc(): void {
     if (result.canceled || !filePath) return null;
     return uploadAttachment(filePath, context.serverAddress, context.sessionToken, context.maxAttachmentBytes, { latencySensitive: context.latencySensitive });
   });
+  ipcMain.handle(IPC.attachmentUploadFile, async (event, input: unknown) => {
+    requireMainRenderer(event);
+    const request = attachmentUploadRequestSchema.parse(input);
+    return uploadAttachment(request.filePath, request.context.serverAddress, request.context.sessionToken, request.context.maxAttachmentBytes, { latencySensitive: request.context.latencySensitive });
+  });
+  ipcMain.handle(IPC.attachmentUploadBytes, async (event, input: unknown) => {
+    requireMainRenderer(event);
+    const request = attachmentUploadBytesRequestSchema.parse(input);
+    // Файлы без пути на диске (скриншот из буфера): пишем во временный файл и грузим
+    // обычным потоковым путём; временный файл удаляется сразу после загрузки.
+    const extension = path.extname(request.fileName).slice(0, 16);
+    const temporaryPath = path.join(app.getPath("temp"), `opencord-clipboard-${randomUUID()}${extension}`);
+    try {
+      await writeFile(temporaryPath, request.contents, { mode: 0o600 });
+      return await uploadAttachment(temporaryPath, request.context.serverAddress, request.context.sessionToken, request.context.maxAttachmentBytes, { latencySensitive: request.context.latencySensitive, fileName: request.fileName });
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+  });
   ipcMain.handle(IPC.attachmentDownload, async (_event, input: unknown) => {
     const request = attachmentDownloadRequestSchema.parse(input);
     const options = { title: "Сохранить вложение", defaultPath: request.attachment.fileName };
@@ -343,7 +363,15 @@ if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {
 
 app.setAppUserModelId("org.opencord.desktop");
 
-void app.whenReady().then(async () => {
+// Повторный запуск (ярлык на рабочем столе, исполняемый файл) не должен создавать новый
+// процесс и окно: если OpenCord уже свёрнут в трей, второй экземпляр раскрывает его.
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => { if (startupGateCompleted) showMainWindow(); });
+
+  void app.whenReady().then(async () => {
   configureMediaPermissions();
   attachmentPreviewDirectory = await prepareAttachmentPreviewDirectory(app.getPath("temp"));
   store = new ClientStateStore(app.getPath("userData"));
@@ -417,7 +445,8 @@ void app.whenReady().then(async () => {
     void clientUpdateManager.check();
   }
   app.on("activate", () => { if (startupGateCompleted) showMainWindow(); });
-});
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin" && (quitting || !tray || tray.isDestroyed())) app.quit();

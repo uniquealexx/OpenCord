@@ -48,6 +48,16 @@ const VOICE_ACTIVITY_OFF_NOISE_MULTIPLIER = 1.6;
 const VOICE_ACTIVITY_OFF_MARGIN = 0.0015;
 const VOICE_ACTIVITY_RELEASE_SAMPLES = 4;
 const VOICE_ACTIVITY_SAMPLE_INTERVAL_MS = 20;
+// Прогрев после появления трека: первые ~300 мс (15 сэмплов) гейт калибрует шумовой пол,
+// не открываясь, чтобы фоновый шум комнаты не «залипал» индикатор сразу после подключения
+// или анмута. Очень громкий сигнал (речь вплотную к микрофону) открывает гейт и в прогреве.
+const VOICE_ACTIVITY_WARMUP_SAMPLES = 15;
+const VOICE_ACTIVITY_WARMUP_LOUD_RMS = 0.02;
+// Медленный крип шумового пола вверх при ОТКРЫТОМ гейте, но только на негромких уровнях:
+// устойчивый фоновый шум (вентилятор, улица) со временем поднимает порог выше себя, закрывает
+// гейт и гасит рамку, а громкая речь (выше потолка) пол не меняет — длинная фраза не обрывается.
+const VOICE_ACTIVITY_CREEP_CEILING_RMS = 0.02;
+const VOICE_ACTIVITY_CREEP_RATE = 0.005;
 
 export interface VoiceActivityCalibration {
   noiseFloor: number;
@@ -68,6 +78,7 @@ export function createResponsiveVoiceActivityGate(onChange: (speaking: boolean) 
   let speaking = false;
   let quietSamples = 0;
   let noiseFloor = VOICE_ACTIVITY_INITIAL_NOISE_FLOOR;
+  let warmupSamples = 0;
   let lastCalibration: VoiceActivityCalibration | null = null;
   const automatic = options.automatic ?? true;
 
@@ -100,29 +111,44 @@ export function createResponsiveVoiceActivityGate(onChange: (speaking: boolean) 
     noiseFloor += (boundedVolume - noiseFloor) * rate;
   };
 
+  const creepNoiseFloor = (volume: number): void => {
+    if (volume > VOICE_ACTIVITY_CREEP_CEILING_RMS) return; // громкая речь: пол не трогаем
+    const boundedVolume = Math.max(VOICE_ACTIVITY_MIN_NOISE_FLOOR, volume);
+    if (boundedVolume <= noiseFloor) return;
+    noiseFloor += (boundedVolume - noiseFloor) * VOICE_ACTIVITY_CREEP_RATE;
+  };
+
   return {
     sample(volume): void {
+      const inWarmup = automatic && warmupSamples < VOICE_ACTIVITY_WARMUP_SAMPLES;
+      if (inWarmup) warmupSamples += 1;
       const current = publishCalibration();
-      if (!speaking) {
+      if (speaking) {
+        if (volume >= current.closeThreshold) {
+          quietSamples = 0;
+          if (automatic) creepNoiseFloor(volume);
+          return;
+        }
+        quietSamples += 1;
+        if (quietSamples < VOICE_ACTIVITY_RELEASE_SAMPLES) return;
+        speaking = false;
+        quietSamples = 0;
+        onChange(false);
         if (automatic) calibrateNoiseFloor(volume, current.openThreshold);
-        const calibrated = publishCalibration();
-        if (volume < calibrated.openThreshold) return;
-        speaking = true;
-        quietSamples = 0;
-        onChange(true);
+        publishCalibration();
         return;
       }
-      if (volume >= current.closeThreshold) {
-        quietSamples = 0;
+      if (inWarmup && volume < VOICE_ACTIVITY_WARMUP_LOUD_RMS) {
+        // Прогрев: калибруем шумовой пол по фону, не открываясь на шум комнаты.
+        calibrateNoiseFloor(volume, Number.POSITIVE_INFINITY);
         return;
       }
-      quietSamples += 1;
-      if (quietSamples < VOICE_ACTIVITY_RELEASE_SAMPLES) return;
-      speaking = false;
-      quietSamples = 0;
-      onChange(false);
       if (automatic) calibrateNoiseFloor(volume, current.openThreshold);
-      publishCalibration();
+      const calibrated = publishCalibration();
+      if (volume < calibrated.openThreshold) return;
+      speaking = true;
+      quietSamples = 0;
+      onChange(true);
     },
     reset(): void {
       quietSamples = 0;
@@ -156,12 +182,18 @@ export function requestHighestScreenShareQuality(publication: Pick<RemoteTrackPu
 export interface MicrophoneProcessingResult {
   processor: MicrophoneTrackProcessor | null;
   suppression: "enhanced" | "standard" | "off";
+  /** Сырой трек захвата ДО установки процессора: после setProcessor mediaStreamTrack заменяется обработанным (загейтованным) треком. */
+  rawMediaStreamTrack: MediaStreamTrack | null;
 }
 
 export async function configureMicrophoneProcessing(track: LocalAudioTrack, preferences: Pick<ClientPreferences, "noiseSuppression" | "echoCancellation" | "autoGainControl">): Promise<MicrophoneProcessingResult> {
   const currentProcessor = track.getProcessor();
   if (currentProcessor) await track.stopProcessor();
   try { await track.mediaStreamTrack.applyConstraints({ echoCancellation: preferences.echoCancellation, autoGainControl: preferences.autoGainControl }); } catch { /* The device may not expose these constraints. */ }
+  // Сырой трек фиксируем до setProcessor: после установки процессора track.mediaStreamTrack
+  // указывает на выход MediaStreamAudioDestinationNode (загейтованный сигнал), по которому
+  // нельзя измерять активность — иначе гейт замкнётся на собственную тишину.
+  const rawMediaStreamTrack = track.mediaStreamTrack;
   const installProcessor = async (enableRnnoise: boolean): Promise<MicrophoneTrackProcessor | null> => {
     try {
       const processor = new MicrophoneTrackProcessor({ enableRnnoise });
@@ -176,22 +208,23 @@ export async function configureMicrophoneProcessing(track: LocalAudioTrack, pref
       try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* Avoid stacking two suppressors where supported. */ }
       const processor = await installProcessor(true);
       if (!processor) throw new Error("Processor installation failed");
-      return { processor, suppression: "enhanced" };
+      return { processor, suppression: "enhanced", rawMediaStreamTrack };
     } catch (error) {
       console.warn("OpenCord RNNoise processor is unavailable; using standard WebRTC noise suppression", error);
       try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: true }); } catch { /* Capture defaults remain the fallback. */ }
       const processor = await installProcessor(false);
-      return { processor, suppression: "standard" };
+      return { processor, suppression: "standard", rawMediaStreamTrack };
     }
   }
   try { await track.mediaStreamTrack.applyConstraints({ noiseSuppression: false }); } catch { /* The device may not expose this constraint. */ }
   const processor = await installProcessor(false);
-  return { processor, suppression: "off" };
+  return { processor, suppression: "off", rawMediaStreamTrack };
 }
 
 export function useVoiceSession(authorization: VoiceAuthorization | null, preferences: ClientPreferences, onError: (message: string) => void, onParticipantAudioSettingsChange?: (settings: VoiceParticipantSettings) => void): VoiceSession {
   const roomRef = useRef<Room | null>(null);
   const localGateProcessorRef = useRef<MicrophoneTrackProcessor | null>(null);
+  const localMicRawTrackRef = useRef<MediaStreamTrack | null>(null);
   const audioElementsRef = useRef<HTMLMediaElement[]>([]);
   const preferencesRef = useRef(preferences);
   const onParticipantAudioSettingsChangeRef = useRef(onParticipantAudioSettingsChange);
@@ -239,10 +272,14 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     publishActiveSpeakers();
   }, [publishActiveSpeakers]);
 
-  const startResponsiveDetector = useCallback((track: LocalAudioTrack | RemoteAudioTrack, identity: string): void => {
+  const startResponsiveDetector = useCallback((track: LocalAudioTrack | RemoteAudioTrack, identity: string, rawMediaStreamTrack: MediaStreamTrack | null = null): void => {
     stopResponsiveDetector(track);
     try {
-      const { analyser, cleanup } = createAudioAnalyser(track, { fftSize: 256, smoothingTimeConstant: 0 });
+      // Анализатор слушает СЫРОЙ трек захвата: у локального трека после setProcessor
+      // mediaStreamTrack заменяется обработанным (загейтованным) сигналом — измерять по нему
+      // активность нельзя, иначе гейт замыкается на собственную тишину и не открывается.
+      const analysedTrack = rawMediaStreamTrack ?? track.mediaStreamTrack;
+      const { analyser, cleanup } = createAudioAnalyser({ mediaStreamTrack: analysedTrack } as LocalAudioTrack, { fftSize: 256, smoothingTimeConstant: 0 });
       const samples = new Float32Array(analyser.fftSize);
       const detector = { identity, speaking: false, stop: (): void => undefined };
       const localPreferences = identity === roomRef.current?.localParticipant.identity ? preferencesRef.current : null;
@@ -269,14 +306,16 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     }
   }, [publishActiveSpeakers, stopResponsiveDetector]);
 
-  const configureLocalMicrophone = useCallback(async (track: LocalAudioTrack): Promise<void> => {
-    const { processor } = await configureMicrophoneProcessing(track, preferencesRef.current);
-    localGateProcessorRef.current = processor;
-    if (processor) {
+  const configureLocalMicrophone = useCallback(async (track: LocalAudioTrack): Promise<MicrophoneProcessingResult> => {
+    const result = await configureMicrophoneProcessing(track, preferencesRef.current);
+    localGateProcessorRef.current = result.processor;
+    localMicRawTrackRef.current = result.rawMediaStreamTrack;
+    if (result.processor) {
       const detector = responsiveDetectorsRef.current.get(track);
       const pushToTalk = preferencesRef.current.voiceInputMode === "push-to-talk";
-      processor.setGateOpen(pushToTalk || Boolean(detector?.speaking));
+      result.processor.setGateOpen(pushToTalk || Boolean(detector?.speaking));
     }
+    return result;
   }, []);
 
   useEffect(() => { preferencesRef.current = preferences; }, [preferences]);
@@ -320,9 +359,13 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   }, [onError, preferences.voiceInputDeviceId, preferences.voiceOutputDeviceId]);
 
   useEffect(() => {
-    const track = roomRef.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
-    if (track) void configureLocalMicrophone(track);
-  }, [configureLocalMicrophone, preferences.noiseSuppression]);
+    const room = roomRef.current;
+    const track = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
+    if (!room || !track) return;
+    void configureLocalMicrophone(track).then((processing) => {
+      startResponsiveDetector(track, room.localParticipant.identity, processing.rawMediaStreamTrack);
+    });
+  }, [configureLocalMicrophone, preferences.noiseSuppression, startResponsiveDetector]);
 
   useEffect(() => {
     const track = roomRef.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
@@ -336,7 +379,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   useEffect(() => {
     const room = roomRef.current;
     const track = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
-    if (room && track) startResponsiveDetector(track, room.localParticipant.identity);
+    if (room && track) startResponsiveDetector(track, room.localParticipant.identity, localMicRawTrackRef.current);
   }, [preferences.automaticInputSensitivity, preferences.manualInputSensitivityDb, preferences.voiceInputMode, startResponsiveDetector]);
 
   const refreshDevices = useCallback(async (): Promise<void> => {
@@ -443,18 +486,28 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       try {
         await room.connect(authorization.endpoint, authorization.token);
         if (cancelled || roomRef.current !== room) return;
-        if (currentPreferences.voiceOutputDeviceId) await room.switchActiveDevice("audiooutput", currentPreferences.voiceOutputDeviceId);
+        // Комната подключена: фиксируем статус и канал сразу — индикатор не должен зависеть
+        // от последующей настройки микрофона (она бывает медленной или падает на конкретном устройстве).
+        setChannelId(authorization.channelId);
+        setStatus("connected");
         const ptt = currentPreferences.voiceInputMode === "push-to-talk";
-        const microphonePublication = await room.localParticipant.setMicrophoneEnabled(!ptt);
-        if (microphonePublication?.audioTrack) {
-          await configureLocalMicrophone(microphonePublication.audioTrack);
-          startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
-        }
         setMutedState(ptt);
         deafenedRef.current = false;
         setDeafenedState(false);
-        setChannelId(authorization.channelId);
-        setStatus("connected");
+        try {
+          if (currentPreferences.voiceOutputDeviceId) await room.switchActiveDevice("audiooutput", currentPreferences.voiceOutputDeviceId);
+        } catch { /* Системное устройство вывода остаётся фолбэком. */ }
+        try {
+          const microphonePublication = await room.localParticipant.setMicrophoneEnabled(!ptt);
+          if (microphonePublication?.audioTrack) {
+            const processing = await configureLocalMicrophone(microphonePublication.audioTrack);
+            startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity, processing.rawMediaStreamTrack);
+          }
+        } catch {
+          // Пользователь остаётся в канале, но без микрофона: глушим и объясняем, а не валим статус.
+          setMutedState(true);
+          onError(currentDictionary().voiceErrors.micFailed);
+        }
         await refreshDevices();
       } catch (error) {
         if (!cancelled) { setStatus("error"); onError(error instanceof Error ? currentDictionary().voiceErrors.joinFailed(error.message) : currentDictionary().voiceErrors.joinFailedGeneric); }
@@ -513,8 +566,8 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     const room = roomRef.current;
     const microphonePublication = await room?.localParticipant.setMicrophoneEnabled(!value);
     if (!value && microphonePublication?.audioTrack && room) {
-      await configureLocalMicrophone(microphonePublication.audioTrack);
-      startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity);
+      const processing = await configureLocalMicrophone(microphonePublication.audioTrack);
+      startResponsiveDetector(microphonePublication.audioTrack, room.localParticipant.identity, processing.rawMediaStreamTrack);
     }
     if (value) {
       const microphoneTrack = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
@@ -560,8 +613,8 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     await room.switchActiveDevice("audioinput", deviceId);
     const microphoneTrack = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
     if (microphoneTrack) {
-      await configureLocalMicrophone(microphoneTrack);
-      startResponsiveDetector(microphoneTrack, room.localParticipant.identity);
+      const processing = await configureLocalMicrophone(microphoneTrack);
+      startResponsiveDetector(microphoneTrack, room.localParticipant.identity, processing.rawMediaStreamTrack);
     }
   }, [configureLocalMicrophone, startResponsiveDetector]);
   const setOutputDevice = useCallback(async (deviceId: string | null): Promise<void> => {
