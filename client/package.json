@@ -87,7 +87,8 @@
       "package.json",
       "!node_modules/sharp/**/*",
       "!node_modules/@img/**/*",
-      "!node_modules/cpu-features/**/*"
+      "!node_modules/cpu-features/**/*",
+      "!node_modules/@next/swc-*/**/*"
     ],
     "extraResources": [],
     "win": {
