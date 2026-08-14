@@ -20,6 +20,8 @@
     "manifest:validate": "pnpm --filter @opencord/shared build && node scripts/release-manifest.mjs --validate",
     "build": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/server build && pnpm --filter @opencord/client build",
     "package:win": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:win",
+    "package:linux": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:linux",
+    "package:mac": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm --filter @opencord/client package:mac",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm check:versions && pnpm -r --if-present typecheck",
     "test": "pnpm check:versions && pnpm --filter @opencord/shared build && pnpm -r --workspace-concurrency=1 --if-present test"

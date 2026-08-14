@@ -68,6 +68,9 @@ describe("production deployment", () => {
     expect(workflow).toContain("latest-mac.yml");
     expect(workflow).toContain("pnpm package:linux");
     expect(workflow).toContain("pnpm package:mac");
+    const rootPackageJson = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8"));
+    expect(rootPackageJson.scripts?.["package:linux"]).toBeTruthy();
+    expect(rootPackageJson.scripts?.["package:mac"]).toBeTruthy();
     expect(workflow).not.toMatch(/uses:\s+[^\s]+@(main|master|v\d+)\s*$/mu);
   });
 
