@@ -3,6 +3,7 @@ name: opencord-local
 services:
   server:
     build:
+      context: ..
       dockerfile: deploy/Dockerfile.bundle
       target: runtime
       args:
@@ -17,6 +18,7 @@ services:
       - "127.0.0.1:3210:3210"
   attachments-init:
     build:
+      context: ..
       dockerfile: deploy/Dockerfile.bundle
       target: runtime
       args:
