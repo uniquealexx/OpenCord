@@ -290,6 +290,25 @@ const migrations = [
     id: "018_server_banner",
     sql: `ALTER TABLE servers ADD COLUMN IF NOT EXISTS banner text NULL;`,
   },
+  {
+    id: "019_message_reactions",
+    sql: `
+      CREATE TABLE IF NOT EXISTS message_reactions (
+        message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji text NOT NULL CHECK (char_length(emoji) BETWEEN 1 AND 32),
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (message_id, user_id, emoji)
+      );
+    `,
+  },
+  {
+    id: "020_message_replies",
+    sql: `
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message_id uuid REFERENCES messages(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS messages_reply_to_idx ON messages(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

@@ -190,7 +190,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "chat.send") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
-      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds, event.mentions);
+      if (event.replyToMessageId && !(await repository.canReplyToMessage(event.replyToMessageId, event.channelId, connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Исходное сообщение для ответа не найдено или недоступно");
+      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds, event.mentions, "chat", null, false, event.replyToMessageId);
       if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Одно или несколько вложений недоступны или уже отправлены");
       broadcast({ type: "message.created", message });
       return;
@@ -198,9 +199,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "chat.pm" || event.type === "chat.apm") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       if (event.targetUserId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя отправить личное сообщение самому себе");
+      if (event.replyToMessageId && !(await repository.canReplyToMessage(event.replyToMessageId, event.channelId, connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Исходное сообщение для ответа не найдено или недоступно");
       try { await repository.getMemberRole(event.targetUserId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Получатель не найден"); }
       const anonymous = event.type === "chat.apm";
-      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, [], [], anonymous ? "apm" : "pm", event.targetUserId, anonymous);
+      const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, [], [], anonymous ? "apm" : "pm", event.targetUserId, anonymous, event.replyToMessageId);
       if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось отправить личное сообщение");
       routeMessageEvent(message, (current) => ({ type: "message.created", message: current }));
       return;
@@ -236,6 +238,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await Promise.all(deleted.storageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
       if (existing.kind === "chat") broadcast({ type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
       else sendToParticipants(existing.authorId, existing.targetUserId, { type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
+      return;
+    }
+    if (event.type === "message.react") {
+      const access = await repository.getMessageAccess(event.messageId);
+      if (!access) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      if (access.kind === "apm" && access.authorId === connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя реагировать на собственное анонимное сообщение");
+      const reactions = await repository.toggleReaction(event.messageId, connection.userId, event.emoji);
+      if (reactions === null) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      const payload = { type: "message.reactions.updated" as const, messageId: event.messageId, channelId: access.channelId, reactions };
+      if (access.kind === "chat") broadcast(payload);
+      else sendToParticipants(access.authorId, access.targetUserId, payload);
       return;
     }
     if (event.type === "channel.create") {

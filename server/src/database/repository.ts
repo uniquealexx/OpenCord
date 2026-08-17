@@ -1,12 +1,13 @@
-import { publicKeyFingerprint, type Attachment, type Channel, type ChatMessage, type Member, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
+import { publicKeyFingerprint, type Attachment, type Channel, type ChatMessage, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
 interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
-interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean }
+interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null }
 interface MentionRow extends QueryRow { message_id: string; user_id: string }
+interface ReactionRow extends QueryRow { message_id: string; user_id: string; emoji: string }
 interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 interface MessageUpdateRow extends MessageRow { removed_storage_keys: string[] | null }
@@ -218,7 +219,7 @@ export class ChatRepository {
     return row ? { ...mapAttachment(row), storageKey: row.storage_key } : null;
   }
 
-  async createMessage(id: string, channelId: string, authorId: string, content: string, attachmentIds: string[] = [], mentions: string[] = [], kind: "chat" | "pm" | "apm" = "chat", targetUserId: string | null = null, anonymous = false): Promise<ChatMessage | null> {
+  async createMessage(id: string, channelId: string, authorId: string, content: string, attachmentIds: string[] = [], mentions: string[] = [], kind: "chat" | "pm" | "apm" = "chat", targetUserId: string | null = null, anonymous = false, replyToMessageId: string | null = null): Promise<ChatMessage | null> {
     const rows = await this.database.query<MessageRow>(
       `WITH requested AS (
          SELECT value::uuid AS id, (position - 1)::integer AS position
@@ -228,10 +229,10 @@ export class ChatRepository {
          WHERE a.uploader_id = $3 AND a.server_id = $6
          AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id)
        ), inserted AS (
-         INSERT INTO messages (id, channel_id, author_id, content, kind, target_user_id, anonymous)
-         SELECT $1, $2, $3, $4, $8, $9, $10
+         INSERT INTO messages (id, channel_id, author_id, content, kind, target_user_id, anonymous, reply_to_message_id)
+         SELECT $1, $2, $3, $4, $8, $9, $10, $11
          WHERE (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
-         RETURNING id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous
+         RETURNING id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id
        ), linked AS (
          INSERT INTO message_attachments (message_id, attachment_id, position)
          SELECT inserted.id, available.id, available.position FROM inserted CROSS JOIN available
@@ -245,16 +246,17 @@ export class ChatRepository {
            ORDER BY input.value, input.ordinality
          ) AS candidate
        )
-       SELECT id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous,
+       SELECT id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id,
        (SELECT display_name FROM users WHERE users.id = author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = author_id) AS author_avatar FROM inserted`,
-      [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID, mentions, kind, targetUserId, anonymous],
+      [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID, mentions, kind, targetUserId, anonymous, replyToMessageId],
     );
     const row = rows[0];
     if (!row) return null;
     const attachments = await this.getAttachmentsForMessages([id]);
     const messageMentions = await this.getMentionsForMessages([id]);
-    return mapMessage(row, attachments.get(id) ?? [], messageMentions.get(id) ?? []);
+    const messageReactions = await this.getReactionsForMessages([id]);
+    return mapMessage(row, attachments.get(id) ?? [], messageMentions.get(id) ?? [], messageReactions.get(id) ?? []);
   }
 
   async getMessageAccess(messageId: string): Promise<{ authorId: string; channelId: string; kind: "chat" | "pm" | "apm"; targetUserId: string | null } | null> {
@@ -265,6 +267,18 @@ export class ChatRepository {
       [messageId, DEFAULT_SERVER_ID],
     );
     return row ? { authorId: row.author_id, channelId: row.channel_id, kind: row.kind, targetUserId: row.target_user_id } : null;
+  }
+
+  async canReplyToMessage(messageId: string, channelId: string, viewerId: string): Promise<boolean> {
+    const [row] = await this.database.query<{ allowed: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM messages m JOIN channels c ON c.id = m.channel_id
+         WHERE m.id = $1 AND m.channel_id = $2 AND c.server_id = $4
+         AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
+       ) AS allowed`,
+      [messageId, channelId, viewerId, DEFAULT_SERVER_ID],
+    );
+    return row?.allowed === true;
   }
 
   async updateMessage(messageId: string, authorId: string, content: string, attachmentIds: string[] = [], mentions: string[] = []): Promise<{ message: ChatMessage; removedStorageKeys: string[] } | null> {
@@ -284,7 +298,7 @@ export class ChatRepository {
          AND EXISTS (SELECT 1 FROM channels c WHERE c.id = m.channel_id AND c.server_id = $5)
          AND (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
          AND ($3 <> '' OR EXISTS (SELECT 1 FROM requested))
-         RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous
+         RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
        ), removed AS (
          DELETE FROM message_attachments ma USING updated
          WHERE ma.message_id = updated.id AND NOT EXISTS (SELECT 1 FROM requested r WHERE r.id = ma.attachment_id)
@@ -309,7 +323,7 @@ export class ChatRepository {
        ), removed_files AS (
          DELETE FROM attachments a USING removed WHERE a.id = removed.attachment_id RETURNING a.storage_key
        )
-       SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at, updated.kind, updated.target_user_id, updated.anonymous,
+       SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at, updated.kind, updated.target_user_id, updated.anonymous, updated.reply_to_message_id,
        (SELECT display_name FROM users WHERE users.id = updated.author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = updated.author_id) AS author_avatar,
        COALESCE((SELECT array_agg(storage_key) FROM removed_files), ARRAY[]::text[]) AS removed_storage_keys
@@ -320,7 +334,29 @@ export class ChatRepository {
     if (!row) return null;
     const attachments = await this.getAttachmentsForMessages([messageId]);
     const messageMentions = await this.getMentionsForMessages([messageId]);
-    return { message: mapMessage(row, attachments.get(messageId) ?? [], messageMentions.get(messageId) ?? []), removedStorageKeys: row.removed_storage_keys ?? [] };
+    const messageReactions = await this.getReactionsForMessages([messageId]);
+    return { message: mapMessage(row, attachments.get(messageId) ?? [], messageMentions.get(messageId) ?? [], messageReactions.get(messageId) ?? []), removedStorageKeys: row.removed_storage_keys ?? [] };
+  }
+
+  /**
+   * Переключает реакцию: если пользователь уже поставил такой эмодзи — снимает,
+   * иначе добавляет. Возвращает актуальный список реакций или null, если сообщение
+   * не существует или недоступно на этом сервере.
+   */
+  async toggleReaction(messageId: string, userId: string, emoji: string): Promise<MessageReaction[] | null> {
+    const access = await this.getMessageAccess(messageId);
+    if (!access) return null;
+    const removed = await this.database.query<{ message_id: string }>(
+      `DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3 RETURNING message_id`,
+      [messageId, userId, emoji],
+    );
+    if (!removed.length) {
+      await this.database.query(
+        `INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)`,
+        [messageId, userId, emoji],
+      );
+    }
+    return (await this.getReactionsForMessages([messageId])).get(messageId) ?? [];
   }
 
   async deleteMessage(messageId: string, authorId: string, allowAnyAuthor: boolean): Promise<{ channelId: string; storageKeys: string[] } | null> {
@@ -346,7 +382,7 @@ export class ChatRepository {
 
   async getHistory(channelId: string, limit: number, viewerId: string): Promise<ChatMessage[]> {
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous
+      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
        FROM messages m JOIN users u ON u.id = m.author_id
        WHERE m.channel_id = $1 AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
        ORDER BY m.created_at DESC LIMIT $2`,
@@ -355,7 +391,8 @@ export class ChatRepository {
     const ordered = rows.reverse();
     const attachments = await this.getAttachmentsForMessages(ordered.map((message) => message.id));
     const messageMentions = await this.getMentionsForMessages(ordered.map((message) => message.id));
-    return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
+    const messageReactions = await this.getReactionsForMessages(ordered.map((message) => message.id));
+    return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
   }
 
   async updateServerSettings(settings: ServerSettings): Promise<void> {
@@ -395,16 +432,17 @@ export class ChatRepository {
       parameters,
     );
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at
+      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
        FROM messages m JOIN users u ON u.id = m.author_id JOIN channels c ON c.id = m.channel_id
        WHERE ${conditions} ORDER BY m.created_at DESC, m.id DESC LIMIT $6 OFFSET $7`,
       [...parameters, filters.limit, filters.offset],
     );
     const attachments = await this.getAttachmentsForMessages(rows.map((message) => message.id));
     const messageMentions = await this.getMentionsForMessages(rows.map((message) => message.id));
+    const messageReactions = await this.getReactionsForMessages(rows.map((message) => message.id));
     const total = Number(countRow?.count ?? 0);
     return {
-      messages: rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [])),
+      messages: rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])),
       total,
       offset: filters.offset,
       hasMore: filters.offset + rows.length < total,
@@ -423,6 +461,25 @@ export class ChatRepository {
       if (!row.message_id) continue;
       const current = result.get(row.message_id) ?? [];
       current.push({ userId: row.user_id });
+      result.set(row.message_id, current);
+    }
+    return result;
+  }
+
+  private async getReactionsForMessages(messageIds: string[]): Promise<Map<string, MessageReaction[]>> {
+    const result = new Map<string, MessageReaction[]>();
+    if (!messageIds.length) return result;
+    const rows = await this.database.query<ReactionRow>(
+      `SELECT message_id, user_id, emoji FROM message_reactions
+       WHERE message_id = ANY($1::uuid[]) ORDER BY message_id, created_at, emoji`,
+      [messageIds],
+    );
+    for (const row of rows) {
+      if (!row.message_id) continue;
+      const current = result.get(row.message_id) ?? [];
+      const existing = current.find((reaction) => reaction.emoji === row.emoji);
+      if (existing) existing.userIds.push(row.user_id);
+      else current.push({ emoji: row.emoji, userIds: [row.user_id] });
       result.set(row.message_id, current);
     }
     return result;
@@ -460,8 +517,8 @@ async function mapMember(user: UserRow, status: PublicMemberStatus): Promise<Mem
   return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
 }
 
-function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = []): ChatMessage {
-  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments, mentions, kind: row.kind, targetUserId: row.target_user_id, anonymous: row.anonymous === true };
+function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = [], reactions: MessageReaction[] = []): ChatMessage {
+  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments, mentions, reactions, kind: row.kind, targetUserId: row.target_user_id, anonymous: row.anonymous === true, replyToMessageId: row.reply_to_message_id };
 }
 
 /**

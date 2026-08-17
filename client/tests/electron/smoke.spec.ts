@@ -14,11 +14,15 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   const app = await electron.launch({ args: ["."], cwd: process.cwd(), env: { ...process.env, NODE_ENV: "test", OPENCORD_TEST_USER_DATA: userData, ELECTRON_RENDERER_URL: process.env.ELECTRON_RENDERER_URL ?? "" } });
   const electronErrors: string[] = [];
   app.process().stderr?.on("data", (chunk: Buffer) => electronErrors.push(chunk.toString("utf8")));
-  const page = await app.firstWindow();
   const rendererErrors: string[] = [];
-  page.on("console", (message) => { if (["error", "warning"].includes(message.type())) rendererErrors.push(`console.${message.type()}: ${message.text()}`); });
-  page.on("pageerror", (error) => rendererErrors.push(`pageerror: ${error.message}`));
-  page.on("requestfailed", (request) => rendererErrors.push(`requestfailed: ${request.url()} — ${request.failure()?.errorText ?? "unknown"}`));
+  const captureRendererErrors = (rendererPage: Awaited<ReturnType<typeof app.firstWindow>>) => {
+    rendererPage.on("console", (message) => { if (["error", "warning"].includes(message.type())) rendererErrors.push(`console.${message.type()}: ${message.text()}`); });
+    rendererPage.on("pageerror", (error) => rendererErrors.push(`pageerror: ${error.message}`));
+    rendererPage.on("requestfailed", (request) => rendererErrors.push(`requestfailed: ${request.url()} — ${request.failure()?.errorText ?? "unknown"}`));
+  };
+  app.on("window", captureRendererErrors);
+  const page = await app.firstWindow();
+  captureRendererErrors(page);
   await expect(page).toHaveTitle("OpenCord");
   const surface = await page.evaluate(() => ({
     hasBridge: typeof window.openCord === "object",
@@ -28,17 +32,25 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "screenShare", "server", "storage", "updates", "window"], hasNodeRequire: false });
 
   // Свежая установка стартует на английском языке.
-  const onboardingName = page.getByPlaceholder("Display name");
+  const onboardingName = page.getByPlaceholder("Nickname");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);
   if (!(await onboardingName.isVisible())) {
-    const diagnostics = await page.evaluate(() => ({ href: location.href, scripts: [...document.scripts].map((script) => script.src), readyState: document.readyState }));
+    const diagnostics = await page.evaluate(() => ({
+      href: location.href,
+      body: document.body.innerText,
+      scripts: [...document.scripts].map((script) => ({ src: script.src, outerHTML: script.outerHTML.slice(0, 240) })),
+      resources: performance.getEntriesByType("resource").map((entry) => entry.name),
+      readyState: document.readyState,
+      nextFlightChunks: (window as typeof window & { __next_f?: unknown[] }).__next_f?.length ?? null,
+      webpackChunks: (window as typeof window & { webpackChunk_N_E?: unknown[] }).webpackChunk_N_E?.length ?? null,
+    }));
     throw new Error(`Renderer did not hydrate: ${JSON.stringify({ rendererErrors, diagnostics })}`);
   }
   await expect(onboardingName).toBeVisible();
   await page.screenshot({ path: "test-results/onboarding.png" });
   // Выбор языка на экране первого запуска: переключаемся на русский до создания профиля.
   await page.getByRole("button", { name: "Русский" }).click();
-  const russianOnboardingName = page.getByPlaceholder("Отображаемое имя");
+  const russianOnboardingName = page.getByPlaceholder("Никнейм");
   await expect(russianOnboardingName).toBeVisible();
   await russianOnboardingName.fill("Лина");
   await page.getByRole("button", { name: "Создать локальный профиль" }).click();

@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 umask 077
 
-BOOTSTRAP_VERSION="0.1.0-beta.16"
+BOOTSTRAP_VERSION="0.1.0-beta.17"
 GITHUB_REPOSITORY="uniquealexx/OpenCord"
 GITHUB_ORIGIN="https://github.com"
 MAX_BUNDLE_SIZE_BYTES=2147483648

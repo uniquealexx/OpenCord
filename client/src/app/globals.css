@@ -70,6 +70,25 @@ input[type="range"] { accent-color: #4d6bfe; }
 button, a { touch-action: manipulation; }
 * { -webkit-tap-highlight-color: transparent; }
 
+/* Панель действий парит над сообщением единым блоком. На устройствах без
+   hover она остаётся доступной, а мышью показывается при наведении/фокусе. */
+.message-action-bar { opacity: 1; }
+
+@media (hover: hover) and (pointer: fine) {
+  .message-action-bar {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  .group:hover > .message-action-bar,
+  .message-action-bar:focus-within,
+  .message-action-bar[data-open="true"] {
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* На мобильных WebView авто-зумирует поля с font-size < 16px при фокусе.
    16px на узких экранах также удобнее для попадания пальцем. */
 @media (max-width: 639px) {

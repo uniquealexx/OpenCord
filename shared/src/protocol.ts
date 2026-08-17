@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 29 as const;
+export const PROTOCOL_VERSION = 31 as const;
 
 export const MEBIBYTE = 1024 * 1024;
 export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
@@ -114,9 +114,18 @@ export const messageMentionSchema = z.object({
 });
 export const mentionIdsSchema = z.array(z.string().min(1).max(200)).max(20).refine((ids) => new Set(ids).size === ids.length, "Mention user IDs must be unique");
 
+// Реакции на сообщения: эмодзи и список пользователей, которые его поставили.
+export const REACTION_EMOJI_MAX_LENGTH = 32;
+export const REACTION_EMOJI_MAX = 64;
+export const messageReactionSchema = z.object({
+  emoji: z.string().min(1).max(REACTION_EMOJI_MAX_LENGTH),
+  userIds: z.array(z.string().min(1).max(200)).max(100),
+});
+
 // Вид сообщения: обычное, личное (/pm) или анонимное личное (/apm).
 export const messageKindSchema = z.enum(["chat", "pm", "apm"]);
 export const privateMessageTargetSchema = z.string().min(1).max(200);
+export const messageReplyIdSchema = z.string().uuid().nullable().default(null);
 
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),
@@ -129,9 +138,11 @@ export const chatMessageSchema = z.object({
   editedAt: z.string().datetime().nullable().default(null),
   attachments: z.array(attachmentSchema).max(5).default([]),
   mentions: z.array(messageMentionSchema).max(20).default([]),
+  reactions: z.array(messageReactionSchema).max(REACTION_EMOJI_MAX).default([]),
   kind: messageKindSchema.default("chat"),
   targetUserId: privateMessageTargetSchema.nullable().default(null),
   anonymous: z.boolean().default(false),
+  replyToMessageId: messageReplyIdSchema,
 }).superRefine((message, context) => {
   if (!message.content && message.attachments.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
@@ -167,12 +178,13 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("history.request"), requestId: requestIdSchema, channelId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }),
   z.object({ type: z.literal("message.search"), requestId: requestIdSchema, filters: messageSearchFiltersSchema }),
-  z.object({ type: z.literal("chat.send"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]) }),
-  z.object({ type: z.literal("chat.pm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema }),
-  z.object({ type: z.literal("chat.apm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema }),
+  z.object({ type: z.literal("chat.send"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]), replyToMessageId: messageReplyIdSchema }),
+  z.object({ type: z.literal("chat.pm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema, replyToMessageId: messageReplyIdSchema }),
+  z.object({ type: z.literal("chat.apm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema, replyToMessageId: messageReplyIdSchema }),
   z.object({ type: z.literal("chat.mute.set"), requestId: requestIdSchema, userId: z.string().min(1), muted: z.boolean(), durationMinutes: z.number().int().min(1).max(10_080).nullable().default(null) }),
   z.object({ type: z.literal("message.update"), requestId: requestIdSchema, messageId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]) }),
   z.object({ type: z.literal("message.delete"), requestId: requestIdSchema, messageId: z.string().uuid() }),
+  z.object({ type: z.literal("message.react"), requestId: requestIdSchema, messageId: z.string().uuid(), emoji: z.string().min(1).max(REACTION_EMOJI_MAX_LENGTH) }),
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
   z.object({ type: z.literal("channel.create"), requestId: requestIdSchema, name: z.string().trim().min(1).max(48), kind: z.enum(["text", "voice"]), description: z.string().trim().max(120).default("") }),
@@ -206,6 +218,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.created"), message: chatMessageSchema }),
   z.object({ type: z.literal("message.updated"), message: chatMessageSchema }),
   z.object({ type: z.literal("message.deleted"), messageId: z.string().uuid(), channelId: z.string().uuid() }),
+  z.object({ type: z.literal("message.reactions.updated"), messageId: z.string().uuid(), channelId: z.string().uuid(), reactions: z.array(messageReactionSchema) }),
   z.object({ type: z.literal("member.updated"), member: memberSchema }),
   z.object({ type: z.literal("member.removed"), userId: z.string().min(1) }),
   z.object({ type: z.literal("voice.join.authorized"), requestId: requestIdSchema, channelId: z.string().uuid(), endpoint: z.string().url(), token: z.string().min(20).max(4_000), expiresAt: z.string().datetime() }),
@@ -232,6 +245,7 @@ export type ServerSettings = z.infer<typeof serverSettingsSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export type MessageKind = z.infer<typeof messageKindSchema>;
 export type MessageMention = z.infer<typeof messageMentionSchema>;
+export type MessageReaction = z.infer<typeof messageReactionSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type MessageContentType = z.infer<typeof messageContentTypeSchema>;
 export type MessageSearchFilters = z.infer<typeof messageSearchFiltersSchema>;

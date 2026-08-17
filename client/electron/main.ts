@@ -14,7 +14,7 @@ import { downloadAttachment, prepareAttachmentPreviewDirectory, previewAttachmen
 import { autoUpdater } from "electron-updater";
 import { ClientUpdateManager, runRequiredStartupUpdate, type ClientUpdateFlavor } from "./client-updater";
 import type { ClientUpdateState } from "../src/shared/updater";
-import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
+import { isAllowedScreenShareSource, screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 import { isAllowedRendererPermission } from "./permissions";
 import { probeOpenCordServer } from "./server-probe";
 import { shouldHideWindowOnClose } from "./window-lifecycle";
@@ -36,7 +36,9 @@ let quitting = false;
 let trayNoticeShown = false;
 const selectedSshKeys = new Map<string, string>();
 let pendingScreenShare: { source: DesktopCapturerSource; includeAudio: boolean; expiresAt: number } | null = null;
+const screenShareThumbnailCache = new Map<string, string>();
 const TRAY_ICON_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACuSURBVFhH7c5LCsMwEARRHzRHyd0dBFmYl9FIY0NwiBpqNZ+ubVt55/nY929i/xL4PYEo7mTYPyVQibdi/1DgTPxxWiCKO5W9hv1dAeM8wjhv2B8KGOcZxrn9QwFnM2T39t9PIDuu0Ptj/xJYAh8C2fEs2b399xeInmQY5/aHAjOPIozzhv1dgehhizuVvYb9qUDv+Sj+uCRQlfBW7J8SOBLFnQz7ywJXsX8J/G9ebgdsQL8M5kwAAAAASUVORK5CYII=";
+const EMPTY_SCREEN_SHARE_THUMBNAIL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 function isTrustedRenderer(url: string): boolean {
   if (developmentUrl) {
@@ -84,7 +86,42 @@ function requireMainRenderer(event: IpcMainInvokeEvent): void {
 }
 
 async function listScreenShareSources(): Promise<DesktopCapturerSource[]> {
-  return desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 480, height: 270 }, fetchWindowIcons: true });
+  const sources = (await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 480, height: 270 }, fetchWindowIcons: true }))
+    .filter((source) => isAllowedScreenShareSource({ id: source.id, name: source.name }));
+  const availableIds = new Set(sources.map((source) => source.id));
+  for (const sourceId of screenShareThumbnailCache.keys()) {
+    if (!availableIds.has(sourceId)) screenShareThumbnailCache.delete(sourceId);
+  }
+  return sources;
+}
+
+function hasUsableScreenShareThumbnail(source: DesktopCapturerSource): boolean {
+  if (source.thumbnail.isEmpty()) return false;
+  const { width, height } = source.thumbnail.getSize();
+  if (width <= 2 || height <= 2) return false;
+  const bitmap = source.thumbnail.toBitmap();
+  if (bitmap.length < 4) return false;
+  const pixelCount = Math.floor(bitmap.length / 4);
+  const sampleStep = Math.max(1, Math.floor(pixelCount / 4_096));
+  let sampled = 0;
+  let visible = 0;
+  for (let pixel = 0; pixel < pixelCount; pixel += sampleStep) {
+    const offset = pixel * 4;
+    sampled += 1;
+    if (bitmap[offset + 3]! > 8 && Math.max(bitmap[offset]!, bitmap[offset + 1]!, bitmap[offset + 2]!) > 8) visible += 1;
+  }
+  return visible >= Math.max(4, Math.ceil(sampled * 0.002));
+}
+
+function screenShareSourceThumbnail(source: DesktopCapturerSource): { thumbnail: string; previewUnavailable?: true } {
+  if (hasUsableScreenShareThumbnail(source)) {
+    const thumbnail = source.thumbnail.toDataURL();
+    screenShareThumbnailCache.set(source.id, thumbnail);
+    return { thumbnail };
+  }
+  const cached = screenShareThumbnailCache.get(source.id);
+  if (cached) return { thumbnail: cached };
+  return { thumbnail: EMPTY_SCREEN_SHARE_THUMBNAIL, previewUnavailable: true };
 }
 
 function screenShareSourceSize(source: DesktopCapturerSource): { width: number; height: number } {
@@ -94,7 +131,10 @@ function screenShareSourceSize(source: DesktopCapturerSource): { width: number; 
     height: Math.max(1, Math.round(display.size.height * display.scaleFactor)),
   };
   const thumbnailSize = source.thumbnail.getSize();
-  return { width: Math.max(1, thumbnailSize.width), height: Math.max(1, thumbnailSize.height) };
+  return {
+    width: thumbnailSize.width > 2 ? thumbnailSize.width : 480,
+    height: thumbnailSize.height > 2 ? thumbnailSize.height : 270,
+  };
 }
 
 function createWindow(): void {
@@ -420,7 +460,7 @@ if (!singleInstanceLock) {
       name: source.name,
       kind: source.id.startsWith("screen:") ? "screen" : "window",
       ...screenShareSourceSize(source),
-      thumbnail: source.thumbnail.toDataURL(),
+      ...screenShareSourceThumbnail(source),
       appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
     })));
   });

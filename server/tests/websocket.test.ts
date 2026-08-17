@@ -37,11 +37,18 @@ describe("WebSocket chat flow", () => {
     first.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Сообщение между двумя клиентами" }));
     const created = await broadcast;
     expect(created.type === "message.created" && created.message.content).toBe("Сообщение между двумя клиентами");
+    if (created.type !== "message.created") throw new Error("Message expected");
+
+    const replyBroadcast = waitForEvent(second.socket, "message.created");
+    first.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Это ответ", replyToMessageId: created.message.id }));
+    const reply = await replyBroadcast;
+    expect(reply.type === "message.created" && reply.message).toMatchObject({ content: "Это ответ", replyToMessageId: created.message.id });
 
     const history = waitForEvent(second.socket, "history.result");
     second.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel!.id, limit: 50 }));
     const result = await history;
     expect(result.type === "history.result" && result.messages.some((message) => message.content === "Сообщение между двумя клиентами")).toBe(true);
+    expect(result.type === "history.result" && result.messages.some((message) => message.replyToMessageId === created.message.id)).toBe(true);
 
     const search = waitForEvent(second.socket, "message.search.result");
     second.socket.send(JSON.stringify({ type: "message.search", requestId: randomUUID(), filters: { query: "двумя", authorId: first.userId, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 } }));
@@ -52,6 +59,83 @@ describe("WebSocket chat flow", () => {
     const closed = [once(first.socket, "close"), once(second.socket, "close")];
     first.socket.close();
     second.socket.close();
+    await Promise.all(closed);
+  }, 15_000);
+
+  it("toggles message reactions and broadcasts the updated reaction list", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const first = await connectAndAuthenticate(url, "Лина");
+    const second = await connectAndAuthenticate(url, "Марк");
+    const channel = first.snapshot.server.channels.find((item) => item.kind === "text");
+    expect(channel).toBeDefined();
+
+    const broadcast = waitForEvent(second.socket, "message.created");
+    first.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Сообщение для реакции" }));
+    const created = await broadcast;
+    if (created.type !== "message.created") throw new Error("Message expected");
+
+    const reacted = waitForEventMatching(second.socket, "message.reactions.updated", (event) => event.reactions.length > 0);
+    first.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: created.message.id, emoji: "👍" }));
+    expect(await reacted).toMatchObject({ messageId: created.message.id, channelId: channel!.id, reactions: [{ emoji: "👍", userIds: [first.userId] }] });
+
+    const joined = waitForEventMatching(first.socket, "message.reactions.updated", (event) => event.reactions[0]?.userIds.length === 2);
+    second.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: created.message.id, emoji: "👍" }));
+    expect(await joined).toMatchObject({ messageId: created.message.id, reactions: [{ emoji: "👍", userIds: [first.userId, second.userId] }] });
+
+    const removed = waitForEventMatching(second.socket, "message.reactions.updated", (event) => event.reactions.length === 1 && event.reactions[0]?.userIds[0] === second.userId);
+    first.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: created.message.id, emoji: "👍" }));
+    expect(await removed).toMatchObject({ messageId: created.message.id, reactions: [{ emoji: "👍", userIds: [second.userId] }] });
+
+    const notFound = waitForEvent(first.socket, "error");
+    first.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: randomUUID(), emoji: "👍" }));
+    expect((await notFound).code).toBe("NOT_FOUND");
+
+    const closed = [once(first.socket, "close"), once(second.socket, "close")];
+    first.socket.close();
+    second.socket.close();
+    await Promise.all(closed);
+  }, 15_000);
+
+it("forbids the sender from reacting to their own anonymous private message", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const sender = await connectAndAuthenticate(url, "Sender");
+    const receiver = await connectAndAuthenticate(url, "Receiver");
+    const channel = sender.snapshot.server.channels.find((item) => item.kind === "text");
+    expect(channel).toBeDefined();
+
+    // Анонимное личное сообщение от sender к receiver.
+    const senderApm = waitForEvent(sender.socket, "message.created");
+    const receiverApm = waitForEvent(receiver.socket, "message.created");
+    sender.socket.send(JSON.stringify({ type: "chat.apm", requestId: randomUUID(), channelId: channel!.id, content: "Секрет", targetUserId: receiver.userId }));
+    const sentApm = await senderApm;
+    const receivedApm = await receiverApm;
+    if (sentApm.type !== "message.created" || receivedApm.type !== "message.created") throw new Error("Anonymous message expected");
+
+    // Отправитель не может реагировать на собственное анонимное сообщение.
+    const forbidden = waitForEvent(sender.socket, "error");
+    sender.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: sentApm.message.id, emoji: "👍" }));
+    expect((await forbidden).code).toBe("FORBIDDEN");
+
+    // Получатель по-прежнему может реагировать на полученное анонимное сообщение.
+    const reacted = waitForEventMatching(receiver.socket, "message.reactions.updated", (event) => event.reactions.length > 0);
+    receiver.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: receivedApm.message.id, emoji: "👍" }));
+    expect(await reacted).toMatchObject({ messageId: receivedApm.message.id, reactions: [{ emoji: "👍", userIds: [receiver.userId] }] });
+
+    const closed = [once(sender.socket, "close"), once(receiver.socket, "close")];
+    sender.socket.close();
+    receiver.socket.close();
     await Promise.all(closed);
   }, 15_000);
 

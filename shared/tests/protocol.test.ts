@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, clientEventSchema, discriminatorSchema, fingerprintSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, messageReactionSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -74,6 +74,31 @@ describe("OpenCord protocol", () => {
     expect(() => clientEventSchema.parse({ type: "message.update", requestId: crypto.randomUUID(), messageId, content: "Файл", attachmentIds: [attachmentId, attachmentId] })).toThrow();
     expect(clientEventSchema.parse({ type: "message.delete", requestId: crypto.randomUUID(), messageId })).toMatchObject({ type: "message.delete", messageId });
     expect(serverEventSchema.parse({ type: "message.deleted", messageId, channelId })).toEqual({ type: "message.deleted", messageId, channelId });
+  });
+
+  it("validates message reply references", () => {
+    const requestId = crypto.randomUUID();
+    const channelId = crypto.randomUUID();
+    const replyToMessageId = crypto.randomUUID();
+    expect(clientEventSchema.parse({ type: "chat.send", requestId, channelId, content: "Ответ", replyToMessageId })).toMatchObject({ replyToMessageId });
+    expect(chatMessageSchema.parse({ id: crypto.randomUUID(), channelId, authorId: "user", authorName: "Лина", authorAvatar: null, content: "Ответ", createdAt: new Date().toISOString(), replyToMessageId })).toMatchObject({ replyToMessageId });
+    expect(() => clientEventSchema.parse({ type: "chat.send", requestId, channelId, content: "Ответ", replyToMessageId: "not-a-uuid" })).toThrow();
+  });
+
+  it("validates message reactions and reaction toggle events", () => {
+    const messageId = crypto.randomUUID();
+    const channelId = crypto.randomUUID();
+    const reaction = { emoji: "👍", userIds: ["user-1", "user-2"] };
+    expect(messageReactionSchema.parse(reaction)).toEqual(reaction);
+    expect(() => messageReactionSchema.parse({ emoji: "x".repeat(33), userIds: [] })).toThrow();
+    expect(() => messageReactionSchema.parse({ emoji: "", userIds: [] })).toThrow();
+    expect(() => messageReactionSchema.parse({ emoji: "👍", userIds: Array.from({ length: 101 }, (_item, index) => `user-${index}`) })).toThrow();
+    expect(clientEventSchema.parse({ type: "message.react", requestId: crypto.randomUUID(), messageId, emoji: "👍" })).toMatchObject({ type: "message.react", messageId, emoji: "👍" });
+    expect(() => clientEventSchema.parse({ type: "message.react", requestId: crypto.randomUUID(), messageId, emoji: "" })).toThrow();
+    expect(() => clientEventSchema.parse({ type: "message.react", requestId: crypto.randomUUID(), messageId, emoji: "x".repeat(33) })).toThrow();
+    expect(serverEventSchema.parse({ type: "message.reactions.updated", messageId, channelId, reactions: [reaction] })).toEqual({ type: "message.reactions.updated", messageId, channelId, reactions: [reaction] });
+    expect(chatMessageSchema.parse({ id: messageId, channelId, authorId: "user", authorName: "Лина", authorAvatar: null, content: "С реакцией", createdAt: new Date().toISOString(), reactions: [reaction] })).toMatchObject({ reactions: [reaction] });
+    expect(chatMessageSchema.parse({ id: messageId, channelId, authorId: "user", authorName: "Лина", authorAvatar: null, content: "Без реакций", createdAt: new Date().toISOString() })).toMatchObject({ reactions: [] });
   });
 
   it("accepts only compact WebP user banners", () => {

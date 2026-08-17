@@ -116,6 +116,8 @@ A voice channel contains `participantLimit`: values `1–25` define a finite cap
 
 `message.update` is allowed exclusively to the message author. Even the owner and an administrator cannot edit someone else's text or attachments. The event contains the final `attachmentIds`: the server accepts the existing attachments of this message and new unused uploads by the author, atomically replaces the relations, and deletes the detached files. After the change the server sets `editedAt` and broadcasts `message.updated`. `message.delete` is allowed to the author, and for others' messages to the owner and administrators with the `MANAGE_MESSAGES` permission; the server broadcasts `message.deleted` and deletes the associated attachments.
 
+`chat.send`, `chat.pm`, and `chat.apm` may include `replyToMessageId`. The server accepts the reference only when the source belongs to the same channel and is visible to the sender; this prevents replies from exposing inaccessible private messages. The stored message and all history/search/live payloads carry only the source ID, while the client resolves the compact quote from messages it already has. The database uses a nullable foreign key with `ON DELETE SET NULL`, so deleting the source keeps the reply without a dangling reference.
+
 `server.avatar.update` is available only to the owner with the `MANAGE_SERVER` permission. After saving, the server immediately broadcasts the lightweight `server.avatar.updated` event to all connected members; the client updates its local state and the icon without reconnecting or re-requesting the history. The avatar is also included in the initial `server.snapshot`, so users who connect later receive the current image. PNG, JPEG, and WebP are allowed as a data URL up to 1.5 MB.
 
 `server.settings.update` is available only to the owner with the `MANAGE_SERVER` permission and atomically changes the server name, the attachment limit, the maximum screen-share quality (480p, 720p, 1080p, or "Source" with a contract value of 1440), and the maximum frame rate (15, 30, or 60 FPS). The "Source" mode keeps the original resolution up to a limit of 2560×1440 without artificially upscaling smaller frames. After saving, the server broadcasts a new `server.snapshot`, so the settings update on all connected clients without reconnecting. The name changed by the owner is preserved when the same deployment restarts.
@@ -124,7 +126,7 @@ A voice channel contains `participantLimit`: values `1–25` define a finite cap
 
 ## Storage
 
-Local development uses PGlite with PostgreSQL-compatible migrations. Production uses the same repository and migrations through a regular PostgreSQL `DATABASE_URL`. The current schema contains the server, channels, public profiles (including `username` and `discriminator`), messages, message mentions (`message_mentions`), and attachment metadata. Files reside in `ATTACHMENTS_DIR` (`server/.data/attachments` locally, a separate Docker volume, or `/var/lib/opencord/attachments` for a native install).
+Local development uses PGlite with PostgreSQL-compatible migrations. Production uses the same repository and migrations through a regular PostgreSQL `DATABASE_URL`. The current schema contains the server, channels, public profiles (including `username` and `discriminator`), messages (including the nullable reply reference), message mentions (`message_mentions`), and attachment metadata. Files reside in `ATTACHMENTS_DIR` (`server/.data/attachments` locally, a separate Docker volume, or `/var/lib/opencord/attachments` for a native install).
 
 ---
 
@@ -246,6 +248,8 @@ Electron-клиент показывает изображения до 10 МБ �
 
 `message.update` разрешён исключительно автору сообщения. Даже владелец и администратор не могут редактировать чужой текст или вложения. Событие содержит итоговый `attachmentIds`: сервер принимает существующие вложения этого сообщения и новые незанятые загрузки автора, атомарно заменяет связи и удаляет откреплённые файлы. После изменения сервер устанавливает `editedAt` и рассылает `message.updated`. `message.delete` разрешён автору, а для чужих сообщений — владельцу и администраторам с правом `MANAGE_MESSAGES`; сервер рассылает `message.deleted` и удаляет связанные вложения.
 
+`chat.send`, `chat.pm` и `chat.apm` могут содержать `replyToMessageId`. Сервер принимает ссылку, только если исходное сообщение находится в том же канале и доступно отправителю; так ответ не раскрывает недоступное личное сообщение. В хранилище и протоколе передаётся только ID, а компактную цитату клиент собирает из уже загруженных сообщений. Внешний ключ имеет `ON DELETE SET NULL`, поэтому удаление исходного сообщения сохраняет сам ответ без битой ссылки.
+
 `server.avatar.update` доступен только владельцу с разрешением `MANAGE_SERVER`. После сохранения сервер немедленно рассылает всем подключённым участникам лёгкое событие `server.avatar.updated`; клиент обновляет локальное состояние и иконку без переподключения и повторного запроса истории. Аватар также входит в начальный `server.snapshot`, поэтому актуальное изображение получают пользователи, подключившиеся позднее. Допустимы PNG, JPEG и WebP в виде data URL размером до 1,5 МБ.
 
 `server.settings.update` доступен только владельцу с разрешением `MANAGE_SERVER` и атомарно изменяет название сервера, лимит вложений, максимальное качество демонстрации (480p, 720p, 1080p или «Источник» с контрактным значением 1440) и максимальную частоту кадров (15, 30 или 60 FPS). Режим «Источник» сохраняет исходное разрешение до предела 2560×1440 без искусственного увеличения меньших кадров. После сохранения сервер рассылает новый `server.snapshot`, поэтому настройки обновляются у всех подключённых клиентов без переподключения. Название, изменённое владельцем, сохраняется при перезапуске того же deployment.
@@ -254,7 +258,7 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ## Хранение
 
-Локальный development использует PGlite с PostgreSQL-совместимыми миграциями. Production использует тот же repository и миграции через обычный PostgreSQL `DATABASE_URL`. Текущая схема содержит сервер, каналы, публичные профили (включая `username` и `discriminator`), сообщения, упоминания (`message_mentions`) и метаданные вложений. Файлы лежат в `ATTACHMENTS_DIR` (`server/.data/attachments` локально, отдельный volume Docker или `/var/lib/opencord/attachments` при native-установке).
+Локальный development использует PGlite с PostgreSQL-совместимыми миграциями. Production использует тот же repository и миграции через обычный PostgreSQL `DATABASE_URL`. Текущая схема содержит сервер, каналы, публичные профили (включая `username` и `discriminator`), сообщения (включая nullable-ссылку ответа), упоминания (`message_mentions`) и метаданные вложений. Файлы лежат в `ATTACHMENTS_DIR` (`server/.data/attachments` локально, отдельный volume Docker или `/var/lib/opencord/attachments` при native-установке).
 
 ---
 
@@ -376,6 +380,8 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 `message.update` 仅允许消息作者使用。即使是所有者和管理员也无法编辑他人的文本或附件。该事件包含最终的 `attachmentIds`：服务器接受该消息现有的附件以及作者新上传且未被占用的文件，原子地替换关联并删除已分离的文件。更改后，服务器设置 `editedAt` 并广播 `message.updated`。`message.delete` 对作者开放，对于他人的消息，对具有 `MANAGE_MESSAGES` 权限的所有者和管理员开放；服务器广播 `message.deleted` 并删除关联的附件。
 
+`chat.send`、`chat.pm` 和 `chat.apm` 可以包含 `replyToMessageId`。只有当原消息位于同一频道且对发送者可见时，服务器才会接受该引用，从而避免通过回复泄露无权访问的私聊消息。存储和协议中只传输原消息 ID，紧凑引用由客户端从已加载消息中解析。数据库外键使用 `ON DELETE SET NULL`，删除原消息时会保留回复，且不会留下无效引用。
+
 `server.avatar.update` 仅对具有 `MANAGE_SERVER` 权限的所有者可用。保存后，服务器会立即向所有已连接的成员广播轻量的 `server.avatar.updated` 事件；客户端更新本地状态和图标，而无需重新连接或重新请求历史记录。头像也包含在初始的 `server.snapshot` 中，因此稍后连接的用户会收到当前图像。允许使用 PNG、JPEG 和 WebP，以最大 1.5 MB 的 data URL 形式提供。
 
 `server.settings.update` 仅对具有 `MANAGE_SERVER` 权限的所有者可用，并以原子方式更改服务器名称、附件限制、最大屏幕共享质量（480p、720p、1080p 或契约值为 1440 的「原始」）以及最大帧率（15、30 或 60 FPS）。「原始」模式保留原始分辨率，最高限制为 2560×1440，不会人为放大较小的帧。保存后，服务器会广播新的 `server.snapshot`，因此所有已连接客户端的设置都会更新，而无需重新连接。所有者更改的名称会在同一 deployment 重启时保留。
@@ -384,4 +390,4 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 ## 存储
 
-本地 development 使用 PGlite 和 PostgreSQL 兼容的迁移。Production 通过常规 PostgreSQL `DATABASE_URL` 使用相同的 repository 和迁移。当前模式包含服务器、频道、公开个人资料（包括 `username` 和 `discriminator`）、消息、消息提及（`message_mentions`）和附件元数据。文件位于 `ATTACHMENTS_DIR`（本地为 `server/.data/attachments`，独立的 Docker volume，或 native 安装时为 `/var/lib/opencord/attachments`）。
+本地 development 使用 PGlite 和 PostgreSQL 兼容的迁移。Production 通过常规 PostgreSQL `DATABASE_URL` 使用相同的 repository 和迁移。当前模式包含服务器、频道、公开个人资料（包括 `username` 和 `discriminator`）、消息（包括可为 null 的回复引用）、消息提及（`message_mentions`）和附件元数据。文件位于 `ATTACHMENTS_DIR`（本地为 `server/.data/attachments`，独立的 Docker volume，或 native 安装时为 `/var/lib/opencord/attachments`）。

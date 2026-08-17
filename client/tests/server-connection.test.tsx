@@ -194,7 +194,7 @@ describe("server connection", () => {
     act(() => first?.receive({ type: "voice.participant.disconnected", userId: "voice-member", channelId, reason: "moderated" }));
     expect(callbacks.onVoiceDisconnected).toHaveBeenCalledWith("voice-member", channelId, "moderated");
 
-    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [], mentions: [], kind: "chat" as const, targetUserId: null, anonymous: false };
+    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [], mentions: [], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null };
     act(() => {
       first?.receive({ type: "message.updated", message });
       first?.receive({ type: "message.deleted", messageId: channelId, channelId });
@@ -221,6 +221,34 @@ describe("server connection", () => {
     expect(callbacks.onServerDeleted).toHaveBeenCalledWith("5a07aa54-16ef-46ec-a193-9d72a624c253");
     await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
     expect(FakeWebSocket.instances).toHaveLength(1);
+    unmount();
+  });
+
+  it("toggles a message reaction and applies the server-side reactions update", async () => {
+    vi.useFakeTimers();
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMessageReactionsUpdated: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
+    const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
+    const socket = FakeWebSocket.instances[0];
+    const messageId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
+
+    // До подключения тоггл не отправляется.
+    expect(result.current.toggleReaction(messageId, "👍")).toBe(false);
+
+    await act(async () => {
+      socket?.receive({ type: "auth.challenge", requestId: "12515573-1ff0-4b9a-9bcf-2ad3fa14323d", protocolVersion: PROTOCOL_VERSION, challenge: "challenge", expiresAt: "2026-07-22T12:00:00.000Z" });
+      await Promise.resolve();
+    });
+    act(() => socket?.receive({ type: "auth.ok", requestId: "12515573-1ff0-4b9a-9bcf-2ad3fa14323d", userId: "user-id", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", sessionToken: "A".repeat(43), sessionExpiresAt: "2026-07-22T13:00:00.000Z" }));
+    expect(result.current.status).toBe("connected");
+
+    expect(result.current.toggleReaction(messageId, "👍")).toBe(true);
+    expect(JSON.parse(socket?.sent.at(-1) ?? "{}") as unknown).toMatchObject({ type: "message.react", messageId, emoji: "👍" });
+
+    const reactions = [{ emoji: "👍", userIds: ["user-id"] }];
+    act(() => socket?.receive({ type: "message.reactions.updated", messageId, channelId: messageId, reactions }));
+    expect(callbacks.onMessageReactionsUpdated).toHaveBeenCalledWith(messageId, messageId, reactions);
+
+    act(() => socket?.disconnect());
     unmount();
   });
 });

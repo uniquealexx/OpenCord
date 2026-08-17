@@ -82,9 +82,11 @@ export const mockMessageSchema = z.object({
   editedAt: z.string().datetime().nullable().optional(),
   attachments: z.array(attachmentSchema).max(5).optional(),
   mentions: z.array(z.string().min(1).max(200)).max(20).optional(),
+  reactions: z.array(z.object({ emoji: z.string().min(1).max(32), userIds: z.array(z.string().min(1).max(200)).max(100) })).max(64).optional(),
   kind: z.enum(["chat", "pm", "apm"]).optional(),
   targetUserId: z.string().min(1).max(200).nullable().optional(),
   anonymous: z.boolean().optional(),
+  replyToMessageId: z.string().min(1).nullable().optional(),
 }).superRefine((message, context) => {
   if (!message.content && !message.attachments?.length) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });

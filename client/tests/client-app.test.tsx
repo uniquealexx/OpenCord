@@ -3,10 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
-import { createDefaultState, type PersistedClientState } from "@/shared/state";
+import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 
 function readyState(): PersistedClientState {
@@ -131,11 +131,10 @@ describe("ClientApp", () => {
     const onDelete = vi.fn(() => true);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "До правки", createdAt: new Date().toISOString(), editedAt: null };
-    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
     expect(screen.getByText("Лина")).not.toHaveAttribute("style");
 
-    await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
-    await user.click(screen.getByRole("menuitem", { name: "Редактировать" }));
+    await user.click(screen.getByRole("button", { name: "Редактировать" }));
     const editor = screen.getByRole("textbox", { name: "Редактирование сообщения" });
     await user.clear(editor);
     await user.type(editor, "После правки{Enter}");
@@ -150,7 +149,7 @@ describe("ClientApp", () => {
   it("closes a message action menu outside its bounds and on Escape", async () => {
     const user = userEvent.setup();
     const message = { id: "message-menu", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Закрой меню", createdAt: new Date().toISOString(), editedAt: null };
-    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
     const trigger = screen.getByRole("button", { name: /Действия с сообщением/ });
 
     await user.click(trigger);
@@ -171,10 +170,9 @@ describe("ClientApp", () => {
     const newAttachment = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "новый.png", mimeType: "image/png", sizeBytes: 2048, sha256: "b".repeat(64) };
     const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Текст", createdAt: new Date().toISOString(), editedAt: null, attachments: [oldAttachment] };
     const onEdit = vi.fn(() => true);
-    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach uploading={false} onAttach={vi.fn(async () => newAttachment)} onEdit={onEdit} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach uploading={false} onAttach={vi.fn(async () => newAttachment)} onEdit={onEdit} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
-    await user.click(screen.getByRole("menuitem", { name: "Редактировать" }));
+    await user.click(screen.getByRole("button", { name: "Редактировать" }));
     expect(screen.queryByRole("button", { name: /Действия с сообщением/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Удалить" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Открепить старый.png" }));
@@ -314,7 +312,7 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const message = readyState().messages[0]!;
     const member = { id: message.authorId, displayName: message.authorName, bio: "Описание с сервера", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: message.authorColor, avatar: null };
-    render(<Message message={message} member={member} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} member={member} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
 
     const profileButtons = screen.getAllByRole("button", { name: `Открыть профиль ${message.authorName}` });
     expect(profileButtons).toHaveLength(2);
@@ -823,9 +821,11 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const member = { id: "user-mark", username: "mark", discriminator: "5678", fingerprint: "abcd-ef01-2345-6789", displayName: "Марк", bio: "Про упоминания", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
     const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-mark>!", createdAt: new Date().toISOString(), mentions: ["user-mark"] };
-    render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: "Упоминание: Марк" }));
+    const mention = screen.getByRole("button", { name: "Упоминание: Марк" });
+    expect(mention).toHaveClass("h-[18px]", "bg-blue-500/18", "text-[12px]");
+    await user.click(mention);
     expect(screen.getByRole("dialog", { name: "Профиль Марк" })).toBeInTheDocument();
     expect(screen.getByText("@mark#5678")).toBeInTheDocument();
     expect(screen.getByText("abcd-ef01-2345-6789")).toBeInTheDocument();
@@ -833,7 +833,7 @@ describe("ClientApp", () => {
 
   it("renders a mention of a left member with an unknown-user fallback", () => {
     const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-gone>!", createdAt: new Date().toISOString(), mentions: ["user-gone"] };
-    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
     expect(screen.getByText("@Неизвестный пользователь")).toBeInTheDocument();
   });
 
@@ -933,9 +933,158 @@ describe("ClientApp", () => {
 
   it("renders an anonymous private message with the anonymous badge", () => {
     const message = { id: "apm-message", channelId: "welcome", authorId: "anonymous-apm-message", authorName: "Аноним", authorColor: "#7c5cff", content: "Это секрет", createdAt: new Date().toISOString(), kind: "apm" as const, targetUserId: "local-user", anonymous: true };
-    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} />);
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
     expect(screen.getByText("Личное сообщение · анонимно")).toBeInTheDocument();
     expect(screen.getByText("Это секрет")).toBeInTheDocument();
+  });
+
+  it("merges consecutive private messages into one rounded amber stack", () => {
+    const base: MockMessage = { id: "private-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "Первое", createdAt: new Date().toISOString(), kind: "pm" };
+    const messages: MockMessage[] = [base, { ...base, id: "private-2", content: "Второе", kind: "apm", anonymous: true }];
+    expect(privateMessageStackPosition(messages, 0)).toBe("first");
+    expect(privateMessageStackPosition(messages, 1)).toBe("last");
+
+    const commonProps = { members: [], compact: false, grouped: false, ownAvatar: null, currentUserId: "local-user", canManageMessages: false, previewAvailable: false, canAttach: false, uploading: false, onAttach: vi.fn(async () => null), onEdit: vi.fn(), onDelete: vi.fn(), onDownload: vi.fn(), onPreview: vi.fn(), onToggleReaction: vi.fn() };
+    const { container, rerender } = render(<Message message={messages[0]!} {...commonProps} privateStackPosition="first" />);
+    expect(container.querySelector("article")).toHaveClass("rounded-b-none", "pb-1");
+    rerender(<Message message={messages[1]!} {...commonProps} privateStackPosition="last" />);
+    expect(container.querySelector("article")).toHaveClass("rounded-t-none", "pt-1");
+  });
+
+  it("renders reaction chips with a count and toggles on click", async () => {
+    const user = userEvent.setup();
+    const onToggleReaction = vi.fn();
+    const member = { id: "user-mark", displayName: "Марк", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" };
+    const message = { id: "reaction-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "С реакциями", createdAt: new Date().toISOString(), reactions: [{ emoji: "👍", userIds: ["user-mark"] }, { emoji: "🔥", userIds: ["user-gone"] }, { emoji: "❤️", userIds: ["local-user"] }] };
+    render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={onToggleReaction} canReact />);
+
+    // Чип с эмодзи и количеством; подсказка показывает, кто отреагировал.
+    const chip = screen.getByRole("button", { name: "Реакция 👍: 1 — Марк" });
+    expect(chip).toHaveAttribute("title", "Марк");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(within(chip).getByText("1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Реакция ❤️: 1 — Лина" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(chip);
+    expect(onToggleReaction).toHaveBeenCalledWith("reaction-message", "👍");
+
+    // Ушедший участник подменяется фолбэком «Неизвестный пользователь».
+    const unknownChip = screen.getByRole("button", { name: "Реакция 🔥: 1 — Неизвестный пользователь" });
+    expect(unknownChip).toHaveAttribute("title", "Неизвестный пользователь");
+    await user.click(unknownChip);
+    expect(onToggleReaction).toHaveBeenCalledWith("reaction-message", "🔥");
+  });
+
+  it("adds a reaction from the hover action bar instead of the reaction chips", async () => {
+    const user = userEvent.setup();
+    const onToggleReaction = vi.fn();
+    const message = { id: "reaction-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "С реакциями", createdAt: new Date().toISOString(), reactions: [{ emoji: "🔥", userIds: ["local-user"] }] };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={onToggleReaction} canReact />);
+
+    // Чипы под сообщением содержат только уже поставленные реакции, а добавление
+    // находится в общей панели действий сообщения.
+    const chip = screen.getByRole("button", { name: "Реакция 🔥: 1 — Лина" });
+    const trigger = screen.getByRole("button", { name: "Добавить реакцию" });
+    expect(chip.parentElement).not.toContainElement(trigger);
+    expect(trigger.closest('[role="toolbar"]')).toHaveAttribute("aria-label", "Действия с сообщением Лина");
+    await user.click(trigger);
+    const picker = screen.getByRole("dialog", { name: "Выберите реакцию" });
+    expect(picker).toBeInTheDocument();
+    const thumbsUp = within(picker).getByRole("button", { name: "Реакция 👍" });
+    await waitFor(() => expect(thumbsUp).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+    expect(within(picker).getByRole("button", { name: "Реакция ❤️" })).toHaveFocus();
+    await user.click(thumbsUp);
+    expect(onToggleReaction).toHaveBeenCalledWith("reaction-message", "👍");
+    // Палитра закрывается после выбора эмодзи.
+    expect(screen.queryByRole("dialog", { name: "Выберите реакцию" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the reaction picker anchored to the stable action bar after an update", async () => {
+    const user = userEvent.setup();
+    const onToggleReaction = vi.fn();
+    const baseMessage = { id: "moving-reaction-anchor", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Новая реакция", createdAt: new Date().toISOString() };
+    const commonProps = { members: [], compact: false, grouped: false, ownAvatar: null, currentUserId: "local-user", canManageMessages: false, previewAvailable: false, canAttach: false, uploading: false, onAttach: vi.fn(async () => null), onEdit: vi.fn(), onDelete: vi.fn(), onDownload: vi.fn(), onPreview: vi.fn(), onToggleReaction, canReact: true };
+    const { rerender } = render(<Message message={{ ...baseMessage, reactions: [] }} {...commonProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Добавить реакцию" }));
+    expect(screen.getByRole("dialog", { name: "Выберите реакцию" })).toBeInTheDocument();
+
+    rerender(<Message message={{ ...baseMessage, reactions: [{ emoji: "🔥", userIds: ["local-user"] }] }} {...commonProps} />);
+    expect(screen.getByRole("dialog", { name: "Выберите реакцию" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Добавить реакцию" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("offers the reference quick reactions in the message action bar", async () => {
+    const user = userEvent.setup();
+    const onToggleReaction = vi.fn();
+    const message = { id: "quick-reaction", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Быстрые реакции", createdAt: new Date().toISOString(), reactions: [] };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={onToggleReaction} canReact />);
+
+    const toolbar = screen.getByRole("toolbar", { name: "Действия с сообщением Лина" });
+    const quickReaction = within(toolbar).getByRole("button", { name: "Реакция ❤️" });
+    expect(within(toolbar).getByRole("button", { name: "Реакция 👍" })).toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: "Реакция 😭" })).toBeInTheDocument();
+    await user.click(quickReaction);
+    expect(onToggleReaction).toHaveBeenCalledWith("quick-reaction", "❤️");
+  });
+
+  it("separates reactions from the reply action and selects the message", async () => {
+    const user = userEvent.setup();
+    const onReply = vi.fn();
+    const message: MockMessage = { id: "reply-source", channelId: "welcome", authorId: "user-mark", authorName: "Марк", authorColor: "#4d6bfe", content: "Исходное сообщение", createdAt: new Date().toISOString() };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} onReply={onReply} canReact />);
+
+    const toolbar = screen.getByRole("toolbar", { name: "Действия с сообщением Марк" });
+    expect(toolbar.querySelector('span[aria-hidden="true"]')).toBeInTheDocument();
+    await user.click(within(toolbar).getByRole("button", { name: "Ответить" }));
+    expect(onReply).toHaveBeenCalledWith(message);
+  });
+
+  it("renders a compact reply reference and composer preview", async () => {
+    const user = userEvent.setup();
+    const onCancelReply = vi.fn();
+    const source: MockMessage = { id: "reply-source", channelId: "welcome", authorId: "user-mark", authorName: "Марк", authorColor: "#4d6bfe", content: "Исходное сообщение", createdAt: new Date().toISOString() };
+    const reply: MockMessage = { ...source, id: "reply-message", authorId: "local-user", authorName: "Лина", content: "Мой ответ", replyToMessageId: source.id };
+    const commonProps = { members: [], compact: false, grouped: false, ownAvatar: null, currentUserId: "local-user", canManageMessages: false, previewAvailable: false, canAttach: false, uploading: false, onAttach: vi.fn(async () => null), onEdit: vi.fn(), onDelete: vi.fn(), onDownload: vi.fn(), onPreview: vi.fn(), onToggleReaction: vi.fn() };
+    const { unmount } = render(<Message message={reply} replyToMessage={source} {...commonProps} />);
+    expect(screen.getByRole("button", { name: /Марк.*Исходное сообщение/u })).toBeInTheDocument();
+    unmount();
+
+    render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} replyingTo={source} onCancelReply={onCancelReply} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} />);
+    expect(screen.getByText("Ответ пользователю Марк")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Отменить ответ" }));
+    expect(onCancelReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps existing reaction chips disabled while disconnected", async () => {
+    const user = userEvent.setup();
+    const onToggleReaction = vi.fn();
+    const message = { id: "offline-reaction", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Офлайн", createdAt: new Date().toISOString(), reactions: [{ emoji: "👍", userIds: ["local-user"] }] };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={onToggleReaction} canReact={false} />);
+
+    const chip = screen.getByRole("button", { name: "Реакция 👍: 1 — Лина" });
+    expect(chip).toBeDisabled();
+    await user.click(chip);
+    expect(onToggleReaction).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Добавить реакцию" })).not.toBeInTheDocument();
+  });
+
+  it("shows reactions after the server broadcasts a reactions update", async () => {
+    const state = readyState();
+    state.servers[0]!.address = "http://127.0.0.1:3210";
+    const channelId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
+    state.servers[0]!.channels = state.servers[0]!.channels.map((channel) => ({ ...channel, id: channel.id === "welcome" ? channelId : channel.id }));
+    state.messages = state.messages.map((message) => ({ ...message, id: "c7a83bb4-4d14-4b4f-9e2f-1f6e0f2f4d4c", channelId }));
+    state.activeChannelId = channelId;
+    await renderConnectedClient(state);
+
+    act(() => {
+      for (const handler of FakeWebSocket.instances.at(-1)!.listeners.message ?? []) {
+        handler({ data: JSON.stringify({ type: "message.reactions.updated", messageId: "c7a83bb4-4d14-4b4f-9e2f-1f6e0f2f4d4c", channelId, reactions: [{ emoji: "🔥", userIds: ["local-user"] }] }) });
+      }
+    });
+    expect(await screen.findByRole("button", { name: "Реакция 🔥: 1 — Лина" })).toBeInTheDocument();
   });
 
   it("keeps the anonymous label on demo search results", async () => {

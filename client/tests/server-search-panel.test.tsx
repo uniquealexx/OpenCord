@@ -24,7 +24,7 @@ it("combines Discord-like search filters and opens a result", async () => {
   await user.click(screen.getByRole("button", { name: "Найти" }));
   expect(onSearch).toHaveBeenCalledWith({ query: "котик", authorId: member.id, channelId: channel.id, contentTypes: ["image"], offset: 0, limit: 25 });
 
-  const message = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Вот котик", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], kind: "chat" as const, targetUserId: null, anonymous: false };
+  const message = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Вот котик", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null };
   rerender(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={{ messages: [message], total: 1, offset: 0, hasMore: false }} loading={false} onClose={vi.fn()} onSearch={onSearch} onOpenMessage={onOpenMessage} {...panelProps} />);
   await user.click(screen.getByRole("button", { name: /Лина/u }));
   expect(onOpenMessage).toHaveBeenCalledWith(expect.objectContaining({ id: message.id, content: "Вот котик" }));
@@ -46,7 +46,7 @@ it("searches every attachment type without requiring text", async () => {
 
 it("renders mentions as readable tags instead of raw markers", () => {
   const mentioned = { ...member, id: "user-2", username: "mark", discriminator: "5678", displayName: "Марк" };
-  const message = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Привет <@user-2>!", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [{ userId: "user-2" }], kind: "chat" as const, targetUserId: null, anonymous: false };
+  const message = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Привет <@user-2>!", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [{ userId: "user-2" }], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null };
   render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[mentioned]} result={{ messages: [message], total: 1, offset: 0, hasMore: false }} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
 
   expect(screen.getByText("Привет @mark#5678!")).toBeInTheDocument();
@@ -54,7 +54,7 @@ it("renders mentions as readable tags instead of raw markers", () => {
 });
 
 it("renders a mention of a removed member as unknown user", () => {
-  const message = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Привет <@user-gone>!", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [{ userId: "user-gone" }], kind: "chat" as const, targetUserId: null, anonymous: false };
+  const message = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Привет <@user-gone>!", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [{ userId: "user-gone" }], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null };
   render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={{ messages: [message], total: 1, offset: 0, hasMore: false }} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
 
   expect(screen.getByText("Привет @Неизвестный пользователь!")).toBeInTheDocument();
@@ -63,7 +63,7 @@ it("renders a mention of a removed member as unknown user", () => {
 it("marks a video attachment with a clear video badge and preview placeholders", () => {
   const video = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "демо.mp4", mimeType: "video/mp4", sizeBytes: 1024, sha256: "a".repeat(64) };
   const photo = { id: "22959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "фото.png", mimeType: "image/png", sizeBytes: 512, sha256: "b".repeat(64) };
-  const message = { id: "33959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Медиа", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [video, photo], mentions: [], kind: "chat" as const, targetUserId: null, anonymous: false };
+  const message = { id: "33959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Медиа", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [video, photo], mentions: [], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null };
   render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={{ messages: [message], total: 1, offset: 0, hasMore: false }} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
 
   expect(screen.getByTitle("демо.mp4")).toHaveTextContent("Видео");
@@ -71,8 +71,8 @@ it("marks a video attachment with a clear video badge and preview placeholders",
 });
 
 it("renders localized labels for private and anonymous message results", () => {
-  const apm = { id: "42959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Секрет", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], kind: "apm" as const, targetUserId: "user-2", anonymous: true };
-  const pm = { id: "52959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Личное", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], kind: "pm" as const, targetUserId: "user-2", anonymous: false };
+  const apm = { id: "42959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Секрет", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], reactions: [], kind: "apm" as const, targetUserId: "user-2", anonymous: true, replyToMessageId: null };
+  const pm = { id: "52959e6f-7ea9-41d9-8be3-f412354d3e95", channelId: channel.id, authorId: member.id, authorName: member.displayName, authorAvatar: null, content: "Личное", createdAt: "2026-08-07T00:00:00.000Z", editedAt: null, attachments: [], mentions: [], reactions: [], kind: "pm" as const, targetUserId: "user-2", anonymous: false, replyToMessageId: null };
   render(<ServerSearchPanel open serverName="Тестовый сервер" channels={[channel]} members={[member]} result={{ messages: [apm, pm], total: 2, offset: 0, hasMore: false }} loading={false} onClose={vi.fn()} onSearch={vi.fn()} onOpenMessage={vi.fn()} {...panelProps} />);
 
   expect(screen.getByText("Личное сообщение · анонимно")).toBeInTheDocument();

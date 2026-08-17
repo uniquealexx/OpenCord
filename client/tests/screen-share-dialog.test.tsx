@@ -97,6 +97,16 @@ describe("ScreenShareDialog", () => {
     expect(onStart).toHaveBeenCalledWith({ width: 2_560, height: 1_080, frameRate: 60, maxBitrate: 10_700_000, includeAudio: true, contentHint: "motion" });
   });
 
+  it("shows an application icon when Windows cannot provide a minimized-window preview", async () => {
+    listSources.mockResolvedValueOnce([{ id: "window:2:0", name: "Minimized app", kind: "window", width: 480, height: 270, thumbnail: "data:image/png;base64,AA==", appIcon: null, previewUnavailable: true } as never]);
+
+    render(<ScreenShareDialog open onOpenChange={vi.fn()} onStart={vi.fn(async () => undefined)} />);
+
+    const source = await screen.findByRole("button", { name: "Minimized app" });
+    expect(source.querySelector("img")).toBeNull();
+    expect(source.querySelector("svg")).not.toBeNull();
+  });
+
   it("hides quality and FPS options above the server limits", async () => {
     const user = userEvent.setup();
     const onStart = vi.fn(async () => undefined);
