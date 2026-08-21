@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type PublicProfile, type ServerEvent, type ServerSettings, type VoicePresence } from "@opencord/shared";
+import { PROTOCOL_VERSION, clientEventSchema, publicProfileSchema, serverAvatarSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, type BanDurationMinutes, type Channel, type ChatMessage, type ClientEvent, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type PublicProfile, type ServerEvent, type ServerSettings, type VoicePresence } from "@opencord/shared";
 import type { LocalProfile, MockServer } from "@/shared/state";
 import { currentDictionary } from "@/lib/i18n";
 
@@ -21,6 +21,7 @@ interface ConnectionCallbacks {
   onSearchResult?(requestId: string, result: MessageSearchResult): void;
   onMember(member: Member): void;
   onMemberRemoved(userId: string): void;
+  onProfileAnonymized?(userId: string): void;
   onServerDeleted(serverId: string): void;
   onVoiceAuthorization?(authorization: Extract<ServerEvent, { type: "voice.join.authorized" }>): void;
   onVoicePresence?(participant: VoicePresence, connected: boolean): void;
@@ -31,7 +32,7 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[], replyToMessageId?: string | null): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string, replyToMessageId?: string | null): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; toggleReaction(messageId: string, emoji: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerBanner(banner: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[], replyToMessageId?: string | null): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string, replyToMessageId?: string | null): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; toggleReaction(messageId: string, emoji: string): boolean; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerBanner(banner: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; kickMember(userId: string): boolean; banMember(userId: string, durationMinutes: BanDurationMinutes): boolean; unbanMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus }>({ key: null, status: "connecting" });
@@ -160,6 +161,8 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           callbacksRef.current.onMember(event.member);
         } else if (event.type === "member.removed") {
           callbacksRef.current.onMemberRemoved(event.userId);
+        } else if (event.type === "profile.anonymized") {
+          callbacksRef.current.onProfileAnonymized?.(event.userId);
         } else if (event.type === "voice.join.authorized") {
           callbacksRef.current.onVoiceAuthorization?.(event);
         } else if (event.type === "voice.participant.joined") {
@@ -176,8 +179,8 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           callbacksRef.current.onServerDeleted(event.serverId);
           socket.close(1000, "Server deleted");
         } else if (event.type === "error") {
-          if (event.code === "AUTH_FAILED" || event.code === "PROTOCOL_MISMATCH") {
-            fatal = event.code === "AUTH_FAILED";
+          if (event.code === "AUTH_FAILED" || event.code === "BANNED" || event.code === "PROTOCOL_MISMATCH") {
+            fatal = event.code === "AUTH_FAILED" || event.code === "BANNED";
             waitingForServerUpdate = event.code === "PROTOCOL_MISMATCH";
             setConnectionState({ key: connectionKey, status: event.code === "PROTOCOL_MISMATCH" ? "server-outdated" : "error" });
             socket.close(1000, "Authentication rejected");
@@ -190,7 +193,11 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
         if (!failureReported) callbacksRef.current.onError(currentDictionary().connectionErrors.reconnectFailed);
         failureReported = true;
       });
-      socket.addEventListener("close", () => {
+      socket.addEventListener("close", (event) => {
+        if (event.code === 4004) {
+          fatal = true;
+          setConnectionState({ key: connectionKey, status: "error" });
+        }
         if (socketRef.current === socket) socketRef.current = null;
         setSessionState((current) => current?.key === connectionKey ? null : current);
         scheduleReconnect();
@@ -321,6 +328,20 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
+  const banMember = useCallback((userId: string, durationMinutes: BanDurationMinutes): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "member.ban", requestId: crypto.randomUUID(), userId, durationMinutes });
+    return true;
+  }, [status]);
+
+  const unbanMember = useCallback((userId: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    sendEvent(socket, { type: "member.unban", requestId: crypto.randomUUID(), userId });
+    return true;
+  }, [status]);
+
   const updateServerSettings = useCallback((settings: ServerSettings): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
@@ -370,7 +391,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return true;
   }, [status]);
 
-  return { status, sessionToken, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, toggleReaction, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerBanner, updateServerSettings, setMemberRole, kickMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
+  return { status, sessionToken, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, toggleReaction, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, deleteChannel, updateServerAvatar, updateServerBanner, updateServerSettings, setMemberRole, kickMember, banMember, unbanMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {
@@ -388,7 +409,7 @@ async function authenticate(socket: WebSocket, requestId: string, challenge: str
     signature,
     // Дискриминатор берётся из идентичности (генерируется вместе с ключами),
     // username — из локального профиля (редактируется в диалоге профиля).
-    profile: { username: profile.username, discriminator: publicIdentity.discriminator, displayName: profile.displayName, bio: profile.bio, avatar: parsedAvatar.success ? parsedAvatar.data : null, banner: parsedBanner.success ? parsedBanner.data : null, status: profile.status ?? "online" },
+    profile: { username: profile.username, discriminator: publicIdentity.discriminator, displayName: profile.displayName, bio: profile.bio, avatar: parsedAvatar.success ? parsedAvatar.data : null, banner: parsedBanner.success ? parsedBanner.data : null, status: profile.status ?? "online", customStatus: profile.customStatus ?? "", customStatusColor: profile.customStatusColor ?? "#4d6bfe" },
   });
 }
 

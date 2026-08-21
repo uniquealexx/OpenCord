@@ -16,6 +16,8 @@ export interface MentionCandidate {
   banner?: string | null;
   color?: string;
   status?: "online" | "idle" | "dnd" | "offline";
+  customStatus?: string;
+  customStatusColor?: string;
   role?: string;
   bio?: string;
   fingerprint?: string;

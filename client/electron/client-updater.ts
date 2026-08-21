@@ -119,7 +119,7 @@ export class ClientUpdateManager {
   }
 
   install(): void {
-    if (this.state.status !== "downloaded") throw new Error("Обновление клиента ещё не загружено");
+    if (this.state.status !== "downloaded") throw new Error("The client update has not been downloaded yet");
     this.updater.quitAndInstall(true, true);
   }
 
@@ -142,9 +142,9 @@ export class ClientUpdateManager {
       this.updater.allowPrerelease = candidate.releaseChannel === "beta";
       this.updater.allowDowngrade = false;
       const result = await this.updater.checkForUpdates();
-      if (!result || result.updateInfo.version !== candidate.version) throw new Error("electron-updater вернул версию, не совпадающую с проверенным release manifest");
+      if (!result || result.updateInfo.version !== candidate.version) throw new Error("electron-updater returned a version that does not match the verified release manifest");
       const windowsClient = candidate.artifacts.windowsClient;
-      if (!windowsClient) throw new Error("Release manifest не содержит Windows-клиент");
+      if (!windowsClient) throw new Error("The release manifest does not include a Windows client");
       this.candidate = candidate;
       return this.setState({ status: "available", currentVersion: this.currentVersion, channel, version: candidate.version, releaseUrl: candidate.releaseUrl!, sizeBytes: windowsClient.installer.sizeBytes });
     } catch (error) {
@@ -166,14 +166,14 @@ export class ClientUpdateManager {
       }
       const version = result.updateInfo.version;
       if (!semverPattern.test(version) || compareSemver(version, this.currentVersion) <= 0) {
-        throw new Error("electron-updater вернул версию, не новее или некорректную");
+        throw new Error("electron-updater returned an invalid version or one that is not newer");
       }
       const file = result.updateInfo.files?.[0];
-      if (!file?.url) throw new Error("Update metadata не содержит файл обновления");
+      if (!file?.url) throw new Error("Update metadata does not include an update file");
       const fileName = updateFileName(file.url);
       const expectedUrl = `${repositoryUrl}/releases/download/v${encodeURIComponent(version)}/${encodeURIComponent(fileName)}`;
-      if (file.url !== expectedUrl) throw new Error("Update metadata содержит недоверенный URL файла обновления");
-      if (!Number.isInteger(file.size) || file.size! <= 0) throw new Error("Update metadata не содержит размер файла обновления");
+      if (file.url !== expectedUrl) throw new Error("Update metadata contains an untrusted update file URL");
+      if (!Number.isInteger(file.size) || file.size! <= 0) throw new Error("Update metadata does not include the update file size");
       this.directCandidate = { version, fileName, sizeBytes: file.size!, sha512: file.sha512 ?? null };
       return this.setState({
         status: "available",
@@ -192,15 +192,15 @@ export class ClientUpdateManager {
   private async performDirectDownload(): Promise<ClientUpdateState> {
     const channel = releaseChannelForVersion(this.currentVersion);
     const candidate = this.directCandidate;
-    if (!candidate || this.state.status !== "available") throw new Error("Сначала проверьте наличие обновления");
+    if (!candidate || this.state.status !== "available") throw new Error("Check for an available update first");
     this.setState({ status: "downloading", currentVersion: this.currentVersion, channel, version: candidate.version, percent: 0 });
     try {
       const downloadedPaths = await this.updater.downloadUpdate();
       const filePath = downloadedPaths.find((downloaded) => path.basename(downloaded) === candidate.fileName);
-      if (!filePath) throw new Error("electron-updater не вернул ожидаемый файл обновления");
+      if (!filePath) throw new Error("electron-updater did not return the expected update file");
       const file = await stat(filePath);
-      if (!file.isFile() || file.size !== candidate.sizeBytes) throw new Error("Размер загруженного обновления не совпадает с update metadata");
-      if (candidate.sha512 && await sha512File(filePath) !== candidate.sha512) throw new Error("SHA-512 загруженного обновления не совпадает с update metadata");
+      if (!file.isFile() || file.size !== candidate.sizeBytes) throw new Error("The downloaded update size does not match the update metadata");
+      if (candidate.sha512 && await sha512File(filePath) !== candidate.sha512) throw new Error("The downloaded update SHA-512 does not match the update metadata");
       return this.setState({ status: "downloaded", currentVersion: this.currentVersion, channel, version: candidate.version });
     } catch (error) {
       return this.setState({ status: "error", currentVersion: this.currentVersion, channel, message: errorMessage(error) });
@@ -211,17 +211,17 @@ export class ClientUpdateManager {
     const channel = releaseChannelForVersion(this.currentVersion);
     if (this.flavor !== "windows") return this.performDirectDownload();
     const candidate = this.candidate;
-    if (!candidate || this.state.status !== "available") throw new Error("Сначала проверьте наличие обновления");
+    if (!candidate || this.state.status !== "available") throw new Error("Check for an available update first");
     const windowsClient = candidate.artifacts.windowsClient;
-    if (!windowsClient) throw new Error("Release manifest не содержит Windows-клиент");
+    if (!windowsClient) throw new Error("The release manifest does not include a Windows client");
     this.setState({ status: "downloading", currentVersion: this.currentVersion, channel, version: candidate.version, percent: 0 });
     try {
       const downloadedPaths = await this.updater.downloadUpdate();
       const installerPath = downloadedPaths.find((filePath) => path.basename(filePath) === windowsClient.installer.fileName);
-      if (!installerPath) throw new Error("electron-updater не вернул ожидаемый NSIS installer");
+      if (!installerPath) throw new Error("electron-updater did not return the expected NSIS installer");
       const installer = await stat(installerPath);
-      if (!installer.isFile() || installer.size !== windowsClient.installer.sizeBytes || installer.size > maximumInstallerBytes) throw new Error("Размер загруженного installer не совпадает с release manifest");
-      if (await sha256File(installerPath) !== windowsClient.installer.sha256) throw new Error("SHA-256 загруженного installer не совпадает с release manifest");
+      if (!installer.isFile() || installer.size !== windowsClient.installer.sizeBytes || installer.size > maximumInstallerBytes) throw new Error("The downloaded installer size does not match the release manifest");
+      if (await sha256File(installerPath) !== windowsClient.installer.sha256) throw new Error("The downloaded installer SHA-256 does not match the release manifest");
       return this.setState({ status: "downloaded", currentVersion: this.currentVersion, channel, version: candidate.version });
     } catch (error) {
       return this.setState({ status: "error", currentVersion: this.currentVersion, channel, message: errorMessage(error) });
@@ -239,7 +239,7 @@ export async function resolveClientRelease(fetcher: Fetcher, currentVersion: str
   parseSemver(currentVersion);
   const releasesResponse = await fetchTrusted(fetcher, releasesApiUrl, 30_000);
   const releases = JSON.parse((await readResponseBytes(releasesResponse, maximumManifestBytes)).toString("utf8"));
-  if (!Array.isArray(releases)) throw new Error("GitHub Releases вернул некорректный список релизов");
+  if (!Array.isArray(releases)) throw new Error("GitHub Releases returned an invalid release list");
 
   const candidates = releases.flatMap((release): Array<{ version: string; manifestUrl: string }> => {
     if (!isObject(release) || release.draft !== false || typeof release.tag_name !== "string" || !Array.isArray(release.assets)) return [];
@@ -263,57 +263,57 @@ export async function resolveClientRelease(fetcher: Fetcher, currentVersion: str
 }
 
 function validateClientManifest(manifest: ReleaseManifest, expectedVersion: string, currentChannel: "beta" | "stable"): void {
-  if (manifest.version !== expectedVersion || manifest.releaseChannel === "development") throw new Error("Release manifest не совпадает с выбранным GitHub Release");
-  if (currentChannel === "stable" && manifest.releaseChannel !== "stable") throw new Error("Stable-клиент не принимает prerelease-обновления");
-  if (manifest.releaseUrl !== `${repositoryUrl}/releases/tag/v${encodeURIComponent(manifest.version)}`) throw new Error("Release manifest содержит недоверенный URL релиза");
+  if (manifest.version !== expectedVersion || manifest.releaseChannel === "development") throw new Error("The release manifest does not match the selected GitHub Release");
+  if (currentChannel === "stable" && manifest.releaseChannel !== "stable") throw new Error("The stable client does not accept prerelease updates");
+  if (manifest.releaseUrl !== `${repositoryUrl}/releases/tag/v${encodeURIComponent(manifest.version)}`) throw new Error("The release manifest contains an untrusted release URL");
   const client = manifest.artifacts.windowsClient;
-  if (!client || client.target.os !== "windows" || client.target.arch !== "x64") throw new Error("Release manifest не содержит Windows x64 клиента");
+  if (!client || client.target.os !== "windows" || client.target.arch !== "x64") throw new Error("The release manifest does not include a Windows x64 client");
   for (const artifact of [client.installer, client.updateMetadata, ...(client.blockmap ? [client.blockmap] : [])]) {
-    if (!artifact.downloadUrl) throw new Error("Windows-артефакт не содержит URL загрузки");
+    if (!artifact.downloadUrl) throw new Error("The Windows artifact does not include a download URL");
     const expectedUrl = `${repositoryUrl}/releases/download/v${encodeURIComponent(manifest.version)}/${encodeURIComponent(artifact.fileName)}`;
-    if (artifact.downloadUrl !== expectedUrl) throw new Error("Release manifest содержит недоверенный URL Windows-артефакта");
+    if (artifact.downloadUrl !== expectedUrl) throw new Error("The release manifest contains an untrusted Windows artifact URL");
   }
-  if (client.installer.sizeBytes > maximumInstallerBytes) throw new Error("NSIS installer превышает допустимый размер 2 ГБ");
+  if (client.installer.sizeBytes > maximumInstallerBytes) throw new Error("The NSIS installer exceeds the 2 GB size limit");
 }
 
 async function validateUpdateMetadata(fetcher: Fetcher, manifest: ReleaseManifest): Promise<void> {
   const metadata = manifest.artifacts.windowsClient?.updateMetadata;
-  if (!metadata?.downloadUrl) throw new Error("Release manifest не содержит update metadata");
+  if (!metadata?.downloadUrl) throw new Error("The release manifest does not include update metadata");
   const response = await fetchTrusted(fetcher, metadata.downloadUrl, 30_000);
   const bytes = await readResponseBytes(response, Math.min(maximumMetadataBytes, metadata.sizeBytes));
-  if (bytes.length !== metadata.sizeBytes || sha256Bytes(bytes) !== metadata.sha256) throw new Error("Update metadata повреждён или подменён");
+  if (bytes.length !== metadata.sizeBytes || sha256Bytes(bytes) !== metadata.sha256) throw new Error("Update metadata is corrupted or has been tampered with");
   const text = bytes.toString("utf8");
-  if (!text.includes(`version: ${manifest.version}`) || !text.includes(manifest.artifacts.windowsClient!.installer.fileName)) throw new Error("Update metadata не соответствует release manifest");
+  if (!text.includes(`version: ${manifest.version}`) || !text.includes(manifest.artifacts.windowsClient!.installer.fileName)) throw new Error("Update metadata does not match the release manifest");
 }
 
 async function fetchTrusted(fetcher: Fetcher, initialUrl: string, timeoutMs: number): Promise<Response> {
   let currentUrl = initialUrl;
   for (let redirects = 0; redirects <= 5; redirects += 1) {
     const parsed = new URL(currentUrl);
-    if (parsed.protocol !== "https:" || !trustedHosts.has(parsed.hostname)) throw new Error("Обновления разрешено загружать только с доверенных HTTPS-хостов GitHub");
+    if (parsed.protocol !== "https:" || !trustedHosts.has(parsed.hostname)) throw new Error("Updates may only be downloaded from trusted GitHub HTTPS hosts");
     const response = await fetcher(currentUrl, { redirect: "manual", signal: AbortSignal.timeout(timeoutMs), headers: { Accept: "application/vnd.github+json", "User-Agent": "OpenCord-Updater/1" } });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
-      if (!location || redirects === 5) throw new Error("GitHub вернул некорректную цепочку перенаправлений");
+      if (!location || redirects === 5) throw new Error("GitHub returned an invalid redirect chain");
       currentUrl = new URL(location, currentUrl).toString();
       continue;
     }
-    if (!response.ok) throw new Error(`GitHub Releases недоступен: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`GitHub Releases is unavailable: HTTP ${response.status}`);
     return response;
   }
-  throw new Error("Слишком много перенаправлений GitHub Releases");
+  throw new Error("Too many GitHub Releases redirects");
 }
 
 async function readResponseBytes(response: Response, maximumBytes: number): Promise<Buffer> {
-  if (!response.body) throw new Error("GitHub вернул пустой ответ");
+  if (!response.body) throw new Error("GitHub returned an empty response");
   const advertised = Number(response.headers.get("content-length"));
-  if (Number.isFinite(advertised) && advertised > maximumBytes) throw new Error("Ответ GitHub превышает допустимый размер");
+  if (Number.isFinite(advertised) && advertised > maximumBytes) throw new Error("The GitHub response exceeds the allowed size");
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const value of response.body) {
     const chunk = Buffer.from(value);
     size += chunk.length;
-    if (size > maximumBytes) throw new Error("Ответ GitHub превышает допустимый размер");
+    if (size > maximumBytes) throw new Error("The GitHub response exceeds the allowed size");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks, size);
@@ -345,7 +345,7 @@ function compareSemver(leftValue: string, rightValue: string): number {
 
 function parseSemver(value: string): { core: [bigint, bigint, bigint]; prerelease: string[] } {
   const match = semverPattern.exec(value);
-  if (!match) throw new Error(`Некорректная SemVer-версия: ${value}`);
+  if (!match) throw new Error(`Invalid SemVer version: ${value}`);
   return { core: [BigInt(match[1]!), BigInt(match[2]!), BigInt(match[3]!)], prerelease: match[4]?.split(".") ?? [] };
 }
 
@@ -354,12 +354,12 @@ function sha256File(filePath: string): Promise<string> { return new Promise((res
 function sha512File(filePath: string): Promise<string> { return new Promise((resolve, reject) => { const hash = createHash("sha512"); const stream = createReadStream(filePath); stream.on("data", (chunk) => hash.update(chunk)); stream.once("error", reject); stream.once("end", () => resolve(hash.digest("hex"))); }); }
 function updateFileName(url: string): string {
   const fileName = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? "");
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(fileName)) throw new Error("Update metadata содержит некорректное имя файла обновления");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(fileName)) throw new Error("Update metadata contains an invalid update file name");
   return fileName;
 }
 function disabledReason(flavor: ClientUpdateFlavor): string {
-  if (flavor === "deb") return "В deb-сборке автоматическое обновление не поддерживается — установите новую версию из GitHub Releases";
-  return "Обновления доступны только в установленной сборке OpenCord";
+  if (flavor === "deb") return "Automatic updates are not supported in the deb build. Install the new version from GitHub Releases.";
+  return "Updates are only available in an installed OpenCord build";
 }
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

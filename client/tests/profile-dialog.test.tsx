@@ -41,6 +41,36 @@ describe("ProfileDialog status", () => {
     expect(screen.getByText("Для остальных участников вы будете отображаться не в сети.")).toBeInTheDocument();
   });
 
+  it("saves a length-limited custom status and selected color", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    const input = screen.getByRole("textbox", { name: "Свой статус" });
+    await user.type(input, "Работаю над релизом");
+    expect(input).toHaveAttribute("maxlength", "32");
+    expect(document.querySelector('input[type="color"]')).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Цвет своего статуса" }));
+    await user.click(screen.getByRole("button", { name: "#34d399" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ customStatus: "Работаю над релизом", customStatusColor: "#34d399" }));
+  });
+
+  it("accepts an arbitrary valid HEX color in the glass palette", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("button", { name: "Цвет своего статуса" }));
+    const hex = screen.getByRole("textbox", { name: "Цвет своего статуса HEX" });
+    await user.clear(hex);
+    await user.type(hex, "#123abc");
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ customStatusColor: "#123abc" }));
+  });
+
   it("opens the crop editor before saving a selected profile banner", async () => {
     const user = userEvent.setup();
     const close = vi.fn();

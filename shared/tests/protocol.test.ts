@@ -32,6 +32,10 @@ describe("OpenCord protocol", () => {
     expect(clientEventSchema.parse({ type: "channel.delete", requestId: crypto.randomUUID(), channelId })).toMatchObject({ type: "channel.delete", channelId });
     expect(clientEventSchema.parse({ type: "member.role.set", requestId: crypto.randomUUID(), userId: "member-1", role: "administrator" })).toMatchObject({ role: "administrator" });
     expect(clientEventSchema.parse({ type: "member.kick", requestId: crypto.randomUUID(), userId: "member-1" })).toMatchObject({ type: "member.kick", userId: "member-1" });
+    expect(clientEventSchema.parse({ type: "member.ban", requestId: crypto.randomUUID(), userId: "member-1", durationMinutes: 30 })).toMatchObject({ type: "member.ban", userId: "member-1", durationMinutes: 30 });
+    expect(clientEventSchema.parse({ type: "member.ban", requestId: crypto.randomUUID(), userId: "member-1", durationMinutes: null })).toMatchObject({ durationMinutes: null });
+    expect(() => clientEventSchema.parse({ type: "member.ban", requestId: crypto.randomUUID(), userId: "member-1", durationMinutes: 15 })).toThrow();
+    expect(clientEventSchema.parse({ type: "member.unban", requestId: crypto.randomUUID(), userId: "member-1" })).toMatchObject({ type: "member.unban", userId: "member-1" });
     expect(() => clientEventSchema.parse({ type: "member.role.set", requestId: crypto.randomUUID(), userId: "member-1", role: "owner" })).toThrow();
     expect(clientEventSchema.parse({ type: "server.delete", requestId: crypto.randomUUID() })).toMatchObject({ type: "server.delete" });
     expect(serverEventSchema.parse({ type: "server.deleted", serverId: crypto.randomUUID() })).toMatchObject({ type: "server.deleted" });
@@ -40,6 +44,7 @@ describe("OpenCord protocol", () => {
     expect(clientEventSchema.parse({ type: "profile.update", requestId: crypto.randomUUID(), profile: { username: "lina", discriminator: "1234", displayName: "Лина", avatar: "data:image/webp;base64,AA==" } })).toMatchObject({ type: "profile.update" });
     expect(clientEventSchema.parse({ type: "server.leave", requestId: crypto.randomUUID() })).toMatchObject({ type: "server.leave" });
     expect(serverEventSchema.parse({ type: "member.removed", userId: "member-1" })).toEqual({ type: "member.removed", userId: "member-1" });
+    expect(serverEventSchema.parse({ type: "profile.anonymized", userId: "member-1" })).toEqual({ type: "profile.anonymized", userId: "member-1" });
   });
 
   it("validates voice mute and deafen state synchronization", () => {
@@ -139,6 +144,15 @@ describe("OpenCord protocol", () => {
     expect(() => publicProfileSchema.parse({ ...base, displayName: "Лина", avatar: null, status: "offline" })).toThrow();
     expect(() => publicProfileSchema.parse({ ...base, displayName: "Лина", bio: "x".repeat(161), avatar: null })).toThrow();
     expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", displayName: "Лина", bio: "Пишу открытый код", avatar: null, banner: "data:image/webp;base64,AA==", status: "dnd", role: "member" } })).toMatchObject({ member: { status: "dnd", bio: "Пишу открытый код", banner: "data:image/webp;base64,AA==" } });
+  });
+
+  it("validates custom status text, color and server description", () => {
+    const base = { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null } as const;
+    expect(publicProfileSchema.parse({ ...base, customStatus: "В работе", customStatusColor: "#34d399" })).toMatchObject({ customStatus: "В работе", customStatusColor: "#34d399" });
+    expect(() => publicProfileSchema.parse({ ...base, customStatus: "x".repeat(33), customStatusColor: "#34d399" })).toThrow();
+    expect(() => publicProfileSchema.parse({ ...base, customStatusColor: "green" })).toThrow();
+    expect(clientEventSchema.parse({ type: "server.settings.update", requestId: crypto.randomUUID(), name: "OpenCord", description: "Сервер сообщества", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 })).toMatchObject({ description: "Сервер сообщества" });
+    expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId: crypto.randomUUID(), name: "OpenCord", description: "x".repeat(161), maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 })).toThrow();
   });
 
   it("normalizes usernames and requires a four-digit discriminator", () => {

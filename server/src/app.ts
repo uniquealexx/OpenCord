@@ -40,6 +40,7 @@ export interface BuildAppOptions {
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   await runMigrations(options.database);
   const repository = new ChatRepository(options.database);
+  await repository.performRetentionCleanup();
   const attachmentStorage = options.attachmentStorage ?? new FileSystemAttachmentStorage(options.attachmentsDir ?? path.resolve(".data", "attachments"));
   const voice = options.voiceService ?? new DisabledVoiceService();
   if (options.serverName && options.deploymentId) await repository.configureServer(options.serverName, options.deploymentId);
@@ -48,6 +49,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 2_100_000 });
   const voiceReconcileTimer = setInterval(() => { void reconcileVoicePresence(); }, 30_000);
   voiceReconcileTimer.unref();
+  const retentionCleanupTimer = setInterval(() => {
+    void runRetentionCleanup().catch((error: unknown) => app.log.error(error));
+  }, 15 * 60_000);
+  retentionCleanupTimer.unref();
 
   await app.register(cors, { origin: false });
   await app.register(websocket, { options: { maxPayload: 2_100_000 } });
@@ -136,6 +141,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   app.addHook("onClose", async () => {
     clearInterval(voiceReconcileTimer);
+    clearInterval(retentionCleanupTimer);
     for (const connection of connections) connection.socket.close(1001, "Server shutdown");
     connections.clear();
     sessions.clear();
@@ -180,11 +186,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "history.request") {
+      await runRetentionCleanup();
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       const messages = await repository.getHistory(event.channelId, event.limit, connection.userId);
       return send(connection.socket, { type: "history.result", requestId: event.requestId, channelId: event.channelId, messages });
     }
     if (event.type === "message.search") {
+      await runRetentionCleanup();
       const result = await repository.searchMessages(event.filters);
       return send(connection.socket, { type: "message.search.result", requestId: event.requestId, result });
     }
@@ -308,7 +316,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя исключить этого участника");
       const voicePresence = await voice.disconnect(event.userId, "moderated");
       if (voicePresence) broadcast({ type: "voice.participant.disconnected", userId: voicePresence.userId, channelId: voicePresence.channelId, reason: "moderated" });
-      const removedRole = await repository.leaveServer(event.userId);
+      const removedRole = await repository.leaveServer(event.userId, "kick");
       if (!removedRole || removedRole === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось исключить участника");
       broadcast({ type: "member.removed", userId: event.userId });
       for (const targetConnection of connections) {
@@ -320,9 +328,36 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       }
       return;
     }
+    if (event.type === "member.ban") {
+      if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для блокировки участников");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя заблокировать самого себя");
+      let targetRole: import("@opencord/shared").MemberRole;
+      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      const actorRole = await repository.getMemberRole(connection.userId);
+      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя заблокировать этого участника");
+      const voicePresence = await voice.disconnect(event.userId, "moderated");
+      if (voicePresence) broadcast({ type: "voice.participant.disconnected", userId: voicePresence.userId, channelId: voicePresence.channelId, reason: "moderated" });
+      if (!(await repository.banMember(event.userId, connection.userId, event.durationMinutes))) return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось заблокировать участника");
+      broadcast({ type: "member.removed", userId: event.userId });
+      for (const targetConnection of connections) {
+        if (targetConnection.userId !== event.userId) continue;
+        if (targetConnection.sessionToken) sessions.delete(targetConnection.sessionToken);
+        targetConnection.userId = null;
+        targetConnection.sessionToken = null;
+        targetConnection.socket.close(4004, "Banned from server");
+      }
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "member.unban") {
+      if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для разблокировки участников");
+      if (!(await repository.unbanMember(event.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Заблокированный участник не найден");
+      await broadcastSnapshots();
+      return;
+    }
     if (event.type === "server.settings.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения настроек сервера");
-      await repository.updateServerSettings({ name: event.name, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate });
+      await repository.updateServerSettings({ name: event.name, description: event.description, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate });
       await broadcastSnapshots();
       return;
     }
@@ -397,6 +432,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return sendError(connection.socket, event.requestId, "AUTH_FAILED", "Не удалось подтвердить владение ключом");
     }
     const userId = userIdFromPublicKey(event.publicKey);
+    await runRetentionCleanup();
+    if (await repository.isBanned(userId)) {
+      sendError(connection.socket, event.requestId, "BANNED", "Ваша идентичность заблокирована на этом сервере");
+      connection.socket.close(4004, "Banned from server");
+      return;
+    }
     if (await repository.isServerDeleted()) {
       const server = await repository.getServer();
       send(connection.socket, { type: "server.deleted", serverId: server.id });
@@ -426,14 +467,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!connection.userId || connection.socket.readyState !== connection.socket.OPEN) return;
     const server = await repository.getServer();
     const role = await repository.getMemberRole(connection.userId);
+    const permissions = permissionsForRole(role);
     send(connection.socket, {
       type: "server.snapshot",
-      server: { ...server, members: await repository.listMembers(publicUserStatuses()), currentUser: { id: connection.userId, role, permissions: permissionsForRole(role) }, voice: await voice.capability(), voiceParticipants: voice.presence() },
+      server: { ...server, members: await repository.listMembers(publicUserStatuses()), bannedMembers: permissions.includes("KICK_MEMBERS") ? await repository.listBannedMembers() : [], currentUser: { id: connection.userId, role, permissions }, voice: await voice.capability(), voiceParticipants: voice.presence() },
     });
   }
 
   async function broadcastSnapshots(): Promise<void> {
     await Promise.all([...connections].map((connection) => sendSnapshot(connection)));
+  }
+
+  async function runRetentionCleanup(): Promise<void> {
+    const result = await repository.performRetentionCleanup();
+    result.anonymizedUserIds.forEach((userId) => broadcast({ type: "profile.anonymized", userId }));
+    if (result.expiredBanUserIds.length) await broadcastSnapshots();
   }
 
   async function reconcileVoicePresence(): Promise<void> {

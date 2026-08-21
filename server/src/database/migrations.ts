@@ -309,6 +309,57 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS messages_reply_to_idx ON messages(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL;
     `,
   },
+  {
+    id: "021_server_bans",
+    sql: `
+      CREATE TABLE IF NOT EXISTS server_bans (
+        server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        banned_by text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        banned_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (server_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS server_bans_created_idx ON server_bans(server_id, banned_at DESC);
+    `,
+  },
+  {
+    id: "022_departed_profile_retention_and_timed_bans",
+    sql: `
+      ALTER TABLE server_bans ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+      CREATE INDEX IF NOT EXISTS server_bans_expiry_idx ON server_bans(server_id, expires_at) WHERE expires_at IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS server_departures (
+        server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reason text NOT NULL CHECK (reason IN ('leave', 'kick', 'ban')),
+        departed_at timestamptz NOT NULL DEFAULT now(),
+        anonymize_after timestamptz NOT NULL,
+        PRIMARY KEY (server_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS server_departures_anonymize_idx ON server_departures(anonymize_after);
+
+      INSERT INTO server_departures (server_id, user_id, reason, departed_at, anonymize_after)
+      SELECT '${SERVER_ID}', u.id, CASE WHEN b.user_id IS NULL THEN 'leave' ELSE 'ban' END,
+        COALESCE(b.banned_at, now()), COALESCE(b.banned_at, now()) + interval '7 days'
+      FROM users u
+      LEFT JOIN server_members sm ON sm.server_id = '${SERVER_ID}' AND sm.user_id = u.id
+      LEFT JOIN server_bans b ON b.server_id = '${SERVER_ID}' AND b.user_id = u.id
+      WHERE sm.user_id IS NULL
+        AND (b.user_id IS NOT NULL OR EXISTS (
+          SELECT 1 FROM messages m JOIN channels c ON c.id = m.channel_id
+          WHERE c.server_id = '${SERVER_ID}' AND m.author_id = u.id
+        ))
+      ON CONFLICT (server_id, user_id) DO NOTHING;
+    `,
+  },
+  {
+    id: "023_server_description_and_custom_status",
+    sql: `
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '' CHECK (char_length(description) <= 160);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_status text NOT NULL DEFAULT '' CHECK (char_length(custom_status) <= 32);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_status_color text NOT NULL DEFAULT '#4d6bfe' CHECK (custom_status_color ~ '^#[0-9a-fA-F]{6}$');
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

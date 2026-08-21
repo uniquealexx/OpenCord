@@ -31,6 +31,7 @@ The server snapshot contains the role and the computed permissions of the curren
 - `channel.create` requires `MANAGE_CHANNELS`;
 - `member.role.set` requires `MANAGE_ROLES` and accepts only `administrator` or `member`.
 - `member.kick` requires `KICK_MEMBERS`: the owner can remove an administrator or a member, an administrator can remove only an ordinary member; one cannot remove oneself or the owner.
+- `member.ban` and `member.unban` require `KICK_MEMBERS` and use the same role hierarchy. A ban is stored against the user's cryptographic identity, may expire after a protocol-approved duration or remain permanent, and is checked before membership registration.
 - `server.delete` requires `DELETE_SERVER` and creates a permanent deletion marker.
 
 Deletion through the client does not immediately erase the history from the VPS: it blocks further connections and tells the clients to delete the local record. Physical deletion of the application and data is performed by the VPS owner through an explicitly confirmed `opencordctl uninstall --purge-data`.
@@ -71,6 +72,7 @@ Snapshot сервера содержит роль и вычисленные ра
 - `channel.create` требует `MANAGE_CHANNELS`;
 - `member.role.set` требует `MANAGE_ROLES` и принимает только `administrator` или `member`.
 - `member.kick` требует `KICK_MEMBERS`: владелец может исключить администратора или участника, администратор — только обычного участника; себя и владельца исключать нельзя.
+- `member.ban` и `member.unban` требуют `KICK_MEMBERS` и соблюдают ту же иерархию ролей. Бан сохраняется для криптографической идентичности, может истечь через разрешённый протоколом срок либо быть перманентным и проверяется до регистрации членства.
 - `server.delete` требует `DELETE_SERVER` и создаёт постоянную отметку удаления.
 
 Удаление через клиент не стирает историю с VPS немедленно: оно блокирует дальнейшие подключения и сообщает клиентам удалить локальную запись. Физическое удаление приложения и данных выполняется владельцем VPS через явно подтверждённый `opencordctl uninstall --purge-data`.
@@ -111,6 +113,7 @@ Docker 部署将公钥保存在 `/opt/opencord/deploy/secrets/owner_public_key` 
 - `channel.create` 需要 `MANAGE_CHANNELS`；
 - `member.role.set` 需要 `MANAGE_ROLES`，并且只接受 `administrator` 或 `member`。
 - `member.kick` 需要 `KICK_MEMBERS`：所有者可以移出管理员或成员，管理员只能移出普通成员；不能移出自己或所有者。
+- `member.ban` 和 `member.unban` 需要 `KICK_MEMBERS` 并遵循相同的角色层级。封禁与用户的加密身份绑定，可在协议允许的期限后到期或保持永久，并在注册成员资格之前检查。
 - `server.delete` 需要 `DELETE_SERVER`，并创建永久的删除标记。
 
 通过客户端删除不会立即清除 VPS 上的历史记录：它会阻止进一步的连接，并通知客户端删除本地记录。应用程序和数据的物理删除由 VPS 所有者通过明确确认的 `opencordctl uninstall --purge-data` 执行。

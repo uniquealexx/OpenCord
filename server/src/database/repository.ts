@@ -1,10 +1,11 @@
-import { publicKeyFingerprint, type Attachment, type Channel, type ChatMessage, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
+import { PROFILE_RETENTION_DAYS, publicKeyFingerprint, type Attachment, type BanDurationMinutes, type BannedMember, type Channel, type ChatMessage, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
-interface ServerRow extends QueryRow { id: string; name: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
+interface ServerRow extends QueryRow { id: string; name: string; description: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
-interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
+interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; custom_status: string; custom_status_color: string; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
+interface BannedUserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; banned_at: Date | string; banned_by: string; expires_at: Date | string | null }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null }
 interface MentionRow extends QueryRow { message_id: string; user_id: string }
 interface ReactionRow extends QueryRow { message_id: string; user_id: string; emoji: string }
@@ -32,10 +33,10 @@ export class ChatRepository {
   }
 
   async getServer(): Promise<{ id: string; avatar: string | null; banner: string | null; channels: Channel[] } & ServerSettings> {
-    const [server] = await this.database.query<ServerRow>("SELECT id, name, avatar, banner, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
+    const [server] = await this.database.query<ServerRow>("SELECT id, name, description, avatar, banner, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
     if (!server) throw new Error("Default server is missing");
     const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
-    return { id: server.id, name: server.name, avatar: server.avatar, banner: server.banner, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], channels: channels.map(mapChannel) };
+    return { id: server.id, name: server.name, description: server.description, avatar: server.avatar, banner: server.banner, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], channels: channels.map(mapChannel) };
   }
 
   async updateServerAvatar(avatar: string | null): Promise<void> {
@@ -86,29 +87,123 @@ export class ChatRepository {
     return rows.length > 0;
   }
 
-  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<void> {
+  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "displayName" | "avatar">>): Promise<void> {
     await this.database.query(
-      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, updated_at = now()
+      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator, custom_status, custom_status_color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_color = EXCLUDED.custom_status_color, updated_at = now()
        WHERE users.public_key = EXCLUDED.public_key`,
-      [userId, publicKey, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator],
+      [userId, publicKey, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusColor ?? "#4d6bfe"],
     );
   }
 
-  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & { bio?: string; banner?: string | null }): Promise<boolean> {
+  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "displayName" | "avatar">>): Promise<boolean> {
     const rows = await this.database.query<{ id: string }>(
-      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, updated_at = now() WHERE id = $1 RETURNING id",
-      [userId, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator],
+      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, custom_status = $8, custom_status_color = $9, updated_at = now() WHERE id = $1 RETURNING id",
+      [userId, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusColor ?? "#4d6bfe"],
     );
     return rows.length > 0;
   }
 
-  async leaveServer(userId: string): Promise<MemberRole | null> {
+  async leaveServer(userId: string, reason: "leave" | "kick" = "leave"): Promise<MemberRole | null> {
     const role = await this.getOptionalMemberRole(userId);
     if (!role) return null;
-    await this.database.query("UPDATE users SET bio = '', avatar = NULL, banner = NULL, username = NULL, discriminator = NULL, updated_at = now() WHERE id = $1", [userId]);
-    if (role !== "owner") await this.database.query("DELETE FROM server_members WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    if (role !== "owner") {
+      await this.database.query(
+        `WITH removed AS (
+           DELETE FROM server_members WHERE server_id = $1 AND user_id = $2 RETURNING user_id
+         )
+         INSERT INTO server_departures (server_id, user_id, reason, departed_at, anonymize_after)
+         SELECT $1, user_id, $3, now(), now() + ($4::integer * interval '1 day') FROM removed
+         ON CONFLICT (server_id, user_id) DO UPDATE SET reason = excluded.reason, departed_at = excluded.departed_at, anonymize_after = excluded.anonymize_after`,
+        [DEFAULT_SERVER_ID, userId, reason, PROFILE_RETENTION_DAYS],
+      );
+    }
     return role;
+  }
+
+  async isBanned(userId: string): Promise<boolean> {
+    await this.expireBans();
+    const [row] = await this.database.query<{ banned: boolean }>(
+      "SELECT EXISTS(SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2) AS banned",
+      [DEFAULT_SERVER_ID, userId],
+    );
+    return row?.banned === true;
+  }
+
+  async banMember(userId: string, bannedBy: string, durationMinutes: BanDurationMinutes): Promise<boolean> {
+    const rows = await this.database.query<{ user_id: string }>(
+      `WITH banned AS (
+         INSERT INTO server_bans (server_id, user_id, banned_by, banned_at, expires_at)
+         SELECT $1, $2, $3, now(), CASE WHEN $4::integer IS NULL THEN NULL ELSE now() + ($4::integer * interval '1 minute') END
+         WHERE EXISTS (SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2)
+         ON CONFLICT (server_id, user_id) DO UPDATE SET banned_by = excluded.banned_by, banned_at = excluded.banned_at, expires_at = excluded.expires_at
+         RETURNING user_id
+       ), departed AS (
+         INSERT INTO server_departures (server_id, user_id, reason, departed_at, anonymize_after)
+         SELECT $1, user_id, 'ban', now(), now() + ($5::integer * interval '1 day') FROM banned
+         ON CONFLICT (server_id, user_id) DO UPDATE SET reason = excluded.reason, departed_at = excluded.departed_at, anonymize_after = excluded.anonymize_after
+         RETURNING user_id
+       ), removed AS (
+         DELETE FROM server_members WHERE server_id = $1 AND user_id = $2
+         AND EXISTS (SELECT 1 FROM departed) RETURNING user_id
+       )
+       SELECT user_id FROM banned`,
+      [DEFAULT_SERVER_ID, userId, bannedBy, durationMinutes, PROFILE_RETENTION_DAYS],
+    );
+    return rows.length > 0;
+  }
+
+  async unbanMember(userId: string): Promise<boolean> {
+    const rows = await this.database.query<{ user_id: string }>(
+      "DELETE FROM server_bans WHERE server_id = $1 AND user_id = $2 RETURNING user_id",
+      [DEFAULT_SERVER_ID, userId],
+    );
+    return rows.length > 0;
+  }
+
+  async listBannedMembers(): Promise<BannedMember[]> {
+    await this.expireBans();
+    const rows = await this.database.query<BannedUserRow>(
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner,
+       b.banned_at, b.banned_by, b.expires_at FROM server_bans b JOIN users u ON u.id = b.user_id
+       WHERE b.server_id = $1 ORDER BY b.banned_at DESC, u.display_name`,
+      [DEFAULT_SERVER_ID],
+    );
+    return Promise.all(rows.map(async (user) => ({
+      id: user.id,
+      username: user.username,
+      discriminator: user.discriminator,
+      fingerprint: await publicKeyFingerprint(user.public_key),
+      displayName: user.display_name,
+      bio: user.bio,
+      avatar: user.avatar,
+      banner: user.banner,
+      bannedAt: new Date(user.banned_at).toISOString(),
+      bannedBy: user.banned_by,
+      expiresAt: user.expires_at ? new Date(user.expires_at).toISOString() : null,
+    })));
+  }
+
+  async performRetentionCleanup(): Promise<{ anonymizedUserIds: string[]; expiredBanUserIds: string[] }> {
+    const expiredBanUserIds = await this.expireBans();
+    const anonymized = await this.database.query<{ id: string }>(
+      `WITH expired AS (
+         DELETE FROM server_departures sd
+         WHERE sd.anonymize_after <= now()
+           AND NOT EXISTS (SELECT 1 FROM server_members sm WHERE sm.server_id = sd.server_id AND sm.user_id = sd.user_id)
+         RETURNING sd.user_id
+       )
+       UPDATE users SET display_name = 'Неизвестный пользователь', bio = '', avatar = NULL, banner = NULL,
+         username = NULL, discriminator = NULL, custom_status = '', custom_status_color = '#4d6bfe', updated_at = now()
+       WHERE id IN (SELECT user_id FROM expired)
+       RETURNING id`,
+    );
+    return { anonymizedUserIds: anonymized.map((user) => user.id), expiredBanUserIds };
+  }
+
+  private async expireBans(): Promise<string[]> {
+    const expired = await this.database.query<{ user_id: string }>("DELETE FROM server_bans WHERE server_id = $1 AND expires_at IS NOT NULL AND expires_at <= now() RETURNING user_id", [DEFAULT_SERVER_ID]);
+    return expired.map((ban) => ban.user_id);
   }
 
   async ensureMembership(userId: string, publicKey: string, bootstrapOwnerPublicKey?: string, allowFirstUserOwner = false): Promise<MemberRole> {
@@ -121,6 +216,7 @@ export class ChatRepository {
        WHERE server_members.role <> 'owner' AND EXCLUDED.role = 'owner'`,
       [DEFAULT_SERVER_ID, userId, mayBecomeOwner ? "owner" : "member"],
     );
+    await this.database.query("DELETE FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
     return this.getMemberRole(userId);
   }
 
@@ -145,7 +241,7 @@ export class ChatRepository {
 
   async listMembers(statuses: ReadonlyMap<string, PublicMemberStatus>): Promise<Member[]> {
     const users = await this.database.query<UserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_color, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
        JOIN users u ON u.id = sm.user_id WHERE sm.server_id = $1
        ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.display_name`,
       [DEFAULT_SERVER_ID],
@@ -155,7 +251,7 @@ export class ChatRepository {
 
   async getMember(userId: string, status: PublicMemberStatus): Promise<Member> {
     const [user] = await this.database.query<UserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_color, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
        JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2 WHERE u.id = $1`,
       [userId, DEFAULT_SERVER_ID],
     );
@@ -395,10 +491,10 @@ export class ChatRepository {
     return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
   }
 
-  async updateServerSettings(settings: ServerSettings): Promise<void> {
+  async updateServerSettings(settings: Omit<ServerSettings, "description"> & { description?: string }): Promise<void> {
     await this.database.query(
-      "UPDATE servers SET name = $2, max_attachment_bytes = $3, screen_share_max_resolution = $4, screen_share_max_frame_rate = $5 WHERE id = $1",
-      [DEFAULT_SERVER_ID, settings.name, settings.maxAttachmentBytes, settings.screenShareMaxResolution, settings.screenShareMaxFrameRate],
+      "UPDATE servers SET name = $2, description = $3, max_attachment_bytes = $4, screen_share_max_resolution = $5, screen_share_max_frame_rate = $6 WHERE id = $1",
+      [DEFAULT_SERVER_ID, settings.name, settings.description ?? "", settings.maxAttachmentBytes, settings.screenShareMaxResolution, settings.screenShareMaxFrameRate],
     );
   }
 
@@ -514,7 +610,7 @@ async function mapMember(user: UserRow, status: PublicMemberStatus): Promise<Mem
   const fingerprint = user.username && user.discriminator ? await publicKeyFingerprint(user.public_key) : "0000-0000-0000-0000";
   const mutedUntil = user.chat_muted_until ? new Date(user.chat_muted_until) : null;
   const chatMuted = user.chat_muted === true && (mutedUntil === null || mutedUntil.getTime() > Date.now());
-  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
+  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, customStatus: user.custom_status, customStatusColor: user.custom_status_color, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
 }
 
 function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = [], reactions: MessageReaction[] = []): ChatMessage {

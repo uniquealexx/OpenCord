@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
@@ -15,6 +15,8 @@ export const localProfileSchema = z.object({
   avatar: z.string().max(2_000_000).nullable(),
   banner: z.string().max(500_000).nullable().default(null),
   status: userStatusSchema.optional(),
+  customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
+  customStatusColor: z.string().regex(/^#[0-9a-f]{6}$/iu).optional(),
   createdAt: z.string().datetime(),
 });
 
@@ -48,6 +50,8 @@ export const mockMemberSchema = z.object({
   role: z.string().max(32),
   serverRole: z.enum(["owner", "administrator", "member"]).optional(),
   status: publicMemberStatusSchema,
+  customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
+  customStatusColor: z.string().regex(/^#[0-9a-f]{6}$/iu).optional(),
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   avatar: z.string().max(2_000_000).nullable().optional(),
   banner: z.string().max(500_000).nullable().optional(),
@@ -58,6 +62,7 @@ export const mockMemberSchema = z.object({
 export const mockServerSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1).max(48),
+  description: z.string().max(160).optional(),
   avatar: z.string().max(1_500_000).nullable().optional(),
   banner: z.string().max(500_000).nullable().optional(),
   address: z.string().max(200).nullable(),
@@ -67,6 +72,7 @@ export const mockServerSchema = z.object({
   screenShareMaxFrameRate: screenShareFrameRateSchema.optional(),
   channels: z.array(mockChannelSchema),
   members: z.array(mockMemberSchema),
+  bannedMembers: z.array(bannedMemberSchema).optional(),
   deployment: savedDeploymentConfigurationSchema.optional(),
 });
 

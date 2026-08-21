@@ -113,7 +113,7 @@ describe("server connection", () => {
 
   it("authenticates and reconnects after the socket closes", async () => {
     vi.useFakeTimers();
-    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onServerBannerUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onServerBannerUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onProfileAnonymized: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
     const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
     const first = FakeWebSocket.instances[0];
     expect(first?.url).toBe("ws://127.0.0.1:3210/ws");
@@ -158,9 +158,11 @@ describe("server connection", () => {
       expect(result.current.disconnectVoiceMember("voice-member")).toBe(true);
       expect(result.current.setVoiceMemberMuted("voice-member", true)).toBe(true);
       expect(result.current.kickMember("server-member")).toBe(true);
+      expect(result.current.banMember("banned-member", 30)).toBe(true);
+      expect(result.current.unbanMember("unbanned-member")).toBe(true);
       searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
     });
-    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; mentions?: string[]; name?: string; userId?: string; muted?: boolean; viewingScreenShareUserId?: string | null; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
+    const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; mentions?: string[]; name?: string; userId?: string; durationMinutes?: number | null; muted?: boolean; viewingScreenShareUserId?: string | null; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
     expect(sentEvents.some((event) => event.type === "channel.delete")).toBe(true);
     expect(sentEvents.some((event) => event.type === "message.update")).toBe(true);
@@ -176,6 +178,9 @@ describe("server connection", () => {
     expect(sentEvents.find((event) => event.type === "voice.member.disconnect")?.userId).toBe("voice-member");
     expect(sentEvents.find((event) => event.type === "voice.member.mute")).toMatchObject({ userId: "voice-member", muted: true });
     expect(sentEvents.find((event) => event.type === "member.kick")?.userId).toBe("server-member");
+    expect(sentEvents.find((event) => event.type === "member.ban")?.userId).toBe("banned-member");
+    expect(sentEvents.find((event) => event.type === "member.ban")?.durationMinutes).toBe(30);
+    expect(sentEvents.find((event) => event.type === "member.unban")?.userId).toBe("unbanned-member");
     expect(sentEvents.some((event) => event.type === "message.search")).toBe(true);
 
     const searchResult = { messages: [], total: 0, offset: 0, hasMore: false };
@@ -199,10 +204,12 @@ describe("server connection", () => {
       first?.receive({ type: "message.updated", message });
       first?.receive({ type: "message.deleted", messageId: channelId, channelId });
       first?.receive({ type: "member.removed", userId: "removed-user" });
+      first?.receive({ type: "profile.anonymized", userId: "expired-profile" });
     });
     expect(callbacks.onMessageUpdated).toHaveBeenCalledWith(message);
     expect(callbacks.onMessageDeleted).toHaveBeenCalledWith(channelId, channelId);
     expect(callbacks.onMemberRemoved).toHaveBeenCalledWith("removed-user");
+    expect(callbacks.onProfileAnonymized).toHaveBeenCalledWith("expired-profile");
 
     act(() => first?.disconnect());
     expect(result.current.status).toBe("reconnecting");

@@ -113,7 +113,7 @@ describe("Electron client updater", () => {
     const updater = new FakeUpdater(); updater.installerPath = installerPath;
     const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "windows", () => undefined, fetcher);
     await manager.check();
-    await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("Размер") });
+    await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("size") });
   });
 
   it("continues startup immediately when the installed client is current", async () => {
@@ -137,19 +137,19 @@ describe("Electron client updater", () => {
   it("retries a failed mandatory check and never bypasses it", async () => {
     const manager = {
       check: vi.fn()
-        .mockResolvedValueOnce({ status: "error", currentVersion: "0.1.0-beta.3", channel: "beta", message: "GitHub недоступен" })
+        .mockResolvedValueOnce({ status: "error", currentVersion: "0.1.0-beta.3", channel: "beta", message: "GitHub is unavailable" })
         .mockResolvedValueOnce({ status: "up-to-date", currentVersion: version, channel: "beta", checkedAt: new Date().toISOString() }),
       download: vi.fn(),
     };
     const decide = vi.fn(async () => "retry" as const);
     await expect(runRequiredStartupUpdate(manager, decide)).resolves.toBe("ready");
     expect(manager.check).toHaveBeenCalledTimes(2);
-    expect(decide).toHaveBeenCalledWith("GitHub недоступен");
+    expect(decide).toHaveBeenCalledWith("GitHub is unavailable");
   });
 
   it("exits when the mandatory update check fails and the user declines retry", async () => {
     const manager = {
-      check: vi.fn(async () => ({ status: "error", currentVersion: "0.1.0-beta.3", channel: "beta", message: "Нет сети" } as const)),
+      check: vi.fn(async () => ({ status: "error", currentVersion: "0.1.0-beta.3", channel: "beta", message: "No network connection" } as const)),
       download: vi.fn(),
     };
     await expect(runRequiredStartupUpdate(manager, async () => "quit")).resolves.toBe("quit");
@@ -212,7 +212,7 @@ describe("Direct updater flow (macOS and Linux AppImage)", () => {
     const updater = new DirectUpdater();
     updater.updateFiles = [{ url: `https://evil.example.com/releases/download/v${version}/${appImageName}`, size: 10 }];
     const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "mac", () => undefined, fetcher);
-    await expect(manager.check()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("недоверенный") });
+    await expect(manager.check()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("untrusted") });
   });
 
   it("rejects a downloaded update that does not match the update metadata", async () => {
@@ -225,7 +225,7 @@ describe("Direct updater flow (macOS and Linux AppImage)", () => {
     updater.updateFiles = [{ url: appImageUrl, size: appImageBytes.length, sha512: sha512(appImageBytes) }];
     const manager = new ClientUpdateManager(updater, "0.1.0-beta.1", "appimage", () => undefined, fetcher);
     await manager.check();
-    await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("Размер") });
+    await expect(manager.download()).resolves.toMatchObject({ status: "error", message: expect.stringContaining("size") });
   });
 
   it("reports a disabled state with a platform reason for deb and development flavors", async () => {

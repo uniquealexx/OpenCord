@@ -40,6 +40,7 @@ export const IPC = {
   updateCheck: "update:check",
   updateDownload: "update:download",
   updateInstall: "update:install",
+  updateGateDecision: "update:gate-decision",
   updateStateChanged: "update:state-changed",
 } as const;
 

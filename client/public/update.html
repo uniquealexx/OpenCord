@@ -1,77 +1,235 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Обновление OpenCord</title>
+    <title>OpenCord Update</title>
     <style>
-      :root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; background: #090b12; color: #eef2ff; }
+      :root {
+        color-scheme: dark;
+        font-family: Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
+        background: #212327;
+        color: #f1f2f4;
+      }
+
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 20% 10%, rgba(139, 92, 246, .18), transparent 42%), radial-gradient(circle at 85% 85%, rgba(34, 211, 238, .1), transparent 38%), #090b12; }
-      main { width: min(460px, calc(100vw - 48px)); padding: 34px; border: 1px solid rgba(148, 163, 184, .16); border-radius: 26px; background: rgba(17, 24, 39, .88); box-shadow: 0 24px 80px rgba(0, 0, 0, .42); }
-      .mark { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 24px; border-radius: 17px; background: linear-gradient(145deg, #7c3aed, #4f46e5); box-shadow: 0 12px 32px rgba(124, 58, 237, .3); font-size: 22px; font-weight: 800; }
-      h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
-      p { margin: 10px 0 0; color: #94a3b8; font-size: 14px; line-height: 1.6; }
-      .versions { margin-top: 22px; color: #64748b; font-size: 12px; }
-      .track { height: 7px; margin-top: 24px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .07); }
-      .bar { width: 30%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #8b5cf6, #22d3ee); transition: width .25s ease; }
-      .bar.indeterminate { animation: scanning 1.25s ease-in-out infinite alternate; }
-      .error { color: #fca5a5; }
-      @keyframes scanning { from { transform: translateX(-55%); } to { transform: translateX(285%); } }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        overflow: hidden;
+        background: #212327;
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+
+      .shell {
+        width: 100vw;
+        min-height: 100vh;
+        padding: 30px 34px 25px;
+        background: transparent;
+      }
+
+      .brand { display: flex; align-items: center; gap: 10px; }
+
+      .mark {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border-radius: 9px;
+        background: #4d6bfe;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .brand-copy { min-width: 0; }
+      .brand-name { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
+      .brand-product { margin: 2px 0 0; color: oklch(55.4% .046 257.417); font-size: 10px; }
+
+      .gate-label {
+        margin-left: auto;
+        color: oklch(55.4% .046 257.417);
+        font-size: 9px;
+        font-weight: 650;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+
+      .content { margin-top: 39px; }
+      .copy { min-width: 0; }
+      .eyebrow { margin: 0 0 7px; color: #6b86ff; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+      h1 { margin: 0; font-size: 22px; font-weight: 680; letter-spacing: -.035em; }
+      .message { max-width: 410px; margin: 8px 0 0; color: oklch(70.4% .04 256.788); font-size: 12px; line-height: 1.55; }
+
+      .version-card {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 27px;
+        padding: 12px 0;
+        border-top: 1px solid rgba(255, 255, 255, .055);
+        border-bottom: 1px solid rgba(255, 255, 255, .055);
+        color: oklch(70.4% .04 256.788);
+        font-size: 11px;
+      }
+
+      .version-label { color: oklch(55.4% .046 257.417); }
+      .versions { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .progress { margin-top: 21px; }
+      .progress-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; color: oklch(55.4% .046 257.417); font-size: 10px; }
+      .percent { color: oklch(86.9% .022 252.894); font-variant-numeric: tabular-nums; font-weight: 650; }
+
+      .track {
+        height: 5px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, .07);
+      }
+
+      .bar {
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        background: #4d6bfe;
+        transition: width .25s ease;
+      }
+
+      .bar.indeterminate { width: 24%; animation: scanning 1.4s ease-in-out infinite; }
+
+      .footer {
+        margin-top: 22px;
+        color: oklch(55.4% .046 257.417);
+        font-size: 10px;
+      }
+
+      .actions { display: none; gap: 9px; margin-top: 18px; -webkit-app-region: no-drag; }
+      .shell[data-status="error"] .actions { display: flex; }
+      .action {
+        height: 36px;
+        padding: 0 16px;
+        border: 1px solid rgba(255, 255, 255, .09);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, .045);
+        color: #d8dbe2;
+        font-size: 11px;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      .action:hover { background: rgba(255, 255, 255, .085); }
+      .action.primary { border-color: rgba(77, 107, 254, .45); background: #4d6bfe; color: #fff; }
+      .action.primary:hover { background: #5a76ff; }
+
+      .shell[data-status="downloaded"] .eyebrow { color: oklch(76.5% .177 163.223); }
+      .shell[data-status="error"] .eyebrow, .shell[data-status="error"] h1 { color: oklch(70.4% .191 22.216); }
+      .shell[data-status="error"] .bar { background: oklch(70.4% .191 22.216); }
+
+      @keyframes scanning { 0% { transform: translateX(-110%); } 100% { transform: translateX(420%); } }
+
+      @media (prefers-reduced-motion: reduce) {
+        .bar.indeterminate { animation-duration: 2.8s; }
+        .bar { transition: none; }
+      }
     </style>
   </head>
   <body>
-    <main>
-      <div class="mark">O</div>
-      <h1 id="title">Проверяем обновления</h1>
-      <p id="message">OpenCord сверяет установленную версию с доверенным релизом на GitHub.</p>
-      <div class="versions" id="versions"></div>
-      <div class="track"><div class="bar indeterminate" id="bar"></div></div>
+    <main class="shell" id="shell" data-status="checking">
+      <header class="brand">
+        <div class="mark" aria-hidden="true">O</div>
+        <div class="brand-copy"><p class="brand-name">OpenCord</p><p class="brand-product">Desktop client</p></div>
+        <span class="gate-label">Update</span>
+      </header>
+
+      <section class="content" aria-live="polite">
+        <div class="copy">
+          <p class="eyebrow" id="eyebrow">Version check</p>
+          <h1 id="title">Checking for updates</h1>
+          <p class="message" id="message">Comparing your installed version with the trusted OpenCord release.</p>
+        </div>
+
+        <div class="version-card"><span class="version-label">Version</span><span class="versions" id="versions">Retrieving data…</span></div>
+        <div class="progress">
+          <div class="progress-meta"><span id="stage">Connecting to the update server</span><strong class="percent" id="percent">—</strong></div>
+          <div class="track" id="track" role="progressbar" aria-label="Update progress" aria-valuemin="0" aria-valuemax="100"><div class="bar indeterminate" id="bar"></div></div>
+        </div>
+        <div class="actions" id="actions"><button class="action primary" id="retry" type="button">Retry</button><button class="action" id="quit" type="button">Quit</button></div>
+      </section>
+
+      <footer class="footer" id="footer-message">This window will close automatically when finished</footer>
     </main>
+
     <script>
+      const shell = document.getElementById("shell");
+      const eyebrow = document.getElementById("eyebrow");
       const title = document.getElementById("title");
       const message = document.getElementById("message");
       const versions = document.getElementById("versions");
+      const stage = document.getElementById("stage");
+      const percent = document.getElementById("percent");
+      const track = document.getElementById("track");
       const bar = document.getElementById("bar");
+      const footerMessage = document.getElementById("footer-message");
+      const retry = document.getElementById("retry");
+      const quit = document.getElementById("quit");
+
+      function setProgress(value, indeterminate = false) {
+        bar.className = indeterminate ? "bar indeterminate" : "bar";
+        bar.style.width = indeterminate ? "24%" : `${Math.max(0, Math.min(100, value))}%`;
+        track.setAttribute("aria-valuenow", String(Math.round(value)));
+      }
 
       function render(state) {
-        title.className = "";
-        message.className = "";
-        versions.textContent = `Установлена версия ${state.currentVersion}`;
-        bar.className = "bar indeterminate";
-        bar.style.width = "30%";
+        shell.dataset.status = state.status;
+        versions.textContent = `Installed ${state.currentVersion}`;
+        eyebrow.textContent = "Version check";
+        stage.textContent = "Connecting to the update server";
+        percent.textContent = "—";
+        footerMessage.textContent = "This window will close automatically when finished";
+        setProgress(0, true);
+
         if (state.status === "available") {
-          title.textContent = "Найдено обязательное обновление";
-          message.textContent = `Версия ${state.version} будет скачана и установлена автоматически.`;
-          versions.textContent = `${state.currentVersion} → ${state.version}`;
+          eyebrow.textContent = "New version available";
+          title.textContent = "Preparing the update";
+          message.textContent = "The new version will be downloaded, verified, and installed automatically.";
+          versions.textContent = `${state.currentVersion}  →  ${state.version}`;
+          stage.textContent = "Preparing secure download";
         } else if (state.status === "downloading") {
-          title.textContent = "Скачиваем обновление";
-          message.textContent = `Загружено ${Math.round(state.percent)}%. Не закрывайте OpenCord.`;
-          versions.textContent = `${state.currentVersion} → ${state.version}`;
-          bar.className = "bar";
-          bar.style.width = `${Math.max(2, state.percent)}%`;
+          const rounded = Math.round(state.percent);
+          eyebrow.textContent = "Downloading update";
+          title.textContent = "Updating OpenCord";
+          message.textContent = "This may take a moment. The app will continue launching automatically.";
+          versions.textContent = `${state.currentVersion}  →  ${state.version}`;
+          stage.textContent = "Downloading update files";
+          percent.textContent = `${rounded}%`;
+          setProgress(state.percent);
         } else if (state.status === "downloaded") {
-          title.textContent = "Запускаем установку";
-          message.textContent = "Обновление проверено. OpenCord перезапустится автоматически.";
-          versions.textContent = `${state.currentVersion} → ${state.version}`;
-          bar.className = "bar";
-          bar.style.width = "100%";
+          eyebrow.textContent = "Update ready";
+          title.textContent = "Starting installation";
+          message.textContent = "The files have been verified. OpenCord will restart with the new version.";
+          versions.textContent = `${state.currentVersion}  →  ${state.version}`;
+          stage.textContent = "Verification complete";
+          percent.textContent = "100%";
+          setProgress(100);
         } else if (state.status === "error") {
-          title.textContent = "Не удалось проверить обновление";
-          title.className = "error";
+          eyebrow.textContent = "Action required";
+          title.textContent = "OpenCord could not be updated";
           message.textContent = state.message;
-          message.className = "error";
-          bar.className = "bar";
-          bar.style.width = "0";
+          stage.textContent = "Download stopped";
+          percent.textContent = "Error";
+          footerMessage.textContent = "Choose an action to continue";
+          setProgress(0);
         } else {
-          title.textContent = "Проверяем обновления";
-          message.textContent = "OpenCord сверяет установленную версию с доверенным релизом на GitHub.";
+          title.textContent = "Checking for updates";
+          message.textContent = "Comparing your installed version with the trusted OpenCord release.";
         }
       }
 
       window.openCordUpdateGate.onStateChange(render);
       window.openCordUpdateGate.getState().then(render);
+      retry.addEventListener("click", () => window.openCordUpdateGate.retry());
+      quit.addEventListener("click", () => window.openCordUpdateGate.quit());
     </script>
   </body>
 </html>

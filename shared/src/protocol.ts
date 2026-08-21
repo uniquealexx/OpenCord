@@ -1,6 +1,20 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 31 as const;
+export const PROTOCOL_VERSION = 34 as const;
+export const PROFILE_RETENTION_DAYS = 7 as const;
+export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
+export const banDurationMinutesSchema = z.union([
+  z.literal(BAN_DURATION_MINUTES[0]),
+  z.literal(BAN_DURATION_MINUTES[1]),
+  z.literal(BAN_DURATION_MINUTES[2]),
+  z.literal(BAN_DURATION_MINUTES[3]),
+  z.literal(BAN_DURATION_MINUTES[4]),
+  z.literal(BAN_DURATION_MINUTES[5]),
+  z.literal(BAN_DURATION_MINUTES[6]),
+  z.literal(BAN_DURATION_MINUTES[7]),
+  z.literal(BAN_DURATION_MINUTES[8]),
+  z.null(),
+]);
 
 export const MEBIBYTE = 1024 * 1024;
 export const ATTACHMENT_LIMIT_MIN_BYTES = MEBIBYTE;
@@ -15,8 +29,12 @@ export const DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE = 60 as const;
 export const screenShareResolutionSchema = z.union([z.literal(480), z.literal(720), z.literal(1080), z.literal(1440)]);
 export const screenShareFrameRateSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
 export const serverNameSchema = z.string().trim().min(2).max(48);
+export const SERVER_DESCRIPTION_MAX_LENGTH = 160 as const;
+export const CUSTOM_STATUS_MAX_LENGTH = 32 as const;
+export const customStatusColorSchema = z.string().regex(/^#[0-9a-f]{6}$/iu);
 export const serverSettingsSchema = z.object({
   name: serverNameSchema,
+  description: z.string().trim().max(SERVER_DESCRIPTION_MAX_LENGTH).optional(),
   maxAttachmentBytes: attachmentUploadLimitSchema,
   screenShareMaxResolution: screenShareResolutionSchema,
   screenShareMaxFrameRate: screenShareFrameRateSchema,
@@ -60,6 +78,8 @@ export const publicProfileSchema = z.object({
   avatar: userAvatarSchema.default(null),
   banner: userBannerSchema.default(null),
   status: userStatusSchema.default("online"),
+  customStatus: z.string().trim().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
+  customStatusColor: customStatusColorSchema.optional(),
 });
 
 export const channelSchema = z.object({
@@ -96,9 +116,25 @@ export const memberSchema = z.object({
   avatar: userAvatarSchema,
   banner: userBannerSchema,
   status: publicMemberStatusSchema,
+  customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
+  customStatusColor: customStatusColorSchema.optional(),
   role: memberRoleSchema,
   chatMuted: z.boolean().default(false),
   chatMutedUntil: z.string().datetime().nullable().default(null),
+});
+
+export const bannedMemberSchema = z.object({
+  id: z.string().min(1),
+  username: usernameSchema.nullable(),
+  discriminator: discriminatorSchema.nullable(),
+  fingerprint: fingerprintSchema,
+  displayName: z.string().min(1).max(32),
+  bio: z.string().max(160),
+  avatar: userAvatarSchema,
+  banner: userBannerSchema,
+  bannedAt: z.string().datetime(),
+  bannedBy: z.string().min(1),
+  expiresAt: z.string().datetime().nullable(),
 });
 
 export const attachmentSchema = z.object({
@@ -192,6 +228,8 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
   z.object({ type: z.literal("member.kick"), requestId: requestIdSchema, userId: z.string().min(1) }),
+  z.object({ type: z.literal("member.ban"), requestId: requestIdSchema, userId: z.string().min(1), durationMinutes: banDurationMinutesSchema }),
+  z.object({ type: z.literal("member.unban"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.banner.update"), requestId: requestIdSchema, banner: serverBannerSchema }),
   z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape }),
@@ -209,7 +247,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
 export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("auth.challenge"), requestId: requestIdSchema, protocolVersion: z.literal(PROTOCOL_VERSION), challenge: z.string(), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("auth.ok"), requestId: requestIdSchema, userId: z.string(), serverId: z.string().uuid(), sessionToken: z.string().min(40).max(200), sessionExpiresAt: z.string().datetime() }),
-  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), avatar: serverAvatarSchema.default(null), banner: serverBannerSchema.default(null), ...serverSettingsSchema.shape, channels: z.array(channelSchema), members: z.array(memberSchema), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
+  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), avatar: serverAvatarSchema.default(null), banner: serverBannerSchema.default(null), ...serverSettingsSchema.shape, channels: z.array(channelSchema), members: z.array(memberSchema), bannedMembers: z.array(bannedMemberSchema).optional(), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.banner.updated"), serverId: z.string().uuid(), banner: serverBannerSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
@@ -221,13 +259,14 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.reactions.updated"), messageId: z.string().uuid(), channelId: z.string().uuid(), reactions: z.array(messageReactionSchema) }),
   z.object({ type: z.literal("member.updated"), member: memberSchema }),
   z.object({ type: z.literal("member.removed"), userId: z.string().min(1) }),
+  z.object({ type: z.literal("profile.anonymized"), userId: z.string().min(1) }),
   z.object({ type: z.literal("voice.join.authorized"), requestId: requestIdSchema, channelId: z.string().uuid(), endpoint: z.string().url(), token: z.string().min(20).max(4_000), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("voice.participant.joined"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.updated"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.left"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.disconnected"), userId: z.string().min(1), channelId: z.string().uuid(), reason: z.enum(["moderated", "replaced", "channel_deleted"]) }),
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),
-  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string() }),
+  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string() }),
 ]);
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
@@ -235,6 +274,8 @@ export type UserStatus = z.infer<typeof userStatusSchema>;
 export type PublicMemberStatus = z.infer<typeof publicMemberStatusSchema>;
 export type Channel = z.infer<typeof channelSchema>;
 export type Member = z.infer<typeof memberSchema>;
+export type BannedMember = z.infer<typeof bannedMemberSchema>;
+export type BanDurationMinutes = z.infer<typeof banDurationMinutesSchema>;
 export type MemberRole = z.infer<typeof memberRoleSchema>;
 export type Permission = z.infer<typeof permissionSchema>;
 export type VoiceCapability = z.infer<typeof voiceCapabilitySchema>;

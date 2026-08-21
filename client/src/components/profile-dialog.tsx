@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { userAvatarSchema, userBannerSchema, type UserStatus } from "@opencord/shared";
+import { CUSTOM_STATUS_MAX_LENGTH, userAvatarSchema, userBannerSchema, type UserStatus } from "@opencord/shared";
 import { AtSign, Camera, Check, Copy, Crop, Fingerprint, ImagePlus, LoaderCircle, Trash2 } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { ImageCropDialog } from "@/components/image-crop-dialog";
 import { Button } from "@/components/ui/button";
+import { ColorPicker } from "@/components/ui/color-picker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +24,8 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
   const [avatar, setAvatar] = useState(profile.avatar);
   const [banner, setBanner] = useState(profile.banner);
   const [status, setStatus] = useState<UserStatus>(profile.status ?? "online");
+  const [customStatus, setCustomStatus] = useState(profile.customStatus ?? "");
+  const [customStatusColor, setCustomStatusColor] = useState(profile.customStatusColor ?? "#4d6bfe");
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState("");
@@ -94,7 +97,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     try {
       const nextAvatar = avatar && !userAvatarSchema.safeParse(avatar).success ? await compressUserAvatar(await (await fetch(avatar)).blob()) : avatar;
       const nextBanner = banner && !userBannerSchema.safeParse(banner).success ? await compressUserBanner(await (await fetch(banner)).blob()) : banner;
-      onSave({ ...profile, username: username.trim().toLowerCase(), displayName: name.trim(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status });
+      onSave({ ...profile, username: username.trim().toLowerCase(), displayName: name.trim(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusColor });
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t.profile.avatarFailed);
@@ -157,6 +160,13 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             </div>
             {status === "invisible" && <p className="text-xs text-slate-500">{t.profile.invisibleHint}</p>}
           </fieldset>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium text-slate-300" htmlFor="custom-status">{t.profile.customStatus}</label>
+            <Input id="custom-status" value={customStatus} onChange={(event) => setCustomStatus(event.target.value)} maxLength={CUSTOM_STATUS_MAX_LENGTH} placeholder={t.profile.customStatusPlaceholder} />
+            <p className="text-right text-[11px] text-slate-500">{customStatus.length}/{CUSTOM_STATUS_MAX_LENGTH}</p>
+            <span className="mt-1 text-sm font-medium text-slate-300">{t.profile.customStatusColor}</span>
+            <ColorPicker value={customStatusColor} label={t.profile.customStatusColor} onChange={setCustomStatusColor} />
+          </div>
           <Button type="submit" className="w-full" disabled={compressing || name.trim().length < 2 || !usernameValid}>{t.profile.save}</Button>
         </form>
       </DialogContent>

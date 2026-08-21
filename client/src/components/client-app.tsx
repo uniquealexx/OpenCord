@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldCheck, Smile, Trash2, UserCog, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldCheck, Smile, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -14,6 +14,8 @@ import { ProfilePreview } from "@/components/profile-preview";
 import { ServerDialog } from "@/components/server-dialog";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 import { ServerBannerDialog } from "@/components/server-banner-dialog";
+import { ServerPreviewDialog } from "@/components/server-preview-dialog";
+import { ServerSettingsPage } from "@/components/server-settings-page";
 import { ServerSearchPanel } from "@/components/server-search-panel";
 import { ScreenShareDialog, ScreenShareSurface, screenShareResolutionLabel } from "@/components/screen-share-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -96,6 +98,7 @@ export function ClientApp(): React.ReactElement {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [viewingScreenShareId, setViewingScreenShareId] = useState<string | null>(null);
   const [mobilePanel, setMobilePanel] = useState<"channels" | "members" | null>(null);
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [selfIdentity, setSelfIdentity] = useState<{
     publicKey: string;
     fingerprint: string;
@@ -220,6 +223,8 @@ export function ClientApp(): React.ReactElement {
                       role: roleLabel(member.role),
                       serverRole: member.role,
                       status: member.status,
+                      customStatus: member.customStatus,
+                      customStatusColor: member.customStatusColor,
                       avatarColor: colorFromId(member.id),
                       avatar: member.avatar,
                       banner: member.banner,
@@ -261,8 +266,11 @@ export function ClientApp(): React.ReactElement {
                   members: server.members.filter((member) => member.id !== userId),
                 },
           ),
-          messages: current.messages.map((message) => (message.authorId === userId ? { ...message, authorAvatar: null } : message)),
         }));
+      },
+      onProfileAnonymized: (userId) => {
+        commit((current) => ({ ...current, messages: current.messages.map((message) => message.authorId === userId ? { ...message, authorName: "Неизвестный пользователь", authorAvatar: null } : message) }));
+        setSearchResult((current) => current ? { ...current, messages: current.messages.map((message) => message.authorId === userId ? { ...message, authorName: "Неизвестный пользователь", authorAvatar: null } : message) } : null);
       },
       onServerDeleted: () => {
         if (!connectionServer) return;
@@ -565,6 +573,7 @@ export function ClientApp(): React.ReactElement {
       activeChannelId: channel?.id ?? null,
     }));
     setMobilePanel(null);
+    setServerSettingsOpen(false);
     resetComposer();
     resetSearch();
     resetVoiceSession();
@@ -577,6 +586,7 @@ export function ClientApp(): React.ReactElement {
       activeChannelId: null,
     }));
     resetComposer();
+    setServerSettingsOpen(false);
     resetSearch();
     resetVoiceSession();
   }
@@ -584,6 +594,7 @@ export function ClientApp(): React.ReactElement {
   function selectChannel(channelId: string): void {
     commit((current) => ({ ...current, activeChannelId: channelId }));
     setMobilePanel(null);
+    setServerSettingsOpen(false);
     resetComposer();
   }
 
@@ -736,10 +747,14 @@ export function ClientApp(): React.ReactElement {
     setNotice(t.server.left);
   }
 
-  /** «Открыть настройки» из меню сервера в колонке: переключаемся на сервер и открываем диалог управления. */
+  /** «Открыть настройки» из меню сервера в колонке: переключаемся на сервер и открываем полноэкранную страницу. */
   function openServerSettingsFromRail(server: MockServer): void {
-    if (state?.activeServerId !== server.id) selectServer(server);
-    setModal("leave");
+    if (state?.activeServerId !== server.id) {
+      selectServer(server);
+      window.setTimeout(() => setServerSettingsOpen(true), 0);
+      return;
+    }
+    setServerSettingsOpen(true);
   }
 
   /** «Отключиться от сервера» из меню сервера в колонке. */
@@ -790,6 +805,8 @@ export function ClientApp(): React.ReactElement {
         avatar: profile.avatar,
         banner: profile.banner,
         status: profile.status ?? "online",
+        customStatus: profile.customStatus ?? "",
+        customStatusColor: profile.customStatusColor ?? "#4d6bfe",
       })
     )
       setNotice(t.notices.profileSavedLocalOnly);
@@ -1143,6 +1160,22 @@ export function ClientApp(): React.ReactElement {
     setNotice(t.notices.kickRequested);
   }
 
+  function banServerMember(userId: string, durationMinutes: BanDurationMinutes): void {
+    if (!connection.banMember(userId, durationMinutes)) {
+      setNotice(t.notices.banNotReady);
+      return;
+    }
+    setNotice(t.notices.banRequested);
+  }
+
+  function unbanServerMember(userId: string): void {
+    if (!connection.unbanMember(userId)) {
+      setNotice(t.notices.unbanNotReady);
+      return;
+    }
+    setNotice(t.notices.unbanRequested);
+  }
+
   function disconnectVoiceParticipant(userId: string): void {
     if (!connection.disconnectVoiceMember(userId)) {
       setNotice(t.notices.disconnectNotReady);
@@ -1186,6 +1219,22 @@ export function ClientApp(): React.ReactElement {
           return access?.role === "owner" || access?.role === "administrator";
         }}
       />
+      {serverSettingsOpen && activeServer && currentAccess && (
+        <ServerSettingsPage
+          key={activeServer.id}
+          server={activeServer}
+          profile={profile}
+          access={currentAccess}
+          onClose={() => setServerSettingsOpen(false)}
+          onAvatar={() => setModal("server-avatar")}
+          onBanner={() => setModal("server-banner")}
+          onSaveSettings={saveServerSettings}
+          onSetRole={setServerMemberRole}
+          onKick={kickServerMember}
+          onBan={banServerMember}
+          onUnban={unbanServerMember}
+        />
+      )}
       {mobile && mobilePanel !== null && <div aria-hidden="true" className="fixed inset-0 z-20 bg-black/45" onClick={() => setMobilePanel(null)} />}
       {activeServer ? (
         <>
@@ -1364,10 +1413,10 @@ export function ClientApp(): React.ReactElement {
                 {mobile
                   ? mobilePanel === "members" && (
                       <div className="absolute inset-y-0 right-0 z-30 flex w-[240px]">
-                        <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />
+                        <MemberList server={activeServer} profile={state.profile} access={currentAccess} />
                       </div>
                     )
-                  : state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} onSetRole={setServerMemberRole} onKickMember={kickServerMember} />}
+                  : state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} />}
               </div>
               <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => resetSearch()} onReset={resetSearchSession} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
               {draggingFiles && (
@@ -1393,8 +1442,6 @@ export function ClientApp(): React.ReactElement {
                   },
                 }))
               }
-              onSetRole={setServerMemberRole}
-              onKickMember={kickServerMember}
             />
           )}
         </>
@@ -1438,7 +1485,7 @@ export function ClientApp(): React.ReactElement {
           }
         />
       )}
-      {activeServer && <LeaveServerDialog server={activeServer} canManageServer={currentAccess?.permissions.includes("MANAGE_SERVER") === true} canViewSettings={currentAccess?.role === "owner" || currentAccess?.role === "administrator"} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onAvatar={() => setModal("server-avatar")} onBanner={() => setModal("server-banner")} onUpdate={() => setModal("update")} onSaveSettings={saveServerSettings} onConfirm={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
+      {activeServer && <ServerPreviewDialog server={activeServer} canOpenSettings={currentAccess?.role === "owner" || currentAccess?.role === "administrator"} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onSettings={() => { setModal(null); setServerSettingsOpen(true); }} onUpdate={() => setModal("update")} onLeave={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
       {activeServer && <ServerAvatarDialog key={`${activeServer.id}-${activeServer.avatar ?? "none"}`} server={activeServer} open={modal === "server-avatar"} onOpenChange={(open) => setModal(open ? "server-avatar" : null)} onSave={updateServerAvatar} />}
       {activeServer && <ServerBannerDialog key={`${activeServer.id}-${activeServer.banner ?? "none"}`} server={activeServer} open={modal === "server-banner"} onOpenChange={(open) => setModal(open ? "server-banner" : null)} onSave={updateServerBanner} />}
       <ChannelDialog open={modal === "channel"} onOpenChange={(open) => setModal(open ? "channel" : null)} onCreate={createServerChannel} />
@@ -1642,10 +1689,22 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
 
   return (
     <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-[#1d1f23]">
-      <button aria-label={`${t.server.manage}: ${server.name}`} onClick={onServerMenu} className="flex h-14 items-center justify-between border-b border-white/[.055] px-4 text-left font-semibold text-slate-100 transition hover:bg-white/[.035]">
-        {server.name}
-        <ChevronDown className="size-4 text-slate-500" />
-      </button>
+      {server.banner ? (
+        <button aria-label={`${t.server.manage}: ${server.name}`} onClick={onServerMenu} className="group/banner relative h-24 shrink-0 overflow-hidden border-b border-white/[.055] text-left text-white">
+          <Image src={server.banner} alt="" fill unoptimized sizes="262px" className="object-cover transition duration-200 group-hover/banner:scale-[1.02]" />
+          <span className="absolute inset-0 bg-black/35 transition group-hover/banner:bg-black/45" />
+          <span className="absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-3">
+            <Avatar name={server.name} image={server.avatar} color={server.accent} size="sm" className="size-6 ring-1 ring-white/25" />
+            <span className="min-w-0 flex-1 truncate text-sm font-bold drop-shadow-md">{server.name}</span>
+            <ChevronDown className="size-4 shrink-0 drop-shadow-md" />
+          </span>
+        </button>
+      ) : (
+        <button aria-label={`${t.server.manage}: ${server.name}`} onClick={onServerMenu} className="flex h-14 items-center justify-between border-b border-white/[.055] px-4 text-left font-semibold text-slate-100 transition hover:bg-white/[.035]">
+          {server.name}
+          <ChevronDown className="size-4 text-slate-500" />
+        </button>
+      )}
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-4">
         <ChannelGroup title={t.channel.text} canCreate={canManageChannels} onCreate={onCreateChannel}>
           {textChannels.map((channel) => (
@@ -1688,10 +1747,10 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
       {activeVoiceChannel && onLeaveVoice && onMuted && onDeafened && <VoicePanel mobile={mobile} channel={activeVoiceChannel} status={voiceStatus} muted={muted} serverMuted={serverMuted} deafened={deafened} isScreenSharing={isScreenSharing} onMuted={onMuted} onDeafened={onDeafened} onStartScreenShare={onStartScreenShare} onStopScreenShare={onStopScreenShare} onLeave={onLeaveVoice} />}
       <div className="flex h-14 items-center gap-2 border-t border-white/[.06] bg-rail px-2">
         <button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5">
-          <Avatar name={profile.displayName} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} />
+          <Avatar name={profile.displayName} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} statusColor={profile.customStatus ? profile.customStatusColor : undefined} />
           <span className="min-w-0">
             <span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span>
-            <span className={cn("block text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>
+            <span className={cn("block truncate text-[10px]", !profile.customStatus && (profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400"))} style={profile.customStatus ? { color: profile.customStatusColor } : undefined}>{profile.customStatus || t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>
           </span>
         </button>
         <button title={t.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200">
@@ -1750,6 +1809,8 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         banner: member?.banner ?? (isCurrentUser ? profile.banner : undefined),
         color: member?.avatarColor,
         status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
+        customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
+        customStatusColor: member?.customStatusColor ?? (isCurrentUser ? profile.customStatusColor : undefined),
         role: member?.role,
         bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined),
         isCurrentUser,
@@ -1839,6 +1900,8 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
     banner?: string | null;
     color?: string;
     status: PublicMemberStatus;
+    customStatus?: string;
+    customStatusColor?: string;
     role?: string;
     bio?: string;
     username?: string;
@@ -1857,6 +1920,8 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
       banner: member?.banner ?? (isCurrentUser ? profile.banner : null),
       color: member?.avatarColor,
       status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
+      customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
+      customStatusColor: member?.customStatusColor ?? (isCurrentUser ? profile.customStatusColor : undefined),
       role: member?.role,
       bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined),
       isCurrentUser,
@@ -2025,6 +2090,8 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
                             banner: participantData.banner,
                             color: participantData.color,
                             status: participantData.status,
+                            customStatus: participantData.customStatus,
+                            customStatusColor: participantData.customStatusColor,
                             role: participantData.role,
                             bio: participantData.bio,
                             isCurrentUser: participantData.isCurrentUser,
@@ -2318,6 +2385,7 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
     if (
       onSaveSettings({
         name,
+        description: server.description ?? "",
         maxAttachmentBytes: unlimited ? null : parsedLimit * MEBIBYTE,
         screenShareMaxResolution: maxResolution,
         screenShareMaxFrameRate: maxFrameRate,
@@ -2516,7 +2584,7 @@ function ChannelGroup({ title, canCreate, onCreate, children }: { title: string;
   );
 }
 
-function NoTextChannelView({ server, profile, access, connectionStatus, showMembers, onCreate, onToggleMembers, onSetRole, onKickMember }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; connectionStatus: ConnectionStatus; showMembers: boolean; onCreate: () => void; onToggleMembers: () => void; onSetRole: (userId: string, role: "administrator" | "member") => void; onKickMember: (userId: string) => void }): React.ReactElement {
+function NoTextChannelView({ server, profile, access, connectionStatus, showMembers, onCreate, onToggleMembers }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; connectionStatus: ConnectionStatus; showMembers: boolean; onCreate: () => void; onToggleMembers: () => void }): React.ReactElement {
   const { t } = useI18n();
   const canManageChannels = access?.permissions.includes("MANAGE_CHANNELS") === true;
   return (
@@ -2546,7 +2614,7 @@ function NoTextChannelView({ server, profile, access, connectionStatus, showMemb
             )}
           </div>
         </div>
-        {showMembers && <MemberList server={server} profile={profile} access={access} onSetRole={onSetRole} onKickMember={onKickMember} />}
+        {showMembers && <MemberList server={server} profile={profile} access={access} />}
       </div>
     </section>
   );
@@ -2663,6 +2731,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
     minute: "2-digit",
   }).format(new Date(message.createdAt));
   const [menuOpen, setMenuOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(message.content);
@@ -2682,6 +2751,8 @@ export function Message({ message, replyToMessage, member, members, profile, com
     banner: member?.banner ?? (own ? profile?.banner : undefined),
     color: message.authorColor,
     status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : ("offline" as const)),
+    customStatus: member?.customStatus ?? (own ? profile?.customStatus : undefined),
+    customStatusColor: member?.customStatusColor ?? (own ? profile?.customStatusColor : undefined),
     role: member?.role,
     bio: member?.bio ?? (own ? profile?.bio : undefined),
     isCurrentUser: own,
@@ -2692,11 +2763,13 @@ export function Message({ message, replyToMessage, member, members, profile, com
       const target = event.target as Node;
       if (menuRef.current?.contains(target) || menuTriggerRef.current?.contains(target)) return;
       setMenuOpen(false);
+      setDeleteConfirmOpen(false);
       menuTriggerRef.current?.blur();
     };
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       setMenuOpen(false);
+      setDeleteConfirmOpen(false);
       menuTriggerRef.current?.focus();
     };
     document.addEventListener("pointerdown", closeOutside);
@@ -2748,7 +2821,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
       className={cn("group relative flex min-w-0 gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0", message.replyToMessageId && "pt-7", message.kind && message.kind !== "chat" && "bg-amber-400/[.045] hover:bg-amber-400/[.075]", privateStackPosition === "first" && "rounded-b-none pb-1", privateStackPosition === "middle" && "rounded-none py-1", privateStackPosition === "last" && "rounded-t-none pt-1")}
     >
       {message.replyToMessageId && (
-        <button type="button" onClick={() => document.getElementById(`message-${message.replyToMessageId}`)?.scrollIntoView({ block: "center", behavior: "smooth" })} className="absolute left-14 right-2 top-1 flex min-w-0 items-center gap-1.5 rounded-md text-left text-[11px] leading-4 text-slate-500 transition hover:text-slate-300">
+        <button type="button" onClick={() => focusMessage(message.replyToMessageId!)} className="absolute left-14 right-2 top-1 flex min-w-0 items-center gap-1.5 rounded-md text-left text-[11px] leading-4 text-slate-500 transition hover:text-slate-300">
           <Reply className="size-3 shrink-0 text-violet-300/75" />
           <span className="max-w-32 shrink-0 truncate font-semibold text-violet-300/80">{replyToMessage?.authorName ?? t.chat.replyUnavailable}</span>
           {replyToMessage && <span className="truncate">{replyPreview}</span>}
@@ -2863,32 +2936,40 @@ export function Message({ message, replyToMessage, member, members, profile, com
             </button>
           )}
           {canDelete && (
-            <button ref={menuTriggerRef} type="button" title={t.chat.messageActions(message.authorName)} aria-label={t.chat.messageActions(message.authorName)} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((open) => !open)} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
+            <button ref={menuTriggerRef} type="button" title={t.chat.messageActions(message.authorName)} aria-label={t.chat.messageActions(message.authorName)} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => { setDeleteConfirmOpen(false); setMenuOpen((open) => !open); }} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
               <MoreHorizontal className="size-4" />
             </button>
           )}
         </div>
       )}
       {!editing && menuOpen && (
-        <div ref={menuRef} role="menu" className="glass absolute right-2 top-8 z-30 min-w-40 rounded-xl p-1.5 text-xs shadow-xl">
-          {canDelete && (
+        <div ref={menuRef} role="menu" className="message-action-menu glass absolute right-2 top-8 z-30 min-w-40 rounded-xl p-1.5 text-xs shadow-xl">
+          {canDelete && !deleteConfirmOpen && (
             <button
               type="button"
               role="menuitem"
-              onClick={() => {
-                if (window.confirm(t.chat.deleteConfirm)) onDelete(message);
-                setMenuOpen(false);
-              }}
+              onClick={() => setDeleteConfirmOpen(true)}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-red-300 hover:bg-red-400/10"
             >
               <Trash2 className="size-3.5" />
               {t.chat.delete}
             </button>
           )}
+          {canDelete && deleteConfirmOpen && <div role="alertdialog" aria-label={t.chat.deleteConfirm} className="w-56 p-1"><p className="px-1.5 pb-2 text-[11px] leading-4 text-slate-300">{t.chat.deleteConfirm}</p><div className="flex gap-1.5"><Button type="button" variant="secondary" size="sm" className="flex-1" onClick={() => setDeleteConfirmOpen(false)}>{t.common.cancel}</Button><Button type="button" variant="danger" size="sm" className="flex-1" onClick={() => { onDelete(message); setDeleteConfirmOpen(false); setMenuOpen(false); }}>{t.chat.delete}</Button></div></div>}
         </div>
       )}
     </article>
   );
+}
+
+export function focusMessage(messageId: string): void {
+  const target = document.getElementById(`message-${messageId}`);
+  if (!target) return;
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  target.classList.remove("message-jump-highlight");
+  void target.offsetWidth;
+  target.classList.add("message-jump-highlight");
+  window.setTimeout(() => target.classList.remove("message-jump-highlight"), 1_900);
 }
 
 function MessageReactionTrigger({ messageId, label, pickerLabel, pickLabel, onToggleReaction, open, onOpenChange }: { messageId: string; label: string; pickerLabel: string; pickLabel: (emoji: string) => string; onToggleReaction: (messageId: string, emoji: string) => void; open: boolean; onOpenChange: (open: boolean) => void }): React.ReactElement {
@@ -2933,6 +3014,8 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
         banner: member.banner,
         color: member.avatarColor,
         status: member.status,
+        customStatus: member.customStatus,
+        customStatusColor: member.customStatusColor,
         role: member.role,
         bio: member.bio,
       }}
@@ -2953,6 +3036,8 @@ function memberToMentionCandidate(member: MockMember): MentionCandidate {
     banner: member.banner ?? null,
     color: member.avatarColor,
     status: member.status,
+    customStatus: member.customStatus,
+    customStatusColor: member.customStatusColor,
     role: member.role,
     bio: member.bio,
     fingerprint: member.fingerprint,
@@ -3477,7 +3562,7 @@ function formatBytes(size: number, t: Dictionary): string {
   return t.attachments.mb((size / (1024 * 1024)).toFixed(1));
 }
 
-function MemberList({ server, profile, access, onSetRole, onKickMember }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; onSetRole: (userId: string, role: "administrator" | "member") => void; onKickMember: (userId: string) => void }): React.ReactElement {
+function MemberList({ server, profile, access }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess }): React.ReactElement {
   const { t } = useI18n();
   const members: MockMember[] = useMemo(
     () =>
@@ -3527,9 +3612,8 @@ function MemberList({ server, profile, access, onSetRole, onKickMember }: { serv
             {group.items.map((member) => {
               const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
               const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
-              const canKick = canKickServerMember(access?.permissions.includes("KICK_MEMBERS") === true, access?.role, member.serverRole, access?.id ?? profile.id, member.id);
               return (
-                <div key={member.id} className="group flex w-full items-center rounded-lg hover:bg-white/[.045]">
+                <div key={member.id} className="flex w-full items-center rounded-lg hover:bg-white/[.045]">
                   <ProfilePreview
                     side="left"
                     wrapperClassName="min-w-0 flex-1"
@@ -3543,12 +3627,14 @@ function MemberList({ server, profile, access, onSetRole, onKickMember }: { serv
                       banner: member.banner ?? (isCurrentUser ? profile.banner : undefined),
                       color: member.avatarColor,
                       status: member.status,
+                      customStatus: member.customStatus,
+                      customStatusColor: member.customStatusColor,
                       role: member.role,
                       bio: member.bio ?? (isCurrentUser ? profile.bio : undefined),
                       isCurrentUser,
                     }}
                   >
-                    <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
+                    <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} statusColor={member.customStatus ? member.customStatusColor : undefined} />
                     <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}>
                       <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">
                         {member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}
@@ -3556,19 +3642,9 @@ function MemberList({ server, profile, access, onSetRole, onKickMember }: { serv
                         {member.displayName}
                         {isChatMutedNow(member) && <MessageCircleOff aria-label={t.members.chatMuted} className="size-3 shrink-0 text-red-300" />}
                       </span>
-                      <span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span>
+                      <span className={cn("block truncate text-[10px]", !member.customStatus && (member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600"))} style={member.customStatus ? { color: member.customStatusColor } : undefined}>{member.customStatus || member.role}</span>
                     </span>
                   </ProfilePreview>
-                  {access?.permissions.includes("MANAGE_ROLES") && member.id !== access.id && member.serverRole !== "owner" && (
-                    <button title={member.serverRole === "administrator" ? t.members.removeAdmin : t.members.makeAdmin} aria-label={`${member.serverRole === "administrator" ? t.members.removeAdmin : t.members.makeAdmin}: ${member.displayName}`} onClick={() => onSetRole(member.id, member.serverRole === "administrator" ? "member" : "administrator")} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-violet-400/10 hover:text-violet-300 group-hover:opacity-100 focus:opacity-100">
-                      <UserCog className="size-3.5" />
-                    </button>
-                  )}
-                  {canKick && (
-                    <button title={t.members.kick} aria-label={t.members.kickOf(member.displayName)} onClick={() => onKickMember(member.id)} className="mr-1 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-red-400/10 hover:text-red-300 group-hover:opacity-100 focus:opacity-100">
-                      <UserMinus className="size-3.5" />
-                    </button>
-                  )}
                 </div>
               );
             })}
@@ -3670,6 +3746,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
         ? {
             ...server,
             name: snapshot.name,
+            description: snapshot.description,
             avatar: snapshot.avatar,
             banner: snapshot.banner,
             maxAttachmentBytes: snapshot.maxAttachmentBytes,
@@ -3677,6 +3754,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
             screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate,
             channels,
             members,
+            bannedMembers: snapshot.bannedMembers ?? [],
             ...(server.deployment
               ? {
                   deployment: {

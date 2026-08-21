@@ -28,6 +28,7 @@ let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
 let serverBundleProvider: ReleaseAwareServerBundleProvider;
 let clientUpdateManager: ClientUpdateManager;
+let pendingUpdateDecision: ((decision: "retry" | "quit") => void) | null = null;
 let attachmentPreviewDirectory: string;
 let bundleCleanupStarted = false;
 let clientUpdateInstalling = false;
@@ -228,8 +229,8 @@ function createUpdateWindow(): void {
     minimizable: false,
     maximizable: false,
     closable: false,
-    backgroundColor: "#090b12",
-    title: "Обновление OpenCord",
+    backgroundColor: "#212327",
+    title: "OpenCord Update",
     webPreferences: {
       preload: path.join(__dirname, "update-preload.js"),
       contextIsolation: true,
@@ -268,18 +269,13 @@ async function prepareAndInstallClientUpdate(): Promise<void> {
 }
 
 async function showRequiredUpdateError(message: string): Promise<"retry" | "quit"> {
-  const options = {
-    type: "error" as const,
-    title: "Не удалось обновить OpenCord",
-    message: "Для запуска OpenCord необходимо проверить и установить актуальную версию.",
-    detail: message,
-    buttons: ["Повторить", "Выйти"],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  };
-  const result = updateWindow ? await dialog.showMessageBox(updateWindow, options) : await dialog.showMessageBox(options);
-  return result.response === 0 ? "retry" : "quit";
+  if (!updateWindow || updateWindow.isDestroyed()) createUpdateWindow();
+  const current = clientUpdateManager.getState();
+  const errorState: ClientUpdateState = { status: "error", currentVersion: current.currentVersion, channel: current.channel, message };
+  emitClientUpdateState(errorState);
+  updateWindow?.show();
+  updateWindow?.focus();
+  return new Promise((resolve) => { pendingUpdateDecision = resolve; });
 }
 
 async function passStartupUpdateGate(): Promise<void> {
@@ -395,6 +391,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.updateCheck, () => clientUpdateManager.check());
   ipcMain.handle(IPC.updateDownload, () => clientUpdateManager.download());
   ipcMain.handle(IPC.updateInstall, () => prepareAndInstallClientUpdate());
+  ipcMain.handle(IPC.updateGateDecision, (event, decision: unknown) => {
+    if (!updateWindow || event.sender.id !== updateWindow.webContents.id || (decision !== "retry" && decision !== "quit")) throw new Error("Недоверенный источник решения об обновлении");
+    const resolve = pendingUpdateDecision;
+    pendingUpdateDecision = null;
+    resolve?.(decision);
+  });
 }
 
 if (process.env.NODE_ENV === "test" && process.env.OPENCORD_TEST_USER_DATA) {

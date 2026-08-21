@@ -351,6 +351,37 @@ it("forbids the sender from reacting to their own anonymous private message", as
     expect(offlineClientDeletion.serverId).toBe(owner.snapshot.server.id);
   }, 15_000);
 
+  it("blocks a banned identity until an administrator removes the ban", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const memberKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Владелец", ownerKeys);
+    const member = await connectAndAuthenticate(url, "Участник", memberKeys);
+
+    const bannedSnapshot = waitForEventMatching(owner.socket, "server.snapshot", (event) => event.server.bannedMembers?.some((item) => item.id === member.userId) === true);
+    const memberClosed = once(member.socket, "close");
+    owner.socket.send(JSON.stringify({ type: "member.ban", requestId: randomUUID(), userId: member.userId, durationMinutes: null }));
+    expect((await bannedSnapshot).server.bannedMembers).toContainEqual(expect.objectContaining({ id: member.userId, displayName: "Участник", expiresAt: null }));
+    await memberClosed;
+
+    const bannedAttempt = await connectAndExpectBanned(url, "Участник", memberKeys);
+    expect(bannedAttempt).toMatchObject({ type: "error", code: "BANNED" });
+
+    const unbannedSnapshot = waitForEventMatching(owner.socket, "server.snapshot", (event) => event.server.bannedMembers?.length === 0);
+    owner.socket.send(JSON.stringify({ type: "member.unban", requestId: randomUUID(), userId: member.userId }));
+    await unbannedSnapshot;
+    const returned = await connectAndAuthenticate(url, "Участник", memberKeys);
+    expect(returned.userId).toBe(member.userId);
+    owner.socket.close();
+    returned.socket.close();
+  }, 15_000);
+
   it("allows only the owner and role-superior administrators to server-mute voice members", async () => {
     const ownerKeys = generateKeyPairSync("ed25519");
     const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
@@ -572,6 +603,16 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   if (snapshotEvent.type !== "server.snapshot") throw new Error("Snapshot expected");
   if (authenticated.type !== "auth.ok") throw new Error("Auth ok expected");
   return { socket, snapshot: snapshotEvent, userId: authenticated.userId, sessionToken: authenticated.sessionToken };
+}
+
+async function connectAndExpectBanned(url: string, displayName: string, keys: { publicKey: KeyObject; privateKey: KeyObject }): Promise<Extract<ServerEvent, { type: "error" }>> {
+  const socket = new WebSocket(url);
+  const challenge = await waitForEvent(socket, "auth.challenge");
+  if (challenge.type !== "auth.challenge") throw new Error("Challenge expected");
+  const signature = sign(null, Buffer.from(challenge.challenge, "base64"), keys.privateKey).toString("base64");
+  const rejected = waitForEvent(socket, "error");
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey: exportPublicKey(keys.publicKey), signature, profile: { username: "member", discriminator: "1234", displayName, avatar: null } }));
+  return rejected;
 }
 
 function usernameFromDisplayName(displayName: string): string {

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
@@ -129,7 +129,6 @@ describe("ClientApp", () => {
     const user = userEvent.setup();
     const onEdit = vi.fn(() => true);
     const onDelete = vi.fn(() => true);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const message = { id: "message-1", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#7c5cff", content: "До правки", createdAt: new Date().toISOString(), editedAt: null };
     render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={onEdit} onDelete={onDelete} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
     expect(screen.getByText("Лина")).not.toHaveAttribute("style");
@@ -142,7 +141,9 @@ describe("ClientApp", () => {
 
     await user.click(screen.getByRole("button", { name: /Действия с сообщением/ }));
     await user.click(screen.getByRole("menuitem", { name: "Удалить" }));
-    expect(confirm).toHaveBeenCalledOnce();
+    const confirmation = screen.getByRole("alertdialog", { name: "Удалить это сообщение?" });
+    expect(onDelete).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole("button", { name: "Удалить" }));
     expect(onDelete).toHaveBeenCalledWith(message);
   });
 
@@ -271,7 +272,7 @@ describe("ClientApp", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Максимальная частота кадров демонстрации экрана" }), { target: { value: "0" } });
     expect(screen.getAllByText("∞")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15 });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", description: "", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15 });
   });
 
   it("saves a manually entered bounded attachment limit", async () => {
@@ -284,7 +285,7 @@ describe("ClientApp", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Максимальное качество демонстрации экрана" }), { target: { value: "3" } });
     expect(screen.getAllByText("Источник")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", description: "", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
   });
 
   it("shows server settings read-only to an administrator", () => {
@@ -529,7 +530,7 @@ describe("ClientApp", () => {
     render(<ClientApp />);
     await screen.findByText("Тестовый сервер");
     await user.click(screen.getByRole("button", { name: "Управление сервером: Тестовый сервер" }));
-    expect(await screen.findByRole("heading", { name: "Выйти с сервера?" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Тестовый сервер" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Выйти с сервера" }));
 
     expect(await screen.findByText("Следующий сервер")).toBeInTheDocument();
@@ -1055,6 +1056,18 @@ describe("ClientApp", () => {
     expect(screen.getByText("Ответ пользователю Марк")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Отменить ответ" }));
     expect(onCancelReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls to and softly highlights a replied-to message", () => {
+    const target = document.createElement("div");
+    target.id = "message-reply-source";
+    target.scrollIntoView = vi.fn();
+    document.body.append(target);
+
+    focusMessage("reply-source");
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    expect(target).toHaveClass("message-jump-highlight");
   });
 
   it("keeps existing reaction chips disabled while disconnected", async () => {

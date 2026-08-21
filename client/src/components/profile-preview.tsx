@@ -19,6 +19,8 @@ export interface PreviewProfile {
   banner?: string | null;
   color?: string;
   status?: PreviewStatus;
+  customStatus?: string;
+  customStatusColor?: string;
   role?: string;
   bio?: string;
   isCurrentUser?: boolean;
@@ -109,13 +111,13 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
           {profile.banner && <img src={profile.banner} alt="" className="absolute inset-0 size-full object-cover" />}
         </div>
         <div className="-mt-9 flex shrink-0 items-end justify-between px-4">
-          <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
+          <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} statusColor={profile.customStatus ? profile.customStatusColor : undefined} /></div>
           {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">{t.preview.thisIsYou}</span>}
         </div>
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 pb-4">
           <h3 className="mt-2 truncate text-base font-bold text-white">{profile.displayName}</h3>
           {tag && <p className="mt-0.5 truncate text-xs font-medium text-slate-400">{tag}</p>}
-          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{t.statuses[status]}</span></div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", !profile.customStatus && statusColors[status])} style={profile.customStatus ? { backgroundColor: profile.customStatusColor } : undefined} /><span>{profile.customStatus || t.statuses[status]}</span></div>
           {profile.fingerprint && <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-white/[.06] bg-black/15 px-2.5 py-1.5">
             <Fingerprint className="size-3.5 shrink-0 text-violet-300/70" />
             <code title={t.preview.identityCodeHint} className="min-w-0 flex-1 truncate text-[10px] tracking-wide text-slate-400">{profile.fingerprint}</code>

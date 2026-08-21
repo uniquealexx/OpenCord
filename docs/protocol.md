@@ -1,6 +1,8 @@
-# OpenCord Protocol v29 (English)
+# OpenCord Protocol v34 (English)
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
+
+Protocol v34 adds an optional server description of up to 160 characters and an optional custom user status of up to 32 characters with a `#RRGGBB` color. These fields travel through `server.settings.update`, `auth.respond.profile`, snapshots, and `member.updated` events.
 
 ## Transport
 
@@ -28,7 +30,7 @@ The name, description, avatar, and banner are returned in `server.snapshot.membe
 
 The status is stored locally and re-sent on the next connection. The server keeps presence only in the memory of the active WebSocket connection: `online`, `idle`, and `dnd` are visible to other members as "Online", "Idle", and "Do Not Disturb". `invisible` is never revealed to other clients and is converted by the server into a public `offline`; after the last connection is closed, any user also becomes `offline`.
 
-On explicit leave, the client sends `server.leave`. The server clears the user's description, avatar, and banner; for a regular member it also removes the membership and broadcasts `member.removed`. The owner is not removed from membership without a transfer of ownership or deletion of the server, but their public media are still cleared and the other clients receive `member.updated`. Historical messages are retained, but no longer contain the removed avatar on the next load.
+On explicit leave, the client sends `server.leave`. For a regular member the server removes membership, broadcasts `member.removed`, and retains the public profile for seven days so recent history remains readable. After the retention deadline a background cleanup replaces the name with `Unknown user` semantics and clears username, discriminator, description, avatar, and banner, while preserving the cryptographic identity and all messages. Rejoining before or after cleanup restores the public profile from the authenticated client. The owner is not removed without an ownership transfer or server deletion.
 
 ## Attachments
 
@@ -90,6 +92,8 @@ The client sends:
 - `channel.delete`;
 - `member.role.set`;
 - `member.kick`;
+- `member.ban`;
+- `member.unban`;
 - `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
 - `server.delete`;
 - `ping`.
@@ -102,13 +106,15 @@ The server sends:
 - `history.result`;
 - `message.search.result`;
 - `message.created`, `message.updated`, `message.deleted`;
-- `member.updated`, `member.removed`;
+- `member.updated`, `member.removed`, `profile.anonymized`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
 `channel.create`, `channel.update`, and `channel.delete` require the `MANAGE_CHANNELS` permission, which the owner and administrators hold. The type of an existing channel is not changed; when a channel is deleted, PostgreSQL cascades deletion to its messages, after which the server broadcasts a new `server.snapshot` to all clients.
 
-`member.kick` removes the member's membership and public avatar, ends their voice and WebSocket sessions, and broadcasts `member.removed`. This is a removal, not a ban: the user may later manually add the server address again. The owner can kick administrators and regular members, an administrator only regular members; one cannot kick themselves or the owner.
+`member.kick` removes membership, ends voice and WebSocket sessions, and broadcasts `member.removed`. The departed profile follows the same seven-day retention and anonymization policy as an explicit leave. This is a removal, not a ban: the user may later manually add the server address again. The owner can kick administrators and regular members, an administrator only regular members; one cannot kick themselves or the owner.
+
+`member.ban` includes `durationMinutes`: one of `10`, `30`, `60`, `360`, `720`, `1440`, `4320`, `10080`, `43200`, or `null` for a permanent ban. It blocks the target cryptographic identity, removes membership, ends voice and WebSocket sessions, and rejects authentication with `BANNED` until the deadline. Expired bans are removed automatically; `member.unban` removes one early. Banned profiles follow the same seven-day retention policy, so a long or permanent ban eventually displays as an unknown user while its key fingerprint remains available. Only clients with `KICK_MEMBERS` receive `server.snapshot.bannedMembers`, including `expiresAt`; regular members receive an empty list.
 
 A voice channel contains `participantLimit`: values `1–25` define a finite capacity, while `0` means an experimental mode without a limit (`∞` in the client). Text channels always pass `null`. The limit is checked by OpenCord Server before issuing a LiveKit token, so a change applies to an already created room without recreating it.
 
@@ -130,9 +136,11 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v29 (Русский)
+# OpenCord Protocol v34 (Русский)
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
+
+В протоколе v34 добавлены необязательное описание сервера длиной до 160 символов и пользовательский статус до 32 символов с цветом `#RRGGBB`. Эти поля передаются через `server.settings.update`, `auth.respond.profile`, snapshot и события `member.updated`.
 
 ## Транспорт
 
@@ -160,7 +168,7 @@ Challenge одноразовый в рамках соединения. Прив�
 
 Статус сохраняется локально и повторно отправляется при следующем подключении. Сервер держит присутствие только в памяти активного WebSocket-соединения: `online`, `idle` и `dnd` видны другим участникам как «В сети», «Недоступен» и «Не беспокоить». `invisible` никогда не раскрывается другим клиентам и преобразуется сервером в публичный `offline`; после закрытия последнего соединения любой пользователь также становится `offline`.
 
-При явном выходе клиент отправляет `server.leave`. Сервер очищает описание, аватар и шапку пользователя; для обычного участника также удаляет членство и рассылает `member.removed`. Владелец не удаляется из членства без передачи владения или удаления сервера, но его публичные медиа всё равно очищаются и остальные клиенты получают `member.updated`. Исторические сообщения сохраняются, однако больше не содержат удалённый аватар при следующей загрузке.
+При явном выходе клиент отправляет `server.leave`. Для обычного участника сервер удаляет членство, рассылает `member.removed` и ещё семь дней хранит публичный профиль, чтобы недавняя история оставалась читаемой. После дедлайна фоновая очистка меняет имя на «Неизвестный пользователь» и удаляет username, дискриминатор, описание, аватар и шапку, сохраняя криптографическую идентичность и все сообщения. Повторный вход до или после очистки восстанавливает публичный профиль из авторизованного клиента. Владелец не удаляется без передачи владения или удаления сервера.
 
 ## Вложения
 
@@ -222,6 +230,8 @@ Electron-клиент показывает изображения до 10 МБ �
 - `channel.delete`;
 - `member.role.set`;
 - `member.kick`;
+- `member.ban`;
+- `member.unban`;
 - `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
 - `server.delete`;
 - `ping`.
@@ -234,13 +244,15 @@ Electron-клиент показывает изображения до 10 МБ �
 - `history.result`;
 - `message.search.result`;
 - `message.created`, `message.updated`, `message.deleted`;
-- `member.updated`, `member.removed`;
+- `member.updated`, `member.removed`, `profile.anonymized`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
 `channel.create`, `channel.update` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`.
 
-`member.kick` удаляет членство и публичный аватар участника, завершает его голосовую и WebSocket-сессии и рассылает `member.removed`. Это исключение, а не бан: пользователь может позднее вручную добавить адрес сервера снова. Владелец может исключать администраторов и обычных участников, администратор — только обычных участников; исключить себя или владельца нельзя.
+`member.kick` удаляет членство, завершает голосовую и WebSocket-сессии и рассылает `member.removed`. Профиль исключённого участника следует той же политике семидневного хранения и последующего обезличивания, что и при самостоятельном выходе. Это исключение, а не бан: пользователь может позднее вручную добавить адрес сервера снова. Владелец может исключать администраторов и обычных участников, администратор — только обычных участников; исключить себя или владельца нельзя.
+
+`member.ban` содержит `durationMinutes`: `10`, `30`, `60`, `360`, `720`, `1440`, `4320`, `10080`, `43200` либо `null` для перманентного бана. Событие блокирует криптографическую идентичность, удаляет членство, завершает голосовую и WebSocket-сессии и до дедлайна отклоняет авторизацию с кодом `BANNED`. Истёкшие баны снимаются автоматически; `member.unban` снимает бан досрочно. Профиль забаненного следует той же политике семидневного хранения, поэтому при долгом или перманентном бане он становится «Неизвестным пользователем», но отпечаток ключа сохраняется. Поле `server.snapshot.bannedMembers` с `expiresAt` получают только клиенты с правом `KICK_MEMBERS`; обычным участникам передаётся пустой список.
 
 Голосовой канал содержит `participantLimit`: значения `1–25` задают конечную вместимость, а `0` означает экспериментальный режим без ограничения (`∞` в клиенте). Текстовые каналы всегда передают `null`. Лимит проверяет OpenCord Server перед выдачей LiveKit-токена, поэтому изменение применяется к уже созданной комнате без её пересоздания.
 
@@ -262,9 +274,11 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v29 (中文)
+# OpenCord 协议 v34 (中文)
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
+
+协议 v34 新增最长 160 个字符的可选服务器描述，以及最长 32 个字符并带有 `#RRGGBB` 颜色的可选用户自定义状态。这些字段通过 `server.settings.update`、`auth.respond.profile`、快照和 `member.updated` 事件传输。
 
 ## 传输
 
@@ -292,7 +306,7 @@ Challenge 在单个连接内是一次性的。私钥不会出现在任何网络�
 
 状态在本地保存，并在下次连接时重新发送。服务器仅在活动 WebSocket 连接的内存中维护在线状态：`online`、`idle` 和 `dnd` 对其他成员显示为「在线」「空闲」和「请勿打扰」。`invisible` 从不向其他客户端透露，并由服务器转换为公开的 `offline`；在最后一个连接关闭后，任何用户也会变为 `offline`。
 
-在明确退出时，客户端发送 `server.leave`。服务器清除用户的描述、头像和横幅；对于普通成员，还会删除其成员资格并广播 `member.removed`。所有者在未转让所有权或删除服务器的情况下不会被移出成员资格，但其公开媒体仍会被清除，其他客户端会收到 `member.updated`。历史消息会保留，但在下次加载时不再包含已删除的头像。
+明确退出时，客户端发送 `server.leave`。对于普通成员，服务器会移除成员资格、广播 `member.removed`，并保留公开资料七天，以便近期历史记录仍可阅读。保留期结束后，后台清理会将名称替换为“未知用户”，并清除用户名、识别码、简介、头像和横幅，同时保留加密身份及所有消息。用户在清理前后重新加入时，公开资料都会从已认证客户端恢复。所有者在未转让所有权或删除服务器的情况下不会被移除。
 
 ## 附件
 
@@ -354,6 +368,8 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `channel.delete`;
 - `member.role.set`;
 - `member.kick`;
+- `member.ban`;
+- `member.unban`;
 - `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
 - `server.delete`;
 - `ping`.
@@ -366,13 +382,15 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `history.result`;
 - `message.search.result`;
 - `message.created`, `message.updated`, `message.deleted`;
-- `member.updated`, `member.removed`;
+- `member.updated`, `member.removed`, `profile.anonymized`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
 `channel.create`、`channel.update` 和 `channel.delete` 需要 `MANAGE_CHANNELS` 权限，所有者和管理员拥有该权限。现有频道的类型不会改变；删除频道时，PostgreSQL 会级联删除其消息，之后服务器向所有客户端广播新的 `server.snapshot`。
 
-`member.kick` 会移除成员的成员资格和公开头像，结束其语音和 WebSocket 会话，并广播 `member.removed`。这是一种移除而非封禁：用户之后可以再次手动添加服务器地址。所有者可以移除管理员和普通成员，管理员只能移除普通成员；不能移除自己或所有者。
+`member.kick` 会移除成员资格、结束语音和 WebSocket 会话，并广播 `member.removed`。被移除成员的资料遵循与主动退出相同的七天保留及匿名化策略。这是一种移除而非封禁：用户之后可以再次手动添加服务器地址。所有者可以移除管理员和普通成员，管理员只能移除普通成员；不能移除自己或所有者。
+
+`member.ban` 包含 `durationMinutes`：可为 `10`、`30`、`60`、`360`、`720`、`1440`、`4320`、`10080`、`43200`，或使用 `null` 表示永久封禁。它会封禁目标加密身份、移除成员资格、结束语音和 WebSocket 会话，并在截止时间前以 `BANNED` 拒绝认证。到期封禁会自动删除，`member.unban` 可提前解除。被封禁资料同样遵循七天保留策略，因此长期或永久封禁最终会显示为未知用户，但密钥指纹仍会保留。只有拥有 `KICK_MEMBERS` 权限的客户端会在包含 `expiresAt` 的 `server.snapshot.bannedMembers` 中收到封禁列表；普通成员收到空列表。
 
 语音频道包含 `participantLimit`：`1–25` 的值定义了有限的容量，而 `0` 表示无限制的实验模式（客户端中显示为 `∞`）。文本频道始终传递 `null`。OpenCord Server 在颁发 LiveKit 令牌之前会检查该限制，因此更改会应用到已创建的房间，而无需重新创建它。
 

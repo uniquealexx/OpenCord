@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld("openCordUpdateGate", {
     ipcRenderer.on(IPC.updateStateChanged, handler);
     return () => ipcRenderer.removeListener(IPC.updateStateChanged, handler);
   },
+  retry: (): Promise<void> => ipcRenderer.invoke(IPC.updateGateDecision, "retry") as Promise<void>,
+  quit: (): Promise<void> => ipcRenderer.invoke(IPC.updateGateDecision, "quit") as Promise<void>,
 });

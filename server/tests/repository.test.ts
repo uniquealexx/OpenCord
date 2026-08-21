@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PGliteDatabase } from "../src/database/database";
 import { DEFAULT_SERVER_ID, runMigrations } from "../src/database/migrations";
@@ -16,10 +16,10 @@ beforeEach(async () => {
 afterEach(async () => database.close());
 
 describe("ChatRepository", () => {
-  it("persists server name, attachment limit and screen-share limits", async () => {
-    expect(await repository.getServer()).toMatchObject({ name: "OpenCord Local", maxAttachmentBytes: 10 * 1024 * 1024, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
-    await repository.updateServerSettings({ name: "Команда", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
-    expect(await repository.getServer()).toMatchObject({ name: "Команда", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
+  it("persists server name, description, attachment limit and screen-share limits", async () => {
+    expect(await repository.getServer()).toMatchObject({ name: "OpenCord Local", description: "", maxAttachmentBytes: 10 * 1024 * 1024, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
+    await repository.updateServerSettings({ name: "Команда", description: "Сервер команды", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
+    expect(await repository.getServer()).toMatchObject({ name: "Команда", description: "Сервер команды", maxAttachmentBytes: 2000 * 1024 * 1024, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 });
     await repository.updateServerSettings({ name: "Команда без лимита", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 });
     expect(await repository.getServer()).toMatchObject({ name: "Команда без лимита", maxAttachmentBytes: null, screenShareMaxResolution: 480, screenShareMaxFrameRate: 15 });
     await repository.updateServerSettings({ name: "Источник", maxAttachmentBytes: null, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
@@ -154,6 +154,30 @@ describe("ChatRepository", () => {
     expect(await repository.setMemberRole("owner", "member")).toBe("owner");
   });
 
+  it("persists bans by identity and removes them explicitly", async () => {
+    const ownerKey = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).toString("base64");
+    const memberKey = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).toString("base64");
+    await repository.upsertUser("owner", ownerKey, { username: "owner", discriminator: "0001", displayName: "Владелец", avatar: null });
+    await repository.upsertUser("member", memberKey, { username: "member", discriminator: "0002", displayName: "Участник", avatar: null });
+    await repository.ensureMembership("owner", ownerKey, ownerKey);
+    await repository.ensureMembership("member", memberKey, ownerKey);
+
+    expect(await repository.banMember("member", "owner", 30)).toBe(true);
+    expect(await repository.isBanned("member")).toBe(true);
+    expect((await repository.listBannedMembers())[0]).toMatchObject({ id: "member", displayName: "Участник", bannedBy: "owner", expiresAt: expect.any(String) });
+    await expect(repository.getMemberRole("member")).rejects.toThrow("Server membership is missing");
+    await database.query("UPDATE server_bans SET expires_at = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "member"]);
+    expect(await repository.isBanned("member")).toBe(false);
+    expect(await repository.listBannedMembers()).toEqual([]);
+
+    await repository.ensureMembership("member", memberKey, ownerKey);
+    expect(await repository.banMember("member", "owner", null)).toBe(true);
+    expect((await repository.listBannedMembers())[0]).toMatchObject({ id: "member", expiresAt: null });
+    expect(await repository.unbanMember("member")).toBe(true);
+    expect(await repository.isBanned("member")).toBe(false);
+    expect(await repository.listBannedMembers()).toEqual([]);
+  });
+
   it("stores and returns the server banner", async () => {
     const banner = "data:image/webp;base64,AQ==";
     expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["018_server_banner"])).toHaveLength(1);
@@ -164,22 +188,38 @@ describe("ChatRepository", () => {
     expect((await repository.getServer()).banner).toBeNull();
   });
 
-  it("updates a profile in place and clears its public media when a member leaves", async () => {
+  it("retains a departed profile for seven days, then anonymizes it while preserving the key", async () => {
     const avatar = "data:image/webp;base64,AA==";
     const banner = "data:image/webp;base64,AQ==";
     expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["012_user_profile_bio"])).toHaveLength(1);
     expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["013_user_profile_banner"])).toHaveLength(1);
     await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", displayName: "Участник", avatar: null });
     await repository.ensureMembership("member", "member-public-key", undefined, true);
-    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание для всех", avatar, banner })).toBe(true);
-    expect(await repository.getMember("member", "dnd")).toMatchObject({ username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание для всех", avatar, banner, status: "dnd" });
+    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание для всех", avatar, banner, customStatus: "Пишу релиз", customStatusColor: "#34d399" })).toBe(true);
+    expect(await repository.getMember("member", "dnd")).toMatchObject({ username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание для всех", avatar, banner, status: "dnd", customStatus: "Пишу релиз", customStatusColor: "#34d399" });
     expect(await repository.leaveServer("member")).toBe("owner");
-    expect(await repository.getMember("member", "offline")).toMatchObject({ bio: "", avatar: null, banner: null, role: "owner" });
+    expect(await repository.getMember("member", "offline")).toMatchObject({ displayName: "Новое имя", bio: "Описание для всех", avatar, banner, role: "owner" });
 
     await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", displayName: "Второй", avatar });
     await repository.ensureMembership("second", "second-public-key");
+    const textChannel = (await repository.getServer()).channels.find((channel) => channel.kind === "text");
+    if (!textChannel) throw new Error("Text channel is missing");
+    await repository.createMessage(randomUUID(), textChannel.id, "second", "Сообщение остаётся");
     expect(await repository.leaveServer("second")).toBe("member");
     expect((await repository.listMembers(new Map())).some((member) => member.id === "second")).toBe(false);
+    expect((await database.query<{ display_name: string; avatar: string | null }>("SELECT display_name, avatar FROM users WHERE id = $1", ["second"]))[0]).toMatchObject({ display_name: "Второй", avatar });
+    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorName: "Второй", authorAvatar: avatar, content: "Сообщение остаётся" });
+    expect(await database.query<{ reason: string }>("SELECT reason FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"])).toEqual([{ reason: "leave" }]);
+
+    await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"]);
+    expect(await repository.performRetentionCleanup()).toEqual({ anonymizedUserIds: ["second"], expiredBanUserIds: [] });
+    expect((await database.query<{ public_key: string; display_name: string; username: string | null; avatar: string | null }>("SELECT public_key, display_name, username, avatar FROM users WHERE id = $1", ["second"]))[0]).toEqual({ public_key: "second-public-key", display_name: "Неизвестный пользователь", username: null, avatar: null });
+    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorId: "second", authorName: "Неизвестный пользователь", authorAvatar: null, content: "Сообщение остаётся" });
+
+    await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", displayName: "Вернувшийся", avatar });
+    await repository.ensureMembership("second", "second-public-key");
+    expect(await repository.getMember("second", "online")).toMatchObject({ displayName: "Вернувшийся", avatar });
+    expect(await database.query("SELECT user_id FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"])).toEqual([]);
   });
 
   it("keeps a deletion tombstone across restarts and clears it for a new deployment", async () => {
