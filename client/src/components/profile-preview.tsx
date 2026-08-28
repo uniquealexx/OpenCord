@@ -11,8 +11,7 @@ import type { PublicMemberStatus } from "@opencord/shared";
 type PreviewStatus = PublicMemberStatus;
 
 export interface PreviewProfile {
-  displayName: string;
-  username?: string;
+  username: string;
   discriminator?: string;
   fingerprint?: string;
   avatar?: string | null;
@@ -20,11 +19,13 @@ export interface PreviewProfile {
   color?: string;
   status?: PreviewStatus;
   customStatus?: string;
-  customStatusColor?: string;
+  customStatusEmoji?: string;
   role?: string;
   bio?: string;
   isCurrentUser?: boolean;
 }
+
+const emojiFont = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
 
 const statusColors: Record<PreviewStatus, string> = {
   online: "bg-emerald-400",
@@ -100,24 +101,26 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
   }, [open, positioned, side]);
 
   const status = profile.status ?? "offline";
-  const tag = profile.username ? `@${profile.username}${profile.discriminator ? `#${profile.discriminator}` : ""}` : null;
+  // Тег с дискриминатором показывается только здесь и в настройках профиля.
+  const tag = `@${profile.username}${profile.discriminator ? `#${profile.discriminator}` : ""}`;
   return <span className={cn("relative inline-flex", wrapperClassName)}>
-    <button ref={triggerRef} type="button" aria-label={label ?? t.preview.openProfile(profile.displayName)} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
+    <button ref={triggerRef} type="button" aria-label={label ?? t.preview.openProfile(profile.username)} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
     {open && typeof document !== "undefined" && createPortal(
-      <div ref={cardRef} role="dialog" aria-label={t.preview.profile(profile.displayName)} className="glass fixed z-[100] flex w-[300px] max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={{ left: position.left, top: position.top, visibility: positioned ? undefined : "hidden" }}>
+      <div ref={cardRef} role="dialog" aria-label={t.preview.profile(profile.username)} className="glass fixed z-[100] flex w-[300px] max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={{ left: position.left, top: position.top, visibility: positioned ? undefined : "hidden" }}>
         <div data-testid="profile-banner" className="relative h-[96px] shrink-0 overflow-hidden bg-primary/15">
           {/* Public profile banners are compact data URLs supplied by OpenCord Server. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {profile.banner && <img src={profile.banner} alt="" className="absolute inset-0 size-full object-cover" />}
         </div>
         <div className="-mt-9 flex shrink-0 items-end justify-between px-4">
-          <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.displayName} image={profile.avatar} color={profile.color} size="xl" status={status} statusColor={profile.customStatus ? profile.customStatusColor : undefined} /></div>
+          <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.username} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
           {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">{t.preview.thisIsYou}</span>}
         </div>
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          <h3 className="mt-2 truncate text-base font-bold text-white">{profile.displayName}</h3>
-          {tag && <p className="mt-0.5 truncate text-xs font-medium text-slate-400">{tag}</p>}
-          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", !profile.customStatus && statusColors[status])} style={profile.customStatus ? { backgroundColor: profile.customStatusColor } : undefined} /><span>{profile.customStatus || t.statuses[status]}</span></div>
+          <h3 className="mt-2 truncate text-base font-bold text-white">{profile.username}</h3>
+          <p className="mt-0.5 truncate text-xs font-medium text-slate-400">{tag}</p>
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{t.statuses[status]}</span></div>
+          {profile.customStatus && <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-slate-300">{profile.customStatusEmoji && <span className="shrink-0 text-sm leading-5" style={{ fontFamily: emojiFont }}>{profile.customStatusEmoji}</span>}<span className="min-w-0 break-words">{profile.customStatus}</span></p>}
           {profile.fingerprint && <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-white/[.06] bg-black/15 px-2.5 py-1.5">
             <Fingerprint className="size-3.5 shrink-0 text-violet-300/70" />
             <code title={t.preview.identityCodeHint} className="min-w-0 flex-1 truncate text-[10px] tracking-wide text-slate-400">{profile.fingerprint}</code>

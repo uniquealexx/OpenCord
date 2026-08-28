@@ -183,6 +183,16 @@ function createWindow(): void {
     const allowed = developmentUrl ? url.startsWith(developmentUrl) : url.startsWith("file://");
     if (!allowed) event.preventDefault();
   });
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    // Chromium's built-in zoom accelerator only matches the unshifted "="
+    // key, so Ctrl+Plus (which sends Shift on most layouts) is silently
+    // ignored while Ctrl+Minus works. Handle it explicitly.
+    if (input.type !== "keyDown" || input.alt || (input.key !== "+" && input.key !== "=")) return;
+    const zoomModifier = process.platform === "darwin" ? input.meta : input.control;
+    if (!zoomModifier) return;
+    event.preventDefault();
+    mainWindow?.webContents.setZoomLevel(mainWindow.webContents.getZoomLevel() + 0.5);
+  });
 
   if (developmentUrl) {
     void mainWindow.loadURL(developmentUrl);

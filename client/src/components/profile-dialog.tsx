@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CUSTOM_STATUS_MAX_LENGTH, userAvatarSchema, userBannerSchema, type UserStatus } from "@opencord/shared";
-import { AtSign, Camera, Check, Copy, Crop, Fingerprint, ImagePlus, LoaderCircle, Trash2 } from "lucide-react";
+import { AtSign, Camera, Check, Copy, Crop, Fingerprint, ImagePlus, LoaderCircle, Trash2, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
+import { EmojiPicker } from "@/components/emoji-picker";
 import { ImageCropDialog } from "@/components/image-crop-dialog";
 import { Button } from "@/components/ui/button";
-import { ColorPicker } from "@/components/ui/color-picker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,16 +16,17 @@ import { compressUserBanner } from "@/lib/user-banner-image";
 import { imageDataUrlToFile, type ImageCrop } from "@/lib/image-crop";
 import type { LocalProfile } from "@/shared/state";
 
+const emojiFont = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+
 export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile: LocalProfile; open: boolean; onOpenChange: (open: boolean) => void; onSave: (profile: LocalProfile) => void }): React.ReactElement {
   const { t } = useI18n();
   const [username, setUsername] = useState(profile.username);
-  const [name, setName] = useState(profile.displayName);
   const [bio, setBio] = useState(profile.bio);
   const [avatar, setAvatar] = useState(profile.avatar);
   const [banner, setBanner] = useState(profile.banner);
   const [status, setStatus] = useState<UserStatus>(profile.status ?? "online");
   const [customStatus, setCustomStatus] = useState(profile.customStatus ?? "");
-  const [customStatusColor, setCustomStatusColor] = useState(profile.customStatusColor ?? "#4d6bfe");
+  const [customStatusEmoji, setCustomStatusEmoji] = useState(profile.customStatusEmoji ?? "");
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState("");
@@ -91,13 +92,13 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
 
   async function submit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
-    if (name.trim().length < 2 || !usernameValid) return;
+    if (!usernameValid) return;
     setError("");
     setCompressing(true);
     try {
       const nextAvatar = avatar && !userAvatarSchema.safeParse(avatar).success ? await compressUserAvatar(await (await fetch(avatar)).blob()) : avatar;
       const nextBanner = banner && !userBannerSchema.safeParse(banner).success ? await compressUserBanner(await (await fetch(banner)).blob()) : banner;
-      onSave({ ...profile, username: username.trim().toLowerCase(), displayName: name.trim(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusColor });
+      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "" });
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t.profile.avatarFailed);
@@ -123,7 +124,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             <p className="px-4 py-3 text-xs leading-5 text-slate-500">{t.profile.bannerHint}</p>
           </div>
           <div className="flex items-center gap-4 rounded-2xl border border-white/7 bg-white/[.025] p-4 max-sm:flex-col max-sm:items-start">
-            <Avatar name={name || profile.displayName} image={avatar} size="xl" />
+            <Avatar name={username || profile.username} image={avatar} size="xl" />
             <div><input ref={inputRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseAvatar(event)} /><div className="flex flex-wrap gap-2"><Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => inputRef.current?.click()}>{compressing ? <LoaderCircle className="size-4 animate-spin" /> : <Camera className="size-4" />}{compressing ? t.profile.compressing : t.profile.upload}</Button>{avatar && <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => cropExisting("avatar")}><Crop className="size-4" />{t.profile.crop}</Button>}{avatar && <Button type="button" variant="danger" size="sm" disabled={compressing} onClick={() => setAvatar(null)}><Trash2 className="size-4" />{t.profile.remove}</Button>}</div><p className="mt-2 max-w-72 text-xs leading-5 text-slate-500">{t.profile.avatarHint}</p>{error && <p className="mt-2 text-xs text-red-300">{error}</p>}</div>
           </div>
           <div className="rounded-2xl border border-white/7 bg-white/[.025] p-4">
@@ -146,7 +147,6 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
               <p className="mt-1.5 text-[11px] leading-4 text-slate-500">{t.profile.identityCodeHint}</p>
             </div>
           </div>
-          <label className="grid gap-2 text-sm font-medium text-slate-300">{t.profile.nickname}<Input value={name} onChange={(event) => setName(event.target.value)} maxLength={32} /></label>
           <label className="grid gap-2 text-sm font-medium text-slate-300">{t.profile.bio}<Textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={160} /></label>
           <fieldset className="grid gap-2">
             <legend className="mb-2 text-sm font-medium text-slate-300">{t.profile.status}</legend>
@@ -162,12 +162,19 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
           </fieldset>
           <div className="grid gap-2">
             <label className="text-sm font-medium text-slate-300" htmlFor="custom-status">{t.profile.customStatus}</label>
-            <Input id="custom-status" value={customStatus} onChange={(event) => setCustomStatus(event.target.value)} maxLength={CUSTOM_STATUS_MAX_LENGTH} placeholder={t.profile.customStatusPlaceholder} />
+            <div className="flex items-center gap-2 rounded-xl border border-white/[.07] bg-white/[.025] px-2">
+              <EmojiPicker
+                trigger={customStatusEmoji ? <span className="text-lg leading-none" style={{ fontFamily: emojiFont }}>{customStatusEmoji}</span> : undefined}
+                panelClassName="bottom-auto top-11 left-0 right-auto max-sm:bottom-auto max-sm:top-11"
+                onSelect={setCustomStatusEmoji}
+              />
+              <Input id="custom-status" value={customStatus} onChange={(event) => setCustomStatus(event.target.value)} maxLength={CUSTOM_STATUS_MAX_LENGTH} placeholder={t.profile.customStatusPlaceholder} className="border-0 bg-transparent px-1 focus-visible:ring-0" />
+              {(customStatus || customStatusEmoji) && <button type="button" aria-label={t.profile.customStatusClear} title={t.profile.customStatusClear} onClick={() => { setCustomStatus(""); setCustomStatusEmoji(""); }} className="grid size-7 shrink-0 place-items-center rounded-md text-slate-500 transition hover:bg-white/10 hover:text-slate-200"><X className="size-4" /></button>}
+            </div>
             <p className="text-right text-[11px] text-slate-500">{customStatus.length}/{CUSTOM_STATUS_MAX_LENGTH}</p>
-            <span className="mt-1 text-sm font-medium text-slate-300">{t.profile.customStatusColor}</span>
-            <ColorPicker value={customStatusColor} label={t.profile.customStatusColor} onChange={setCustomStatusColor} />
+            <p className="text-[11px] leading-4 text-slate-500">{t.profile.customStatusHint}</p>
           </div>
-          <Button type="submit" className="w-full" disabled={compressing || name.trim().length < 2 || !usernameValid}>{t.profile.save}</Button>
+          <Button type="submit" className="w-full" disabled={compressing || !usernameValid}>{t.profile.save}</Button>
         </form>
       </DialogContent>
     </Dialog>

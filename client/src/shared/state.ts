@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
@@ -10,13 +10,12 @@ export const localProfileSchema = z.object({
   id: z.string().min(1),
   username: usernameSchema,
   discriminator: discriminatorSchema,
-  displayName: z.string().trim().min(2).max(32),
   bio: z.string().max(160),
   avatar: z.string().max(2_000_000).nullable(),
   banner: z.string().max(500_000).nullable().default(null),
   status: userStatusSchema.optional(),
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
-  customStatusColor: z.string().regex(/^#[0-9a-f]{6}$/iu).optional(),
+  customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
   createdAt: z.string().datetime(),
 });
 
@@ -42,16 +41,15 @@ export const mockChannelSchema = z.object({
 
 export const mockMemberSchema = z.object({
   id: z.string().min(1),
-  username: z.string().min(1).max(32).optional(),
+  username: z.string().min(1).max(32).default("unknown"),
   discriminator: z.string().regex(/^[0-9]{4}$/).optional(),
   fingerprint: z.string().min(1).max(100).optional(),
-  displayName: z.string().min(1).max(32),
   bio: z.string().max(160).optional(),
   role: z.string().max(32),
   serverRole: z.enum(["owner", "administrator", "member"]).optional(),
   status: publicMemberStatusSchema,
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
-  customStatusColor: z.string().regex(/^#[0-9a-f]{6}$/iu).optional(),
+  customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   avatar: z.string().max(2_000_000).nullable().optional(),
   banner: z.string().max(500_000).nullable().optional(),

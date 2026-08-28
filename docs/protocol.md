@@ -1,8 +1,8 @@
-# OpenCord Protocol v34 (English)
+# OpenCord Protocol v35 (English)
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
 
-Protocol v34 adds an optional server description of up to 160 characters and an optional custom user status of up to 32 characters with a `#RRGGBB` color. These fields travel through `server.settings.update`, `auth.respond.profile`, snapshots, and `member.updated` events.
+Protocol v35 removes the separate nickname: `username` is now the only user name in profiles, members, messages, and mentions. The custom status keeps its text of up to 32 characters and replaces the `#RRGGBB` color with an optional `customStatusEmoji` of up to 16 characters, the way Discord shows it. These fields travel through `server.settings.update`, `auth.respond.profile`, snapshots, and `member.updated` events.
 
 ## Transport
 
@@ -22,9 +22,9 @@ The challenge is single-use within a connection. The private key is not included
 
 ## Public profiles, avatars, and banners
 
-`auth.respond.profile` contains the display name, a public description of up to 160 characters, optional public avatar and banner, and the chosen status: `online`, `idle`, `dnd`, or `invisible`. After a file is selected, the client shows a local cropping editor with panning and zoom. The selected avatar square is scaled down to 128×128 and encoded as WebP of at most 96 KB. The banner is cropped to a 5:2 ratio, scaled down to at most 600×240, and encoded as WebP of at most 256 KB. The server re-validates the format and size limits and stores a single current version of the user's profile — messages do not create separate copies. The server avatar uses the same square-frame editor before separate server-side compression. The server banner follows the profile-banner format (5:2 crop, at most 600×240, WebP up to 256 KB): the owner updates it with `server.banner.update`, the server broadcasts `server.banner.updated`, and the snapshot includes the current `banner`.
+`auth.respond.profile` contains the `username`, a public description of up to 160 characters, optional public avatar and banner, and the chosen status: `online`, `idle`, `dnd`, or `invisible`. After a file is selected, the client shows a local cropping editor with panning and zoom. The selected avatar square is scaled down to 128×128 and encoded as WebP of at most 96 KB. The banner is cropped to a 5:2 ratio, scaled down to at most 600×240, and encoded as WebP of at most 256 KB. The server re-validates the format and size limits and stores a single current version of the user's profile — messages do not create separate copies. The server avatar uses the same square-frame editor before separate server-side compression. The server banner follows the profile-banner format (5:2 crop, at most 600×240, WebP up to 256 KB): the owner updates it with `server.banner.update`, the server broadcasts `server.banner.updated`, and the snapshot includes the current `banner`.
 
-The name, description, avatar, and banner are returned in `server.snapshot.members` and `member.updated`; the current name and avatar are also used by events and the message history. Therefore one server profile is used by the member list, the text chat, and the voice room interface, while the banner is shown in the profile preview that opens. When the profile or status changes, the client sends `profile.update` over the existing WebSocket without reconnecting. The server replaces the previous public fields in the user's single record and broadcasts `member.updated` to all active clients. On explicit leave, the public description, avatar, and banner are cleared on the server.
+The username, description, avatar, and banner are returned in `server.snapshot.members` and `member.updated`; the current username and avatar are also used by events and the message history. Therefore one server profile is used by the member list, the text chat, and the voice room interface, while the banner is shown in the profile preview that opens. When the profile or status changes, the client sends `profile.update` over the existing WebSocket without reconnecting. The server replaces the previous public fields in the user's single record and broadcasts `member.updated` to all active clients. On explicit leave, the public description, avatar, and banner are cleared on the server.
 
 `auth.respond.profile` additionally contains `username` (2–32 lowercase letters, digits, dots, underscores, or dashes; it is used for @mentions) and the four-digit `discriminator` that completes the `username#1234` tag. The discriminator is generated once by the client together with the Ed25519 key pair and stored next to the keys; resetting the identity generates a new one. Identical tags belonging to different people are allowed by design. Each member entry also carries `fingerprint` — the SHA-256 fingerprint of the public key formatted as `XXXX-XXXX-XXXX-XXXX` — so identical tags can be told apart by comparing the identity codes shown in profile previews. The fingerprint is derived from the public key the server already stores, so it adds no new disclosure.
 
@@ -60,7 +60,7 @@ An empty request without a single filter is rejected by the shared Zod schema. T
 
 ### Mentions
 
-A client may mention server members in the composer with `@username` or `@username#1234`. The composer suggests matching members after `@` (avatar, tag, and a short prefix of the identity code) and inserts the chosen tag. When sending, the client resolves `@username[#1234]` into member IDs: a unique match is selected, and an ambiguous token resolves to the first candidate in the member-list order; the autocomplete with identity codes is the reliable way to pick an exact person.
+A client may mention server members in the composer with `@username` or `@username#1234`. The composer suggests matching members after `@` (avatar, `@username`, and the custom status or role) and inserts `@username`, appending `#1234` only when several members share that username. When sending, the client resolves `@username[#1234]` into member IDs: a unique match is selected, and an ambiguous token resolves to the first candidate in the member-list order; the identity code in the profile preview is the reliable way to tell two identical usernames apart.
 
 The transmitted message stores mentions as `<@userId>` markers inside the plain-text content plus a separate `mentions` array of user IDs, so renames never break old mentions. `chat.send.mentions` and `message.update.mentions` accept up to 20 unique member IDs; the server silently drops IDs that are not members of the current server and stores the rest in the `message_mentions` table. The history and search results return `mentions` as well.
 
@@ -136,11 +136,11 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v34 (Русский)
+# OpenCord Protocol v35 (Русский)
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
 
-В протоколе v34 добавлены необязательное описание сервера длиной до 160 символов и пользовательский статус до 32 символов с цветом `#RRGGBB`. Эти поля передаются через `server.settings.update`, `auth.respond.profile`, snapshot и события `member.updated`.
+В протоколе v35 убран отдельный никнейм: единственное имя пользователя в профиле, участниках, сообщениях и упоминаниях — `username`. Свой статус сохраняет текст до 32 символов, а вместо цвета `#RRGGBB` получает необязательный `customStatusEmoji` до 16 символов — как в Discord. Эти поля передаются через `server.settings.update`, `auth.respond.profile`, snapshot и события `member.updated`.
 
 ## Транспорт
 
@@ -160,9 +160,9 @@ Challenge одноразовый в рамках соединения. Прив�
 
 ## Публичные профили, аватары и шапки
 
-`auth.respond.profile` содержит отображаемое имя, публичное описание длиной до 160 символов, необязательные публичные аватар и шапку, а также выбранный статус: `online`, `idle`, `dnd` или `invisible`. После выбора файла клиент показывает локальный редактор кадрирования с перемещением и масштабом. Выбранный квадрат аватара уменьшается до 128×128 и кодируется в WebP размером не более 96 КБ. Шапка кадрируется в пропорции 5:2, уменьшается максимум до 600×240 и кодируется в WebP размером не более 256 КБ. Сервер повторно проверяет формат и ограничения размера и хранит одну актуальную версию профиля пользователя — сообщения не создают отдельных копий. Аватар сервера использует тот же редактор квадратного кадра перед отдельным серверным сжатием. Обложка сервера использует формат шапки профиля (кадр 5:2, максимум 600×240, WebP до 256 КБ): владелец меняет её событием `server.banner.update`, сервер рассылает `server.banner.updated`, а snapshot содержит актуальный `banner`.
+`auth.respond.profile` содержит `username`, публичное описание длиной до 160 символов, необязательные публичные аватар и шапку, а также выбранный статус: `online`, `idle`, `dnd` или `invisible`. После выбора файла клиент показывает локальный редактор кадрирования с перемещением и масштабом. Выбранный квадрат аватара уменьшается до 128×128 и кодируется в WebP размером не более 96 КБ. Шапка кадрируется в пропорции 5:2, уменьшается максимум до 600×240 и кодируется в WebP размером не более 256 КБ. Сервер повторно проверяет формат и ограничения размера и хранит одну актуальную версию профиля пользователя — сообщения не создают отдельных копий. Аватар сервера использует тот же редактор квадратного кадра перед отдельным серверным сжатием. Обложка сервера использует формат шапки профиля (кадр 5:2, максимум 600×240, WebP до 256 КБ): владелец меняет её событием `server.banner.update`, сервер рассылает `server.banner.updated`, а snapshot содержит актуальный `banner`.
 
-Имя, описание, аватар и шапка возвращаются в `server.snapshot.members` и `member.updated`; актуальные имя и аватар также используются событиями и историей сообщений. Поэтому один серверный профиль используется списком участников, текстовым чатом и интерфейсом голосовой комнаты, а шапка показывается в открываемом превью профиля. При смене профиля или статуса клиент отправляет `profile.update` по существующему WebSocket без переподключения. Сервер заменяет прежние публичные поля в единственной записи пользователя и рассылает `member.updated` всем активным клиентам. При явном выходе публичные описание, аватар и шапка очищаются на сервере.
+`username`, описание, аватар и шапка возвращаются в `server.snapshot.members` и `member.updated`; актуальные имя и аватар также используются событиями и историей сообщений. Поэтому один серверный профиль используется списком участников, текстовым чатом и интерфейсом голосовой комнаты, а шапка показывается в открываемом превью профиля. При смене профиля или статуса клиент отправляет `profile.update` по существующему WebSocket без переподключения. Сервер заменяет прежние публичные поля в единственной записи пользователя и рассылает `member.updated` всем активным клиентам. При явном выходе публичные описание, аватар и шапка очищаются на сервере.
 
 `auth.respond.profile` дополнительно содержит `username` (2–32 строчные буквы, цифры, точки, подчёркивания или дефисы; используется для упоминаний через @) и четырёхзначный `discriminator`, дополняющий тег `username#1234`. Дискриминатор генерируется клиентом один раз вместе с парой Ed25519-ключей и хранится рядом с ключами; сброс идентичности создаёт новый. Совпадения тегов у разных людей допустимы по замыслу. Каждая запись участника также несёт `fingerprint` — SHA-256-отпечаток публичного ключа в формате `XXXX-XXXX-XXXX-XXXX`, чтобы одинаковые теги можно было различить сравнением кодов идентичности в превью профиля. Отпечаток выводится из уже хранимого на сервере публичного ключа, поэтому нового раскрытия данных не добавляет.
 
@@ -198,7 +198,7 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ### Упоминания
 
-Клиент может упомянуть участников сервера в поле ввода через `@username` или `@username#1234`. Поле ввода после `@` предлагает подходящих участников (аватар, тег и короткий префикс кода идентичности) и вставляет выбранный тег. При отправке клиент резолвит `@username[#1234]` в ID участников: выбирается единственное совпадение, а при неоднозначности — первый кандидат в порядке списка участников; автокомплит с кодами идентичности — надёжный способ выбрать точного человека.
+Клиент может упомянуть участников сервера в поле ввода через `@username` или `@username#1234`. Поле ввода после `@` предлагает подходящих участников (аватар, `@username`, свой статус или роль) и вставляет `@username`, добавляя `#1234` только когда username занят несколькими участниками. При отправке клиент резолвит `@username[#1234]` в ID участников: выбирается единственное совпадение, а при неоднозначности — первый кандидат в порядке списка участников; код идентичности в превью профиля — надёжный способ различить одинаковые username.
 
 Передаваемое сообщение хранит упоминания как маркеры `<@userId>` внутри обычного текста плюс отдельный массив `mentions` из ID, поэтому переименования не ломают старые упоминания. `chat.send.mentions` и `message.update.mentions` принимают до 20 уникальных ID участников; сервер молча отбрасывает ID, не являющиеся участниками текущего сервера, а остальные сохраняет в таблицу `message_mentions`. История и результаты поиска также возвращают `mentions`.
 
@@ -274,11 +274,11 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v34 (中文)
+# OpenCord 协议 v35 (中文)
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
 
-协议 v34 新增最长 160 个字符的可选服务器描述，以及最长 32 个字符并带有 `#RRGGBB` 颜色的可选用户自定义状态。这些字段通过 `server.settings.update`、`auth.respond.profile`、快照和 `member.updated` 事件传输。
+协议 v35 移除了独立的昵称：`username` 现在是个人资料、成员、消息和提及中唯一的用户名称。自定义状态保留最长 32 个字符的文本，并以最长 16 个字符的可选 `customStatusEmoji` 取代 `#RRGGBB` 颜色，与 Discord 的显示方式一致。这些字段通过 `server.settings.update`、`auth.respond.profile`、快照和 `member.updated` 事件传输。
 
 ## 传输
 
@@ -298,9 +298,9 @@ Challenge 在单个连接内是一次性的。私钥不会出现在任何网络�
 
 ## 公开个人资料、头像和横幅
 
-`auth.respond.profile` 包含显示名称、最长 160 个字符的公开描述、可选的公开头像和横幅，以及所选的状态：`online`、`idle`、`dnd` 或 `invisible`。选择文件后，客户端会显示一个带有平移和缩放的本地裁剪编辑器。选定的头像正方形会缩小到 128×128，并编码为不超过 96 KB 的 WebP。横幅按 5:2 的比例裁剪，最大缩小到 600×240，并编码为不超过 256 KB 的 WebP。服务器会再次验证格式和大小限制，并存储用户个人资料的一个当前版本——消息不会创建单独的副本。服务器头像在单独的服务器端压缩之前使用相同的正方形画面编辑器。服务器封面使用个人资料横幅格式（5:2 裁剪，最大 600×240，WebP 不超过 256 KB）：所有者通过 `server.banner.update` 更新它，服务器广播 `server.banner.updated`，快照中包含当前的 `banner`。
+`auth.respond.profile` 包含 `username`、最长 160 个字符的公开描述、可选的公开头像和横幅，以及所选的状态：`online`、`idle`、`dnd` 或 `invisible`。选择文件后，客户端会显示一个带有平移和缩放的本地裁剪编辑器。选定的头像正方形会缩小到 128×128，并编码为不超过 96 KB 的 WebP。横幅按 5:2 的比例裁剪，最大缩小到 600×240，并编码为不超过 256 KB 的 WebP。服务器会再次验证格式和大小限制，并存储用户个人资料的一个当前版本——消息不会创建单独的副本。服务器头像在单独的服务器端压缩之前使用相同的正方形画面编辑器。服务器封面使用个人资料横幅格式（5:2 裁剪，最大 600×240，WebP 不超过 256 KB）：所有者通过 `server.banner.update` 更新它，服务器广播 `server.banner.updated`，快照中包含当前的 `banner`。
 
-名称、描述、头像和横幅在 `server.snapshot.members` 和 `member.updated` 中返回；当前的名称和头像也会被事件和消息历史使用。因此，一个服务器个人资料被成员列表、文本聊天和语音房间界面共同使用，而横幅显示在打开的个人资料预览中。当个人资料或状态发生变化时，客户端会通过现有 WebSocket 发送 `profile.update`，无需重新连接。服务器在用户的唯一记录中替换之前的公开字段，并向所有活动客户端广播 `member.updated`。在明确退出时，服务器会清除公开描述、头像和横幅。
+`username`、描述、头像和横幅在 `server.snapshot.members` 和 `member.updated` 中返回；当前的 `username` 和头像也会被事件和消息历史使用。因此，一个服务器个人资料被成员列表、文本聊天和语音房间界面共同使用，而横幅显示在打开的个人资料预览中。当个人资料或状态发生变化时，客户端会通过现有 WebSocket 发送 `profile.update`，无需重新连接。服务器在用户的唯一记录中替换之前的公开字段，并向所有活动客户端广播 `member.updated`。在明确退出时，服务器会清除公开描述、头像和横幅。
 
 `auth.respond.profile` 还包含 `username`（2–32 个小写字母、数字、点、下划线或连字符；用于 @提及）以及构成 `username#1234` 标签的四位 `discriminator`。判别号由客户端与 Ed25519 密钥对一起生成一次，并存储在密钥旁边；重置身份会生成新的判别号。不同的人拥有相同的标签在设计上是允许的。每个成员条目还带有 `fingerprint`——公钥的 SHA-256 指纹，格式为 `XXXX-XXXX-XXXX-XXXX`——这样可以通过比较个人资料预览中显示的身份代码来区分相同的标签。指纹来源于服务器已存储的公钥，因此不会增加新的数据披露。
 
@@ -336,7 +336,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 ### 提及
 
-客户端可以在输入框中通过 `@username` 或 `@username#1234` 提及服务器成员。输入 `@` 后，输入框会建议匹配的成员（头像、标签和身份代码的短前缀），并插入所选标签。发送时，客户端将 `@username[#1234]` 解析为成员 ID：唯一匹配会被选中，有歧义时选择成员列表顺序中的第一个候选者；带有身份代码的自动补全是选择精确对象人的可靠方式。
+客户端可以在输入框中通过 `@username` 或 `@username#1234` 提及服务器成员。输入 `@` 后，输入框会建议匹配的成员（头像、`@username`、自定义状态或角色），并插入 `@username`；仅当多个成员共用该 username 时才追加 `#1234`。发送时，客户端将 `@username[#1234]` 解析为成员 ID：唯一匹配会被选中，有歧义时选择成员列表顺序中的第一个候选者；个人资料预览中的身份代码是区分相同 username 的可靠方式。
 
 传输的消息将提及存储为纯文本内容中的 `<@userId>` 标记，再加上单独的 `mentions` 用户 ID 数组，因此重命名不会破坏旧的提及。`chat.send.mentions` 和 `message.update.mentions` 最多接受 20 个唯一的成员 ID；服务器会静默丢弃不是当前服务器成员的 ID，并将其余的存储到 `message_mentions` 表中。历史记录和搜索结果也会返回 `mentions`。
 

@@ -409,7 +409,7 @@ async function authenticate(socket: WebSocket, requestId: string, challenge: str
     signature,
     // Дискриминатор берётся из идентичности (генерируется вместе с ключами),
     // username — из локального профиля (редактируется в диалоге профиля).
-    profile: { username: profile.username, discriminator: publicIdentity.discriminator, displayName: profile.displayName, bio: profile.bio, avatar: parsedAvatar.success ? parsedAvatar.data : null, banner: parsedBanner.success ? parsedBanner.data : null, status: profile.status ?? "online", customStatus: profile.customStatus ?? "", customStatusColor: profile.customStatusColor ?? "#4d6bfe" },
+    profile: { username: profile.username, discriminator: publicIdentity.discriminator, bio: profile.bio, avatar: parsedAvatar.success ? parsedAvatar.data : null, banner: parsedBanner.success ? parsedBanner.data : null, status: profile.status ?? "online", customStatus: profile.customStatus ?? "", customStatusEmoji: profile.customStatusEmoji ?? "" },
   });
 }
 

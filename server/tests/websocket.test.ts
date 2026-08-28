@@ -199,18 +199,18 @@ it("forbids the sender from reacting to their own anonymous private message", as
     if (!address || typeof address === "string") throw new Error("Unexpected test address");
     const url = `ws://127.0.0.1:${address.port}/ws`;
     const observer = await connectAndAuthenticate(url, "Наблюдатель");
-    const memberJoined = waitForMemberUpdated(observer.socket, (candidate) => candidate.displayName === "Участник");
+    const memberJoined = waitForMemberUpdated(observer.socket, (candidate) => candidate.username === usernameFromDisplayName("Участник"));
     const member = await connectAndAuthenticate(url, "Участник");
-    expect(await memberJoined).toMatchObject({ member: { id: member.userId, username: usernameFromDisplayName("Участник"), discriminator: "1234", displayName: "Участник", avatar: null } });
+    expect(await memberJoined).toMatchObject({ member: { id: member.userId, username: usernameFromDisplayName("Участник"), discriminator: "1234", avatar: null } });
     const avatar = "data:image/webp;base64,AA==";
     const banner = "data:image/webp;base64,AQ==";
 
     const profileUpdated = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } }));
-    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "dnd" } });
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd" } }));
+    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd" } });
 
     const becameInvisible = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание участника", avatar, banner, status: "invisible" } }));
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "invisible" } }));
     expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, status: "offline" } });
 
     const memberRemoved = waitForEvent(observer.socket, "member.removed");
@@ -347,7 +347,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
     expect((await ownerDeleted).serverId).toBe(owner.snapshot.server.id);
     expect((await memberDeleted).serverId).toBe(owner.snapshot.server.id);
 
-    const offlineClientDeletion = await connectToDeletedServer(url, "Вернувшийся участник");
+    const offlineClientDeletion = await connectToDeletedServer(url);
     expect(offlineClientDeletion.serverId).toBe(owner.snapshot.server.id);
   }, 15_000);
 
@@ -367,10 +367,10 @@ it("forbids the sender from reacting to their own anonymous private message", as
     const bannedSnapshot = waitForEventMatching(owner.socket, "server.snapshot", (event) => event.server.bannedMembers?.some((item) => item.id === member.userId) === true);
     const memberClosed = once(member.socket, "close");
     owner.socket.send(JSON.stringify({ type: "member.ban", requestId: randomUUID(), userId: member.userId, durationMinutes: null }));
-    expect((await bannedSnapshot).server.bannedMembers).toContainEqual(expect.objectContaining({ id: member.userId, displayName: "Участник", expiresAt: null }));
+    expect((await bannedSnapshot).server.bannedMembers).toContainEqual(expect.objectContaining({ id: member.userId, username: usernameFromDisplayName("Участник"), expiresAt: null }));
     await memberClosed;
 
-    const bannedAttempt = await connectAndExpectBanned(url, "Участник", memberKeys);
+    const bannedAttempt = await connectAndExpectBanned(url, memberKeys);
     expect(bannedAttempt).toMatchObject({ type: "error", code: "BANNED" });
 
     const unbannedSnapshot = waitForEventMatching(owner.socket, "server.snapshot", (event) => event.server.bannedMembers?.length === 0);
@@ -525,7 +525,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
     if (receivedApm.type !== "message.created" || sentApm.type !== "message.created") throw new Error("Anonymous message expected");
     expect(receivedApm.message).toMatchObject({ kind: "apm", anonymous: true, content: "Секрет", authorName: "Аноним", authorAvatar: null });
     expect(receivedApm.message.authorId).not.toBe(sender.userId);
-    expect(sentApm.message).toMatchObject({ kind: "apm", content: "Секрет", authorId: sender.userId, authorName: "Sender" });
+    expect(sentApm.message).toMatchObject({ kind: "apm", content: "Секрет", authorId: sender.userId, authorName: "sender" });
 
     // История: получатель видит анонимное сообщение без отправителя, посторонний — не видит личных.
     const receiverHistory = waitForEvent(receiver.socket, "history.result");
@@ -577,7 +577,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
   }, 15_000);
 });
 
-async function connectToDeletedServer(url: string, displayName: string): Promise<Extract<ServerEvent, { type: "server.deleted" }>> {
+async function connectToDeletedServer(url: string): Promise<Extract<ServerEvent, { type: "server.deleted" }>> {
   const keys = generateKeyPairSync("ed25519");
   const socket = new WebSocket(url);
   const challenge = await waitForEvent(socket, "auth.challenge");
@@ -585,7 +585,7 @@ async function connectToDeletedServer(url: string, displayName: string): Promise
   const publicKey = exportPublicKey(keys.publicKey);
   const signature = sign(null, Buffer.from(challenge.challenge, "base64"), keys.privateKey).toString("base64");
   const deleted = waitForEvent(socket, "server.deleted");
-  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { username: "returning", discriminator: "4321", displayName, avatar: null } }));
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { username: "returning", discriminator: "4321", avatar: null } }));
   return deleted;
 }
 
@@ -597,7 +597,7 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   const signature = sign(null, Buffer.from(challengeEvent.challenge, "base64"), keys.privateKey).toString("base64");
   const authOk = waitForEvent(socket, "auth.ok");
   const snapshot = waitForEvent(socket, "server.snapshot");
-  socket.send(JSON.stringify({ type: "auth.respond", requestId: challengeEvent.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { username, discriminator, displayName, avatar } }));
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challengeEvent.requestId, protocolVersion: PROTOCOL_VERSION, publicKey, signature, profile: { username, discriminator, avatar } }));
   const authenticated = await authOk;
   const snapshotEvent = await snapshot;
   if (snapshotEvent.type !== "server.snapshot") throw new Error("Snapshot expected");
@@ -605,13 +605,13 @@ async function connectAndAuthenticate(url: string, displayName: string, keys = g
   return { socket, snapshot: snapshotEvent, userId: authenticated.userId, sessionToken: authenticated.sessionToken };
 }
 
-async function connectAndExpectBanned(url: string, displayName: string, keys: { publicKey: KeyObject; privateKey: KeyObject }): Promise<Extract<ServerEvent, { type: "error" }>> {
+async function connectAndExpectBanned(url: string, keys: { publicKey: KeyObject; privateKey: KeyObject }): Promise<Extract<ServerEvent, { type: "error" }>> {
   const socket = new WebSocket(url);
   const challenge = await waitForEvent(socket, "auth.challenge");
   if (challenge.type !== "auth.challenge") throw new Error("Challenge expected");
   const signature = sign(null, Buffer.from(challenge.challenge, "base64"), keys.privateKey).toString("base64");
   const rejected = waitForEvent(socket, "error");
-  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey: exportPublicKey(keys.publicKey), signature, profile: { username: "member", discriminator: "1234", displayName, avatar: null } }));
+  socket.send(JSON.stringify({ type: "auth.respond", requestId: challenge.requestId, protocolVersion: PROTOCOL_VERSION, publicKey: exportPublicKey(keys.publicKey), signature, profile: { username: "member", discriminator: "1234", avatar: null } }));
   return rejected;
 }
 

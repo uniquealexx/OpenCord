@@ -4,8 +4,8 @@ import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; description: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
-interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; custom_status: string; custom_status_color: string; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
-interface BannedUserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; display_name: string; bio: string; avatar: string | null; banner: string | null; banned_at: Date | string; banned_by: string; expires_at: Date | string | null }
+interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; custom_status: string; custom_status_emoji: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
+interface BannedUserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; banned_at: Date | string; banned_by: string; expires_at: Date | string | null }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null }
 interface MentionRow extends QueryRow { message_id: string; user_id: string }
 interface ReactionRow extends QueryRow { message_id: string; user_id: string; emoji: string }
@@ -87,19 +87,20 @@ export class ChatRepository {
     return rows.length > 0;
   }
 
-  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "displayName" | "avatar">>): Promise<void> {
+  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "username" | "discriminator" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "avatar">>): Promise<void> {
+    // display_name — историческая колонка: никнеймов больше нет, поэтому она хранит зеркало username.
     await this.database.query(
-      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator, custom_status, custom_status_color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_color = EXCLUDED.custom_status_color, updated_at = now()
+      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator, custom_status, custom_status_emoji) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_emoji = EXCLUDED.custom_status_emoji, updated_at = now()
        WHERE users.public_key = EXCLUDED.public_key`,
-      [userId, publicKey, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusColor ?? "#4d6bfe"],
+      [userId, publicKey, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? ""],
     );
   }
 
-  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "username" | "discriminator" | "displayName" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "displayName" | "avatar">>): Promise<boolean> {
+  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "username" | "discriminator" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "avatar">>): Promise<boolean> {
     const rows = await this.database.query<{ id: string }>(
-      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, custom_status = $8, custom_status_color = $9, updated_at = now() WHERE id = $1 RETURNING id",
-      [userId, profile.displayName, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusColor ?? "#4d6bfe"],
+      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, custom_status = $8, custom_status_emoji = $9, updated_at = now() WHERE id = $1 RETURNING id",
+      [userId, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? ""],
     );
     return rows.length > 0;
   }
@@ -164,9 +165,9 @@ export class ChatRepository {
   async listBannedMembers(): Promise<BannedMember[]> {
     await this.expireBans();
     const rows = await this.database.query<BannedUserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner,
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner,
        b.banned_at, b.banned_by, b.expires_at FROM server_bans b JOIN users u ON u.id = b.user_id
-       WHERE b.server_id = $1 ORDER BY b.banned_at DESC, u.display_name`,
+       WHERE b.server_id = $1 ORDER BY b.banned_at DESC, u.username`,
       [DEFAULT_SERVER_ID],
     );
     return Promise.all(rows.map(async (user) => ({
@@ -174,7 +175,6 @@ export class ChatRepository {
       username: user.username,
       discriminator: user.discriminator,
       fingerprint: await publicKeyFingerprint(user.public_key),
-      displayName: user.display_name,
       bio: user.bio,
       avatar: user.avatar,
       banner: user.banner,
@@ -193,8 +193,8 @@ export class ChatRepository {
            AND NOT EXISTS (SELECT 1 FROM server_members sm WHERE sm.server_id = sd.server_id AND sm.user_id = sd.user_id)
          RETURNING sd.user_id
        )
-       UPDATE users SET display_name = 'Неизвестный пользователь', bio = '', avatar = NULL, banner = NULL,
-         username = NULL, discriminator = NULL, custom_status = '', custom_status_color = '#4d6bfe', updated_at = now()
+       UPDATE users SET display_name = 'unknown', bio = '', avatar = NULL, banner = NULL,
+         username = NULL, discriminator = NULL, custom_status = '', custom_status_emoji = '', updated_at = now()
        WHERE id IN (SELECT user_id FROM expired)
        RETURNING id`,
     );
@@ -241,9 +241,9 @@ export class ChatRepository {
 
   async listMembers(statuses: ReadonlyMap<string, PublicMemberStatus>): Promise<Member[]> {
     const users = await this.database.query<UserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_color, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_emoji, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
        JOIN users u ON u.id = sm.user_id WHERE sm.server_id = $1
-       ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.display_name`,
+       ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.username`,
       [DEFAULT_SERVER_ID],
     );
     return Promise.all(users.map((user) => mapMember(user, statuses.get(user.id) ?? "offline")));
@@ -251,7 +251,7 @@ export class ChatRepository {
 
   async getMember(userId: string, status: PublicMemberStatus): Promise<Member> {
     const [user] = await this.database.query<UserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.display_name, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_color, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_emoji, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
        JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2 WHERE u.id = $1`,
       [userId, DEFAULT_SERVER_ID],
     );
@@ -343,7 +343,7 @@ export class ChatRepository {
          ) AS candidate
        )
        SELECT id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id,
-       (SELECT display_name FROM users WHERE users.id = author_id) AS author_name,
+       (SELECT coalesce(username, 'unknown') FROM users WHERE users.id = author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = author_id) AS author_avatar FROM inserted`,
       [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID, mentions, kind, targetUserId, anonymous, replyToMessageId],
     );
@@ -420,7 +420,7 @@ export class ChatRepository {
          DELETE FROM attachments a USING removed WHERE a.id = removed.attachment_id RETURNING a.storage_key
        )
        SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at, updated.kind, updated.target_user_id, updated.anonymous, updated.reply_to_message_id,
-       (SELECT display_name FROM users WHERE users.id = updated.author_id) AS author_name,
+       (SELECT coalesce(username, 'unknown') FROM users WHERE users.id = updated.author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = updated.author_id) AS author_avatar,
        COALESCE((SELECT array_agg(storage_key) FROM removed_files), ARRAY[]::text[]) AS removed_storage_keys
        FROM updated`,
@@ -478,7 +478,7 @@ export class ChatRepository {
 
   async getHistory(channelId: string, limit: number, viewerId: string): Promise<ChatMessage[]> {
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
+      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
        FROM messages m JOIN users u ON u.id = m.author_id
        WHERE m.channel_id = $1 AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
        ORDER BY m.created_at DESC LIMIT $2`,
@@ -528,7 +528,7 @@ export class ChatRepository {
       parameters,
     );
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, u.display_name AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
+      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
        FROM messages m JOIN users u ON u.id = m.author_id JOIN channels c ON c.id = m.channel_id
        WHERE ${conditions} ORDER BY m.created_at DESC, m.id DESC LIMIT $6 OFFSET $7`,
       [...parameters, filters.limit, filters.offset],
@@ -610,7 +610,7 @@ async function mapMember(user: UserRow, status: PublicMemberStatus): Promise<Mem
   const fingerprint = user.username && user.discriminator ? await publicKeyFingerprint(user.public_key) : "0000-0000-0000-0000";
   const mutedUntil = user.chat_muted_until ? new Date(user.chat_muted_until) : null;
   const chatMuted = user.chat_muted === true && (mutedUntil === null || mutedUntil.getTime() > Date.now());
-  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, displayName: user.display_name, bio: user.bio, avatar: user.avatar, banner: user.banner, status, customStatus: user.custom_status, customStatusColor: user.custom_status_color, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
+  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, bio: user.bio, avatar: user.avatar, banner: user.banner, status, customStatus: user.custom_status, customStatusEmoji: user.custom_status_emoji ?? "", role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
 }
 
 function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = [], reactions: MessageReaction[] = []): ChatMessage {

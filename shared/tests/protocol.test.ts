@@ -41,7 +41,7 @@ describe("OpenCord protocol", () => {
     expect(serverEventSchema.parse({ type: "server.deleted", serverId: crypto.randomUUID() })).toMatchObject({ type: "server.deleted" });
     expect(clientEventSchema.parse({ type: "server.avatar.update", requestId: crypto.randomUUID(), avatar: "data:image/png;base64,AA==" })).toMatchObject({ type: "server.avatar.update" });
     expect(serverEventSchema.parse({ type: "server.avatar.updated", serverId: crypto.randomUUID(), avatar: "data:image/webp;base64,AA==" })).toMatchObject({ type: "server.avatar.updated" });
-    expect(clientEventSchema.parse({ type: "profile.update", requestId: crypto.randomUUID(), profile: { username: "lina", discriminator: "1234", displayName: "Лина", avatar: "data:image/webp;base64,AA==" } })).toMatchObject({ type: "profile.update" });
+    expect(clientEventSchema.parse({ type: "profile.update", requestId: crypto.randomUUID(), profile: { username: "lina", discriminator: "1234", avatar: "data:image/webp;base64,AA==" } })).toMatchObject({ type: "profile.update" });
     expect(clientEventSchema.parse({ type: "server.leave", requestId: crypto.randomUUID() })).toMatchObject({ type: "server.leave" });
     expect(serverEventSchema.parse({ type: "member.removed", userId: "member-1" })).toEqual({ type: "member.removed", userId: "member-1" });
     expect(serverEventSchema.parse({ type: "profile.anonymized", userId: "member-1" })).toEqual({ type: "profile.anonymized", userId: "member-1" });
@@ -139,18 +139,18 @@ describe("OpenCord protocol", () => {
 
   it("validates user presence and defaults older profiles to online", () => {
     const base = { username: "lina", discriminator: "1234" } as const;
-    expect(publicProfileSchema.parse({ ...base, displayName: "Лина", avatar: null })).toMatchObject({ status: "online", bio: "", banner: null });
-    expect(publicProfileSchema.parse({ ...base, displayName: "Лина", bio: "  Пишу открытый код  ", avatar: null, status: "invisible" })).toMatchObject({ status: "invisible", bio: "Пишу открытый код" });
-    expect(() => publicProfileSchema.parse({ ...base, displayName: "Лина", avatar: null, status: "offline" })).toThrow();
-    expect(() => publicProfileSchema.parse({ ...base, displayName: "Лина", bio: "x".repeat(161), avatar: null })).toThrow();
-    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", displayName: "Лина", bio: "Пишу открытый код", avatar: null, banner: "data:image/webp;base64,AA==", status: "dnd", role: "member" } })).toMatchObject({ member: { status: "dnd", bio: "Пишу открытый код", banner: "data:image/webp;base64,AA==" } });
+    expect(publicProfileSchema.parse({ ...base, avatar: null })).toMatchObject({ status: "online", bio: "", banner: null });
+    expect(publicProfileSchema.parse({ ...base, bio: "  Пишу открытый код  ", avatar: null, status: "invisible" })).toMatchObject({ status: "invisible", bio: "Пишу открытый код" });
+    expect(() => publicProfileSchema.parse({ ...base, avatar: null, status: "offline" })).toThrow();
+    expect(() => publicProfileSchema.parse({ ...base, bio: "x".repeat(161), avatar: null })).toThrow();
+    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", bio: "Пишу открытый код", avatar: null, banner: "data:image/webp;base64,AA==", status: "dnd", role: "member" } })).toMatchObject({ member: { status: "dnd", bio: "Пишу открытый код", banner: "data:image/webp;base64,AA==" } });
   });
 
-  it("validates custom status text, color and server description", () => {
-    const base = { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null } as const;
-    expect(publicProfileSchema.parse({ ...base, customStatus: "В работе", customStatusColor: "#34d399" })).toMatchObject({ customStatus: "В работе", customStatusColor: "#34d399" });
-    expect(() => publicProfileSchema.parse({ ...base, customStatus: "x".repeat(33), customStatusColor: "#34d399" })).toThrow();
-    expect(() => publicProfileSchema.parse({ ...base, customStatusColor: "green" })).toThrow();
+  it("validates custom status text, emoji and server description", () => {
+    const base = { username: "lina", discriminator: "1234", avatar: null } as const;
+    expect(publicProfileSchema.parse({ ...base, customStatus: "В работе", customStatusEmoji: "🚀" })).toMatchObject({ customStatus: "В работе", customStatusEmoji: "🚀" });
+    expect(() => publicProfileSchema.parse({ ...base, customStatus: "x".repeat(33), customStatusEmoji: "🚀" })).toThrow();
+    expect(() => publicProfileSchema.parse({ ...base, customStatusEmoji: "x".repeat(17) })).toThrow();
     expect(clientEventSchema.parse({ type: "server.settings.update", requestId: crypto.randomUUID(), name: "OpenCord", description: "Сервер сообщества", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 })).toMatchObject({ description: "Сервер сообщества" });
     expect(() => clientEventSchema.parse({ type: "server.settings.update", requestId: crypto.randomUUID(), name: "OpenCord", description: "x".repeat(161), maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 })).toThrow();
   });
@@ -205,7 +205,7 @@ describe("OpenCord protocol", () => {
       type: "message.created",
       message: { id: crypto.randomUUID(), channelId: crypto.randomUUID(), authorId: "author", authorName: "Лина", authorAvatar: null, content: "Привет", createdAt: new Date().toISOString(), kind: "apm", targetUserId: "user-1", anonymous: true },
     })).toMatchObject({ type: "message.created", message: { kind: "apm", anonymous: true } });
-    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", displayName: "Лина", bio: "", avatar: null, banner: null, status: "online", role: "member", chatMuted: true, chatMutedUntil: "2026-08-14T19:00:00.000Z" } })).toMatchObject({ member: { chatMuted: true, chatMutedUntil: "2026-08-14T19:00:00.000Z" } });
+    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, status: "online", role: "member", chatMuted: true, chatMutedUntil: "2026-08-14T19:00:00.000Z" } })).toMatchObject({ member: { chatMuted: true, chatMutedUntil: "2026-08-14T19:00:00.000Z" } });
   });
 
   it("validates server identity, attachment and screen-share settings", () => {

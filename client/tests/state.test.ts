@@ -52,13 +52,13 @@ describe("persisted client state", () => {
     const legacyProfile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };
     const v3 = { ...state, version: 3, profile: legacyProfile };
     const migrated = parsePersistedState(v3);
-    expect(migrated.profile).toMatchObject({ username: "user", displayName: "Лина", discriminator: expect.stringMatching(/^\d{4}$/u) });
+    expect(migrated.profile).toMatchObject({ username: "user", discriminator: expect.stringMatching(/^\d{4}$/u) });
     expect(parsePersistedState({ ...v3, profile: { ...legacyProfile, status: "invisible" } }).profile?.status).toBe("invisible");
   });
 
   it("persists the username and discriminator of a current profile", () => {
     const state = createDefaultState();
-    const restored = parsePersistedState({ ...state, profile: { id: "local-user", username: "Lina.Dev", discriminator: "0042", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: "2026-08-07T00:00:00.000Z" } });
+    const restored = parsePersistedState({ ...state, profile: { id: "local-user", username: "Lina.Dev", discriminator: "0042", bio: "", avatar: null, banner: null, createdAt: "2026-08-07T00:00:00.000Z" } });
     expect(restored.profile).toMatchObject({ username: "lina.dev", discriminator: "0042" });
   });
 

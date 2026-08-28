@@ -9,15 +9,14 @@ import { MENTION_TOKEN_PATTERN, buildMentionToken, parseMentionTokens } from "@o
 
 export interface MentionCandidate {
   id: string;
-  username?: string;
+  username: string;
   discriminator?: string;
-  displayName: string;
   avatar?: string | null;
   banner?: string | null;
   color?: string;
   status?: "online" | "idle" | "dnd" | "offline";
   customStatus?: string;
-  customStatusColor?: string;
+  customStatusEmoji?: string;
   role?: string;
   bio?: string;
   fingerprint?: string;
@@ -37,19 +36,19 @@ export function mentionQueryAtCursor(draft: string, cursor: number): { query: st
   return { query: (match[2] ?? "").toLowerCase(), discriminator: match[3] ?? "", start: cursor - match[0].length + prefixLength, end: cursor };
 }
 
-/** Кандидаты для автокомплита: префикс username или подстрока никнейма, необязательное сужение по тегу. */
+/** Кандидаты для автокомплита: префикс или подстрока username, необязательное сужение по тегу. */
 export function matchMentionCandidates(members: MentionCandidate[], query: string, discriminator: string, limit = 8): MentionCandidate[] {
   const normalizedQuery = query.toLowerCase();
   return members
     .filter((member) => !discriminator || (member.discriminator ?? "") === discriminator)
     .filter((member) => {
       if (!normalizedQuery) return true;
-      return (member.username ?? "").toLowerCase().startsWith(normalizedQuery) || member.displayName.toLowerCase().includes(normalizedQuery);
+      return member.username.toLowerCase().includes(normalizedQuery);
     })
     .sort((left, right) => {
-      const leftUsername = (left.username ?? "").toLowerCase().startsWith(normalizedQuery) ? 0 : 1;
-      const rightUsername = (right.username ?? "").toLowerCase().startsWith(normalizedQuery) ? 0 : 1;
-      return leftUsername - rightUsername || left.displayName.localeCompare(right.displayName);
+      const leftUsername = left.username.toLowerCase().startsWith(normalizedQuery) ? 0 : 1;
+      const rightUsername = right.username.toLowerCase().startsWith(normalizedQuery) ? 0 : 1;
+      return leftUsername - rightUsername || left.username.localeCompare(right.username);
     })
     .slice(0, limit);
 }
@@ -77,7 +76,7 @@ export function resolveDraftMentions(content: string, members: MentionCandidate[
 }
 
 function resolveMentionToken(name: string, discriminator: string | undefined, members: MentionCandidate[]): MentionCandidate | null {
-  const byUsername = members.filter((member) => (member.username ?? "").toLowerCase() === name.toLowerCase());
+  const byUsername = members.filter((member) => member.username.toLowerCase() === name.toLowerCase());
   const pool = discriminator ? byUsername.filter((member) => (member.discriminator ?? "") === discriminator) : byUsername;
   return pool[0] ?? null;
 }
@@ -86,8 +85,8 @@ function resolveMentionToken(name: string, discriminator: string | undefined, me
 export function expandMentionsForEditing(content: string, members: MentionCandidate[]): string {
   return content.replace(MENTION_TOKEN_PATTERN, (raw, userId: string) => {
     const member = members.find((candidate) => candidate.id === userId);
-    if (!member?.username) return raw;
-    return member.discriminator ? `@${member.username}#${member.discriminator}` : `@${member.username}`;
+    if (!member) return raw;
+    return `@${member.username}`;
   });
 }
 

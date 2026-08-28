@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 34 as const;
+export const PROTOCOL_VERSION = 35 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -31,7 +31,9 @@ export const screenShareFrameRateSchema = z.union([z.literal(15), z.literal(30),
 export const serverNameSchema = z.string().trim().min(2).max(48);
 export const SERVER_DESCRIPTION_MAX_LENGTH = 160 as const;
 export const CUSTOM_STATUS_MAX_LENGTH = 32 as const;
-export const customStatusColorSchema = z.string().regex(/^#[0-9a-f]{6}$/iu);
+// Эмодзи своего статуса — как в Discord: один графемный кластер слева от текста.
+export const CUSTOM_STATUS_EMOJI_MAX_LENGTH = 16 as const;
+export const customStatusEmojiSchema = z.string().trim().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH);
 export const serverSettingsSchema = z.object({
   name: serverNameSchema,
   description: z.string().trim().max(SERVER_DESCRIPTION_MAX_LENGTH).optional(),
@@ -73,13 +75,12 @@ export const fingerprintSchema = z.string().regex(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){
 export const publicProfileSchema = z.object({
   username: usernameSchema,
   discriminator: discriminatorSchema,
-  displayName: z.string().trim().min(2).max(32),
   bio: z.string().trim().max(160).default(""),
   avatar: userAvatarSchema.default(null),
   banner: userBannerSchema.default(null),
   status: userStatusSchema.default("online"),
   customStatus: z.string().trim().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
-  customStatusColor: customStatusColorSchema.optional(),
+  customStatusEmoji: customStatusEmojiSchema.optional(),
 });
 
 export const channelSchema = z.object({
@@ -111,13 +112,12 @@ export const memberSchema = z.object({
   username: usernameSchema,
   discriminator: discriminatorSchema,
   fingerprint: fingerprintSchema,
-  displayName: z.string().min(1).max(32),
   bio: z.string().max(160),
   avatar: userAvatarSchema,
   banner: userBannerSchema,
   status: publicMemberStatusSchema,
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
-  customStatusColor: customStatusColorSchema.optional(),
+  customStatusEmoji: customStatusEmojiSchema.optional(),
   role: memberRoleSchema,
   chatMuted: z.boolean().default(false),
   chatMutedUntil: z.string().datetime().nullable().default(null),
@@ -128,7 +128,6 @@ export const bannedMemberSchema = z.object({
   username: usernameSchema.nullable(),
   discriminator: discriminatorSchema.nullable(),
   fingerprint: fingerprintSchema,
-  displayName: z.string().min(1).max(32),
   bio: z.string().max(160),
   avatar: userAvatarSchema,
   banner: userBannerSchema,

@@ -5,7 +5,7 @@ import { ServerPreviewDialog } from "@/components/server-preview-dialog";
 import { ServerSettingsPage } from "@/components/server-settings-page";
 import type { LocalProfile, MockServer } from "@/shared/state";
 
-const profile: LocalProfile = { id: "owner", username: "owner", discriminator: "0001", displayName: "Владелец", bio: "", avatar: null, banner: null, createdAt: "2026-08-18T00:00:00.000Z" };
+const profile: LocalProfile = { id: "owner", username: "owner", discriminator: "0001", bio: "", avatar: null, banner: null, createdAt: "2026-08-18T00:00:00.000Z" };
 const server: MockServer = {
   id: "server",
   name: "Команда",
@@ -18,10 +18,10 @@ const server: MockServer = {
   screenShareMaxFrameRate: 60,
   channels: [],
   members: [
-    { id: "owner", username: "owner", discriminator: "0001", fingerprint: "0000-0000-0000-0001", displayName: "Владелец", role: "Владелец", serverRole: "owner", status: "online", avatarColor: "#4d6bfe", avatar: null },
-    { id: "member", username: "member", discriminator: "0002", fingerprint: "0000-0000-0000-0002", displayName: "Участник", role: "Участник", serverRole: "member", status: "offline", avatarColor: "#58b0ff", avatar: null },
+    { id: "owner", username: "owner", discriminator: "0001", fingerprint: "0000-0000-0000-0001", role: "Владелец", serverRole: "owner", status: "online", avatarColor: "#4d6bfe", avatar: null },
+    { id: "member", username: "member", discriminator: "0002", fingerprint: "0000-0000-0000-0002", role: "Участник", serverRole: "member", status: "offline", avatarColor: "#58b0ff", avatar: null },
   ],
-  bannedMembers: [{ id: "banned", username: "banned", discriminator: "0003", fingerprint: "0000-0000-0000-0003", displayName: "Заблокированный", bio: "", avatar: null, banner: null, bannedAt: "2026-08-18T00:00:00.000Z", bannedBy: "owner", expiresAt: null }],
+  bannedMembers: [{ id: "banned", username: "banned", discriminator: "0003", fingerprint: "0000-0000-0000-0003", bio: "", avatar: null, banner: null, bannedAt: "2026-08-18T00:00:00.000Z", bannedBy: "owner", expiresAt: null }],
 };
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -57,7 +57,7 @@ describe("server settings experience", () => {
     expect(onBan).toHaveBeenCalledWith("member", 30);
 
     await user.click(screen.getByRole("button", { name: "Разбан" }));
-    expect(screen.getByText("Заблокированный")).toBeInTheDocument();
+    expect(screen.getByText("banned")).toBeInTheDocument();
     expect(screen.getByText("Навсегда")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Разбанить" }));
     expect(onUnban).toHaveBeenCalledWith("banned");
@@ -88,9 +88,11 @@ describe("server settings experience", () => {
     const creatorColumn = screen.getByRole("heading", { name: "Создатель" }).closest("section");
     const administratorsColumn = screen.getByRole("heading", { name: "Администраторы" }).closest("section");
     const membersColumn = screen.getByRole("heading", { name: "Пользователи" }).closest("section");
-    expect(creatorColumn && within(creatorColumn).getAllByText("Владелец")).toHaveLength(2);
+    expect(creatorColumn && within(creatorColumn).getByText("owner")).toBeInTheDocument();
+    expect(creatorColumn && within(creatorColumn).getByText("Владелец")).toBeInTheDocument();
     expect(administratorsColumn && within(administratorsColumn).getByText("Администраторов пока нет.")).toBeInTheDocument();
-    expect(membersColumn && within(membersColumn).getAllByText("Участник")).toHaveLength(2);
+    expect(membersColumn && within(membersColumn).getByText("member")).toBeInTheDocument();
+    expect(membersColumn && within(membersColumn).getByText("Участник")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Назначить администратором" }));
     expect(onSetRole).toHaveBeenCalledWith("member", "administrator");
@@ -98,7 +100,7 @@ describe("server settings experience", () => {
     const promotedServer: MockServer = { ...server, members: server.members.map((member) => member.id === "member" ? { ...member, serverRole: "administrator", role: "Администратор" } : member) };
     rerender(<ServerSettingsPage server={promotedServer} {...props} access={{ ...props.access, permissions: [...props.access.permissions] }} />);
     const updatedAdministrators = screen.getByRole("heading", { name: "Администраторы" }).closest("section");
-    expect(updatedAdministrators && within(updatedAdministrators).getByText("Участник")).toBeInTheDocument();
+    expect(updatedAdministrators && within(updatedAdministrators).getByText("member")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Снять роль администратора" })).toBeInTheDocument();
   });
 });

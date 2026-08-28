@@ -39,7 +39,7 @@ describe("ChatRepository", () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text");
     expect(channel).toBeDefined();
-    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null });
+    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
     const messageId = randomUUID();
     const created = await repository.createMessage(messageId, channel!.id, "user-1", "Первое настоящее сообщение");
     expect(created?.editedAt).toBeNull();
@@ -53,7 +53,7 @@ describe("ChatRepository", () => {
 
   it("stores reply references and clears them when the source message is deleted", async () => {
     const channel = (await repository.getServer()).channels.find((item) => item.kind === "text")!;
-    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null });
+    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
     const sourceId = randomUUID();
     const replyId = randomUUID();
     await repository.createMessage(sourceId, channel.id, "user-1", "Исходное сообщение");
@@ -68,7 +68,7 @@ describe("ChatRepository", () => {
   it("replaces message attachments and returns removed storage keys", async () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text")!;
-    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null });
+    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
     const firstId = randomUUID();
     const secondId = randomUUID();
     await repository.createAttachment(firstId, "user-1", "first-storage-key", "старый.txt", "text/plain", 10, "a".repeat(64));
@@ -86,8 +86,8 @@ describe("ChatRepository", () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text")!;
     const secondChannel = await repository.createChannel(randomUUID(), "поиск", "text", "Результаты поиска");
-    await repository.upsertUser("user-1", "public-key-1", { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null });
-    await repository.upsertUser("user-2", "public-key-2", { username: "mark", discriminator: "5678", displayName: "Марк", avatar: null });
+    await repository.upsertUser("user-1", "public-key-1", { username: "lina", discriminator: "1234", avatar: null });
+    await repository.upsertUser("user-2", "public-key-2", { username: "mark", discriminator: "5678", avatar: null });
     await repository.createMessage(randomUUID(), channel.id, "user-1", "Текст про космос");
 
     const imageId = randomUUID();
@@ -119,7 +119,7 @@ describe("ChatRepository", () => {
   it("updates channels and deletes their message history", async () => {
     const created = await repository.createChannel(randomUUID(), "черновик", "text", "Старое описание");
     expect(await repository.updateChannel(created.id, "анонсы", "Новое описание", null)).toMatchObject({ name: "анонсы", description: "Новое описание", kind: "text", participantLimit: null });
-    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", displayName: "Лина", avatar: null });
+    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
     await repository.createMessage(randomUUID(), created.id, "user-1", "Будет удалено вместе с каналом");
     expect(await repository.deleteChannel(created.id)).toBe(true);
     expect(await repository.deleteChannel(created.id)).toBe(false);
@@ -142,8 +142,8 @@ describe("ChatRepository", () => {
   });
 
   it("creates one configured owner and persists administrative roles", async () => {
-    await repository.upsertUser("owner", "owner-public-key", { username: "owner", discriminator: "0001", displayName: "Владелец", avatar: null });
-    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "0002", displayName: "Участник", avatar: null });
+    await repository.upsertUser("owner", "owner-public-key", { username: "owner", discriminator: "0001", avatar: null });
+    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "0002", avatar: null });
     expect(await repository.ensureMembership("owner", "owner-public-key", "owner-public-key")).toBe("owner");
     expect(await repository.ensureMembership("member", "member-public-key", "owner-public-key")).toBe("member");
     expect(permissionsForRole("owner")).toEqual(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
@@ -157,14 +157,14 @@ describe("ChatRepository", () => {
   it("persists bans by identity and removes them explicitly", async () => {
     const ownerKey = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).toString("base64");
     const memberKey = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).toString("base64");
-    await repository.upsertUser("owner", ownerKey, { username: "owner", discriminator: "0001", displayName: "Владелец", avatar: null });
-    await repository.upsertUser("member", memberKey, { username: "member", discriminator: "0002", displayName: "Участник", avatar: null });
+    await repository.upsertUser("owner", ownerKey, { username: "owner", discriminator: "0001", avatar: null });
+    await repository.upsertUser("member", memberKey, { username: "member", discriminator: "0002", avatar: null });
     await repository.ensureMembership("owner", ownerKey, ownerKey);
     await repository.ensureMembership("member", memberKey, ownerKey);
 
     expect(await repository.banMember("member", "owner", 30)).toBe(true);
     expect(await repository.isBanned("member")).toBe(true);
-    expect((await repository.listBannedMembers())[0]).toMatchObject({ id: "member", displayName: "Участник", bannedBy: "owner", expiresAt: expect.any(String) });
+    expect((await repository.listBannedMembers())[0]).toMatchObject({ id: "member", bannedBy: "owner", expiresAt: expect.any(String) });
     await expect(repository.getMemberRole("member")).rejects.toThrow("Server membership is missing");
     await database.query("UPDATE server_bans SET expires_at = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "member"]);
     expect(await repository.isBanned("member")).toBe(false);
@@ -193,32 +193,32 @@ describe("ChatRepository", () => {
     const banner = "data:image/webp;base64,AQ==";
     expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["012_user_profile_bio"])).toHaveLength(1);
     expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["013_user_profile_banner"])).toHaveLength(1);
-    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", displayName: "Участник", avatar: null });
+    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", avatar: null });
     await repository.ensureMembership("member", "member-public-key", undefined, true);
-    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание для всех", avatar, banner, customStatus: "Пишу релиз", customStatusColor: "#34d399" })).toBe(true);
-    expect(await repository.getMember("member", "dnd")).toMatchObject({ username: "member", discriminator: "1234", displayName: "Новое имя", bio: "Описание для всех", avatar, banner, status: "dnd", customStatus: "Пишу релиз", customStatusColor: "#34d399" });
+    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", bio: "Описание для всех", avatar, banner, customStatus: "Пишу релиз", customStatusEmoji: "🚀" })).toBe(true);
+    expect(await repository.getMember("member", "dnd")).toMatchObject({ username: "member", discriminator: "1234", bio: "Описание для всех", avatar, banner, status: "dnd", customStatus: "Пишу релиз", customStatusEmoji: "🚀" });
     expect(await repository.leaveServer("member")).toBe("owner");
-    expect(await repository.getMember("member", "offline")).toMatchObject({ displayName: "Новое имя", bio: "Описание для всех", avatar, banner, role: "owner" });
+    expect(await repository.getMember("member", "offline")).toMatchObject({ bio: "Описание для всех", avatar, banner, role: "owner" });
 
-    await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", displayName: "Второй", avatar });
+    await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", avatar });
     await repository.ensureMembership("second", "second-public-key");
     const textChannel = (await repository.getServer()).channels.find((channel) => channel.kind === "text");
     if (!textChannel) throw new Error("Text channel is missing");
     await repository.createMessage(randomUUID(), textChannel.id, "second", "Сообщение остаётся");
     expect(await repository.leaveServer("second")).toBe("member");
     expect((await repository.listMembers(new Map())).some((member) => member.id === "second")).toBe(false);
-    expect((await database.query<{ display_name: string; avatar: string | null }>("SELECT display_name, avatar FROM users WHERE id = $1", ["second"]))[0]).toMatchObject({ display_name: "Второй", avatar });
-    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorName: "Второй", authorAvatar: avatar, content: "Сообщение остаётся" });
+    expect((await database.query<{ display_name: string; avatar: string | null }>("SELECT display_name, avatar FROM users WHERE id = $1", ["second"]))[0]).toMatchObject({ display_name: "second", avatar });
+    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorName: "second", authorAvatar: avatar, content: "Сообщение остаётся" });
     expect(await database.query<{ reason: string }>("SELECT reason FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"])).toEqual([{ reason: "leave" }]);
 
     await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"]);
     expect(await repository.performRetentionCleanup()).toEqual({ anonymizedUserIds: ["second"], expiredBanUserIds: [] });
-    expect((await database.query<{ public_key: string; display_name: string; username: string | null; avatar: string | null }>("SELECT public_key, display_name, username, avatar FROM users WHERE id = $1", ["second"]))[0]).toEqual({ public_key: "second-public-key", display_name: "Неизвестный пользователь", username: null, avatar: null });
-    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorId: "second", authorName: "Неизвестный пользователь", authorAvatar: null, content: "Сообщение остаётся" });
+    expect((await database.query<{ public_key: string; display_name: string; username: string | null; avatar: string | null }>("SELECT public_key, display_name, username, avatar FROM users WHERE id = $1", ["second"]))[0]).toEqual({ public_key: "second-public-key", display_name: "unknown", username: null, avatar: null });
+    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorId: "second", authorName: "unknown", authorAvatar: null, content: "Сообщение остаётся" });
 
-    await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", displayName: "Вернувшийся", avatar });
+    await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", avatar });
     await repository.ensureMembership("second", "second-public-key");
-    expect(await repository.getMember("second", "online")).toMatchObject({ displayName: "Вернувшийся", avatar });
+    expect(await repository.getMember("second", "online")).toMatchObject({ avatar });
     expect(await database.query("SELECT user_id FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"])).toEqual([]);
   });
 
@@ -243,8 +243,8 @@ describe("ChatRepository", () => {
   });
 
   it("coexists two members with identical username and discriminator and distinguishes them by fingerprint", async () => {
-    await repository.upsertUser("first", "first-public-key", { username: "twins", discriminator: "4242", displayName: "Первый близнец", avatar: null });
-    await repository.upsertUser("second", "second-public-key", { username: "twins", discriminator: "4242", displayName: "Второй близнец", avatar: null });
+    await repository.upsertUser("first", "first-public-key", { username: "twins", discriminator: "4242", avatar: null });
+    await repository.upsertUser("second", "second-public-key", { username: "twins", discriminator: "4242", avatar: null });
     await repository.ensureMembership("first", "first-public-key", undefined, true);
     await repository.ensureMembership("second", "second-public-key");
     const members = await repository.listMembers(new Map());
@@ -260,9 +260,9 @@ describe("ChatRepository", () => {
   it("stores only member mentions, deduplicates them and replaces them on edit", async () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text")!;
-    await repository.upsertUser("author", "author-key", { username: "author", discriminator: "1111", displayName: "Автор", avatar: null });
-    await repository.upsertUser("mentioned", "mentioned-key", { username: "mentioned", discriminator: "2222", displayName: "Упомянутый", avatar: null });
-    await repository.upsertUser("outsider", "outsider-key", { username: "outsider", discriminator: "3333", displayName: "Посторонний", avatar: null });
+    await repository.upsertUser("author", "author-key", { username: "author", discriminator: "1111", avatar: null });
+    await repository.upsertUser("mentioned", "mentioned-key", { username: "mentioned", discriminator: "2222", avatar: null });
+    await repository.upsertUser("outsider", "outsider-key", { username: "outsider", discriminator: "3333", avatar: null });
     await repository.ensureMembership("author", "author-key", undefined, true);
     await repository.ensureMembership("mentioned", "mentioned-key");
 
@@ -284,8 +284,8 @@ describe("ChatRepository", () => {
   it("toggles message reactions, keeps order and returns them in history", async () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text")!;
-    await repository.upsertUser("author", "author-key", { username: "author", discriminator: "1111", displayName: "Автор", avatar: null });
-    await repository.upsertUser("reactor", "reactor-key", { username: "reactor", discriminator: "2222", displayName: "Реактор", avatar: null });
+    await repository.upsertUser("author", "author-key", { username: "author", discriminator: "1111", avatar: null });
+    await repository.upsertUser("reactor", "reactor-key", { username: "reactor", discriminator: "2222", avatar: null });
     await repository.ensureMembership("author", "author-key", undefined, true);
     await repository.ensureMembership("reactor", "reactor-key");
 
@@ -316,9 +316,9 @@ describe("ChatRepository", () => {
   it("stores private messages, filters history by participant and masks anonymous senders", async () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text")!;
-    await repository.upsertUser("sender", "sender-key", { username: "sender", discriminator: "1111", displayName: "Отправитель", avatar: null });
-    await repository.upsertUser("receiver", "receiver-key", { username: "receiver", discriminator: "2222", displayName: "Получатель", avatar: null });
-    await repository.upsertUser("outsider", "outsider-key", { username: "outsider", discriminator: "3333", displayName: "Посторонний", avatar: null });
+    await repository.upsertUser("sender", "sender-key", { username: "sender", discriminator: "1111", avatar: null });
+    await repository.upsertUser("receiver", "receiver-key", { username: "receiver", discriminator: "2222", avatar: null });
+    await repository.upsertUser("outsider", "outsider-key", { username: "outsider", discriminator: "3333", avatar: null });
     await repository.ensureMembership("sender", "sender-key", undefined, true);
     await repository.ensureMembership("receiver", "receiver-key");
     await repository.ensureMembership("outsider", "outsider-key");
@@ -334,7 +334,7 @@ describe("ChatRepository", () => {
     expect(masked.authorId).not.toBe("sender");
     expect(masked.authorName).toBe("Аноним");
     expect(masked.authorAvatar).toBeNull();
-    expect(forReceiver.find((message) => message.id === pm!.id)?.authorName).toBe("Отправитель");
+    expect(forReceiver.find((message) => message.id === pm!.id)?.authorName).toBe("sender");
 
     const forSender = await repository.getHistory(channel.id, 50, "sender");
     expect(forSender.find((message) => message.id === apm!.id)?.authorId).toBe("sender");
@@ -347,8 +347,8 @@ describe("ChatRepository", () => {
   });
 
   it("mutes and unmutes chat for a member and exposes the state in the member list", async () => {
-    await repository.upsertUser("owner", "owner-key", { username: "owner", discriminator: "1111", displayName: "Владелец", avatar: null });
-    await repository.upsertUser("member", "member-key", { username: "member", discriminator: "2222", displayName: "Участник", avatar: null });
+    await repository.upsertUser("owner", "owner-key", { username: "owner", discriminator: "1111", avatar: null });
+    await repository.upsertUser("member", "member-key", { username: "member", discriminator: "2222", avatar: null });
     await repository.ensureMembership("owner", "owner-key", undefined, true);
     await repository.ensureMembership("member", "member-key");
 
@@ -362,8 +362,8 @@ describe("ChatRepository", () => {
   });
 
   it("applies a mute duration, exposes the expiry and lazily clears an expired mute", async () => {
-    await repository.upsertUser("owner", "owner-key", { username: "owner", discriminator: "1111", displayName: "Владелец", avatar: null });
-    await repository.upsertUser("member", "member-key", { username: "member", discriminator: "2222", displayName: "Участник", avatar: null });
+    await repository.upsertUser("owner", "owner-key", { username: "owner", discriminator: "1111", avatar: null });
+    await repository.upsertUser("member", "member-key", { username: "member", discriminator: "2222", avatar: null });
     await repository.ensureMembership("owner", "owner-key", undefined, true);
     await repository.ensureMembership("member", "member-key");
 

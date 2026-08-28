@@ -360,6 +360,25 @@ const migrations = [
       ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_status_color text NOT NULL DEFAULT '#4d6bfe' CHECK (custom_status_color ~ '^#[0-9a-fA-F]{6}$');
     `,
   },
+  {
+    // Никнеймы убраны: единственное имя пользователя — username. Свой статус получает
+    // эмодзи вместо цвета, как в Discord; колонка display_name остаётся зеркалом username.
+    id: "024_username_only_and_custom_status_emoji",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_status_emoji text NOT NULL DEFAULT '' CHECK (char_length(custom_status_emoji) <= 16);
+      UPDATE users SET display_name = username WHERE username IS NOT NULL AND display_name <> username;
+    `,
+  },
+  {
+    // Базы, где custom_status_emoji появился допускающим NULL: снапшот с null не проходит
+    // валидацию memberSchema, поэтому добиваем колонку до NOT NULL с пустой строкой.
+    id: "025_custom_status_emoji_not_null",
+    sql: `
+      UPDATE users SET custom_status_emoji = '' WHERE custom_status_emoji IS NULL;
+      ALTER TABLE users ALTER COLUMN custom_status_emoji SET DEFAULT '';
+      ALTER TABLE users ALTER COLUMN custom_status_emoji SET NOT NULL;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

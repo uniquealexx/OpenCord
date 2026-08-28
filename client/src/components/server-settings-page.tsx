@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { Ban, Camera, Clock3, Image as ImageIcon, ShieldCheck, UserCog, UserMinus, UserRoundCheck, Users, X } from "lucide-react";
-import { BAN_DURATION_MINUTES, type BanDurationMinutes, type BannedMember, type MemberRole, type Permission, type ServerSettings } from "@opencord/shared";
+import { Ban, Camera, Clock3, Image as ImageIcon, ShieldCheck, SlidersHorizontal, UserCog, UserMinus, UserRoundCheck, Users, X } from "lucide-react";
+import { BAN_DURATION_MINUTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type BanDurationMinutes, type BannedMember, type MemberRole, type Permission, type ScreenShareFrameRate, type ScreenShareResolution, type ServerSettings } from "@opencord/shared";
 import { Avatar } from "@/components/avatar";
 import { ProfilePreview } from "@/components/profile-preview";
 import { Button } from "@/components/ui/button";
@@ -14,9 +14,11 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { LocalProfile, MockMember, MockServer } from "@/shared/state";
 
-type SettingsPage = "visual" | "users";
+type SettingsPage = "visual" | "limits" | "users";
 type UsersPage = "overview" | "kick" | "ban" | "unban";
 type Access = { id: string; role: MemberRole; permissions: Permission[] };
+
+const UPLOAD_SLIDER_MAX = 2_025;
 
 export function ServerSettingsPage({ server, profile, access, onClose, onAvatar, onBanner, onSaveSettings, onSetRole, onKick, onBan, onUnban }: { server: MockServer; profile: LocalProfile; access: Access; onClose: () => void; onAvatar: () => void; onBanner: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onSetRole: (userId: string, role: "administrator" | "member") => void; onKick: (userId: string) => void; onBan: (userId: string, durationMinutes: BanDurationMinutes) => void; onUnban: (userId: string) => void }): React.ReactElement {
   const { t } = useI18n();
@@ -24,6 +26,14 @@ export function ServerSettingsPage({ server, profile, access, onClose, onAvatar,
   const [usersPage, setUsersPage] = useState<UsersPage>("overview");
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description ?? "");
+  const currentMegabytes = server.maxAttachmentBytes === null ? UPLOAD_SLIDER_MAX : Math.round(server.maxAttachmentBytes / MEBIBYTE);
+  const [limitStep, setLimitStep] = useState(currentMegabytes);
+  const [limitInput, setLimitInput] = useState(server.maxAttachmentBytes === null ? "2001" : String(currentMegabytes));
+  const [maxResolution, setMaxResolution] = useState<ScreenShareResolution>(server.screenShareMaxResolution ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION);
+  const [maxFrameRate, setMaxFrameRate] = useState<ScreenShareFrameRate>(server.screenShareMaxFrameRate ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE);
+  const parsedLimit = Number.parseInt(limitInput, 10);
+  const validLimit = Number.isFinite(parsedLimit) && parsedLimit >= 1;
+  const unlimited = validLimit && parsedLimit > 2_000;
   const canManageVisual = access.permissions.includes("MANAGE_SERVER");
   const canManageRoles = access.permissions.includes("MANAGE_ROLES");
   const canModerate = access.permissions.includes("KICK_MEMBERS");
@@ -35,9 +45,33 @@ export function ServerSettingsPage({ server, profile, access, onClose, onAvatar,
       name: nextName,
       description: description.trim(),
       maxAttachmentBytes: server.maxAttachmentBytes,
-      screenShareMaxResolution: server.screenShareMaxResolution ?? 1080,
-      screenShareMaxFrameRate: server.screenShareMaxFrameRate ?? 60,
+      screenShareMaxResolution: server.screenShareMaxResolution ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION,
+      screenShareMaxFrameRate: server.screenShareMaxFrameRate ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE,
     });
+  }
+
+  function saveLimits(): void {
+    if (!canManageVisual || !validLimit) return;
+    onSaveSettings({
+      name: server.name,
+      description: server.description ?? "",
+      maxAttachmentBytes: unlimited ? null : parsedLimit * MEBIBYTE,
+      screenShareMaxResolution: maxResolution,
+      screenShareMaxFrameRate: maxFrameRate,
+    });
+  }
+
+  function changeLimitSlider(value: number): void {
+    setLimitStep(value);
+    setLimitInput(value > 2_000 ? "2001" : String(value));
+  }
+
+  function changeLimitInput(value: string): void {
+    const digits = value.replace(/\D/gu, "");
+    setLimitInput(digits);
+    if (!digits) return;
+    const numericValue = Number.parseInt(digits, 10);
+    setLimitStep(numericValue > 2_000 ? UPLOAD_SLIDER_MAX : Math.max(1, numericValue));
   }
 
   return (
@@ -50,6 +84,7 @@ export function ServerSettingsPage({ server, profile, access, onClose, onAvatar,
         </div>
         <nav className="space-y-1 max-sm:grid max-sm:grid-cols-2 max-sm:gap-1 max-sm:space-y-0">
           <NavigationButton active={page === "visual"} icon={<Camera className="size-4" />} onClick={() => setPage("visual")}>{t.serverSettings.visual}</NavigationButton>
+          <NavigationButton active={page === "limits"} icon={<SlidersHorizontal className="size-4" />} onClick={() => setPage("limits")}>{t.serverSettings.limits}</NavigationButton>
           <NavigationButton active={page === "users"} icon={<Users className="size-4" />} onClick={() => setPage("users")}>{t.serverSettings.users}</NavigationButton>
         </nav>
         {page === "users" && <nav className="mt-4 space-y-1 border-t border-white/[.06] pt-4 max-sm:grid max-sm:grid-cols-2 max-sm:gap-1 max-sm:space-y-0">
@@ -80,6 +115,49 @@ export function ServerSettingsPage({ server, profile, access, onClose, onAvatar,
               </div>
             </div>
           </div>
+        ) : page === "limits" ? (
+          <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8">
+            <PageHeading title={t.serverSettings.limitsTitle} description={t.serverSettings.limitsDescription} />
+            <section className="space-y-5 rounded-3xl border border-white/[.08] bg-[#26282c] p-5 sm:p-6">
+              <div>
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-200">{t.server.uploadLimitTitle}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{t.server.uploadLimitHint}</p>
+                  </div>
+                  <label className={cn("flex h-10 min-w-28 items-center rounded-xl border px-3 transition focus-within:ring-2", unlimited ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-200 focus-within:ring-cyan-400/25" : "border-violet-400/20 bg-violet-400/10 text-violet-200 focus-within:ring-violet-400/25")}>
+                    <input aria-label={t.server.uploadLimitInput} inputMode="numeric" value={limitInput} onChange={(event) => changeLimitInput(event.target.value)} disabled={!canManageVisual} className="w-16 bg-transparent text-right text-sm font-bold outline-none disabled:cursor-not-allowed" />
+                    <span className="ml-2 min-w-5 text-xs font-bold">{unlimited ? "∞" : t.settings.mb}</span>
+                  </label>
+                </div>
+                <input aria-label={t.server.uploadLimitSlider} type="range" min={1} max={UPLOAD_SLIDER_MAX} step={1} value={limitStep} onChange={(event) => changeLimitSlider(Number(event.target.value))} disabled={!canManageVisual} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full bg-white/15 disabled:cursor-not-allowed disabled:opacity-50" />
+                <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>1 {t.settings.mb}</span><span>500</span><span>1000</span><span>1500</span><span>2000</span><span>∞</span></div>
+              </div>
+              <div className="border-t border-white/[.06] pt-5">
+                <div className="mb-3 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-200">{t.server.shareQualityTitle}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{t.server.shareQualityHint}</p>
+                  </div>
+                  <span className="rounded-xl bg-cyan-400/10 px-3 py-2 text-sm font-bold text-cyan-200">{maxResolution === 1440 ? t.server.source : `${maxResolution}p`}</span>
+                </div>
+                <input aria-label={t.server.shareQualitySlider} type="range" min={0} max={SCREEN_SHARE_RESOLUTIONS.length - 1} step={1} value={SCREEN_SHARE_RESOLUTIONS.indexOf(maxResolution)} onChange={(event) => setMaxResolution(SCREEN_SHARE_RESOLUTIONS[Number(event.target.value)] ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION)} disabled={!canManageVisual} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full bg-white/15 disabled:cursor-not-allowed disabled:opacity-50" />
+                <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>480p</span><span>720p</span><span>1080p</span><span>{t.server.source}</span></div>
+              </div>
+              <div className="border-t border-white/[.06] pt-5">
+                <div className="mb-3 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-200">{t.server.shareFpsTitle}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{t.server.shareFpsHint}</p>
+                  </div>
+                  <span className="rounded-xl bg-violet-400/10 px-3 py-2 text-sm font-bold text-violet-200">{maxFrameRate} FPS</span>
+                </div>
+                <input aria-label={t.server.shareFpsSlider} type="range" min={0} max={SCREEN_SHARE_FRAME_RATES.length - 1} step={1} value={SCREEN_SHARE_FRAME_RATES.indexOf(maxFrameRate)} onChange={(event) => setMaxFrameRate(SCREEN_SHARE_FRAME_RATES[Number(event.target.value)] ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE)} disabled={!canManageVisual} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full bg-white/15 disabled:cursor-not-allowed disabled:opacity-50" />
+                <div className="mt-2 flex justify-between text-[10px] text-slate-600"><span>15 FPS</span><span>30 FPS</span><span>60 FPS</span></div>
+              </div>
+              {canManageVisual ? <Button onClick={saveLimits} disabled={!validLimit}>{t.server.saveSettings}</Button> : <p className="text-xs text-slate-500">{t.server.onlyOwner}</p>}
+            </section>
+          </div>
         ) : (
           <UserSettings server={server} profile={profile} access={access} page={usersPage} canManageRoles={canManageRoles} canModerate={canModerate} onSetRole={onSetRole} onKick={onKick} onBan={onBan} onUnban={onUnban} />
         )}
@@ -104,7 +182,7 @@ function UserSettings({ server, profile, access, page, canManageRoles, canModera
           const disabled = !canModerate;
           const destructive = true;
           const run = (): void => onKick(member.id);
-          return <MemberManagementRow key={member.id} member={member} profile={profile} isCurrentUser={false} action={action} confirmText={t.serverSettings.confirmKick(member.displayName)} disabled={disabled} destructive={destructive} onAction={run} />;
+          return <MemberManagementRow key={member.id} member={member} profile={profile} isCurrentUser={false} action={action} confirmText={t.serverSettings.confirmKick(member.username)} disabled={disabled} destructive={destructive} onAction={run} />;
         })}
       </div>
     )}
@@ -131,10 +209,10 @@ function RoleColumn({ title, members, empty, profile, action, onAction }: { titl
       {members.length === 0 && <p className="px-2 py-8 text-center text-xs text-slate-500">{empty}</p>}
       {members.map((member) => <div key={member.id} className="rounded-xl border border-white/[.055] bg-black/10 p-3">
         <div className="flex min-w-0 items-center gap-3">
-          <ProfilePreview profile={{ displayName: member.displayName, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusColor: member.customStatusColor, isCurrentUser: member.id === profile.id }}>
-            <Avatar name={member.displayName} image={member.avatar ?? (member.id === profile.id ? profile.avatar : null)} color={member.avatarColor} size="md" status={member.status} statusColor={member.customStatus ? member.customStatusColor : undefined} />
+          <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser: member.id === profile.id }}>
+            <Avatar name={member.username} image={member.avatar ?? (member.id === profile.id ? profile.avatar : null)} color={member.avatarColor} size="md" status={member.status} />
           </ProfilePreview>
-          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.displayName}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
         </div>
         {action && onAction && <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => onAction(member)}><UserCog className="size-3.5" />{action}</Button>}
       </div>)}
@@ -147,10 +225,10 @@ function BannedList({ members, canModerate, onUnban }: { members: BannedMember[]
   const { t, locale } = useI18n();
   if (members.length === 0) return <EmptyState>{t.serverSettings.noBans}</EmptyState>;
   return <div className="space-y-2">{members.map((member) => <div key={member.id} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-[#26282c] p-3">
-    <ProfilePreview profile={{ displayName: member.displayName, username: member.username ?? undefined, discriminator: member.discriminator ?? undefined, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, status: "offline" }}>
-      <Avatar name={member.displayName} image={member.avatar} size="md" />
+    <ProfilePreview profile={{ username: member.username ?? t.chat.unknownUser, discriminator: member.discriminator ?? undefined, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, status: "offline" }}>
+      <Avatar name={member.username ?? t.chat.unknownUser} image={member.avatar} size="md" />
     </ProfilePreview>
-    <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.displayName}</p><p className="text-[10px] text-slate-500">{t.serverSettings.bannedAt(new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(member.bannedAt)))}</p><p className="text-[10px] text-slate-500">{member.expiresAt ? t.serverSettings.banExpiresAt(new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(member.expiresAt))) : t.serverSettings.permanentBan}</p></div>
+    <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.username ?? t.chat.unknownUser}</p><p className="text-[10px] text-slate-500">{t.serverSettings.bannedAt(new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(member.bannedAt)))}</p><p className="text-[10px] text-slate-500">{member.expiresAt ? t.serverSettings.banExpiresAt(new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(member.expiresAt))) : t.serverSettings.permanentBan}</p></div>
     <Button variant="secondary" size="sm" disabled={!canModerate} onClick={() => onUnban(member.id)}><UserRoundCheck className="size-3.5" />{t.serverSettings.unbanAction}</Button>
   </div>)}</div>;
 }
@@ -161,13 +239,13 @@ function BanManagementRow({ member, disabled, onBan }: { member: MockMember; dis
   const [confirming, setConfirming] = useState(false);
   function run(): void { onBan(member.id, duration); setConfirming(false); }
   return <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[.07] bg-[#26282c] p-3">
-    <ProfilePreview profile={{ displayName: member.displayName, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusColor: member.customStatusColor, isCurrentUser: false }}>
-      <Avatar name={member.displayName} image={member.avatar} color={member.avatarColor} size="md" status={member.status} statusColor={member.customStatus ? member.customStatusColor : undefined} />
+    <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser: false }}>
+      <Avatar name={member.username} image={member.avatar} color={member.avatarColor} size="md" status={member.status} />
     </ProfilePreview>
-    <div className="min-w-32 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.displayName}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
+    <div className="min-w-32 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
     <Combobox label={t.serverSettings.banDurationLabel} value={duration === null ? "permanent" : String(duration)} placeholder={t.serverSettings.banDurationLabel} icon={Clock3} options={[...BAN_DURATION_MINUTES.map((minutes) => ({ value: String(minutes), label: t.serverSettings.banDuration(minutes) })), { value: "permanent", label: t.serverSettings.permanentBan }]} disabled={disabled} clearable={false} className="w-40 shrink-0" onChange={(value) => setDuration(value === "permanent" ? null : Number(value) as BanDurationMinutes)} />
     <Button variant="danger" size="sm" disabled={disabled || confirming} onClick={() => setConfirming(true)}>{t.serverSettings.banAction}</Button>
-    {confirming && <div role="alertdialog" aria-label={t.serverSettings.confirmBan(member.displayName)} className="basis-full rounded-xl border border-red-400/15 bg-red-400/[.055] p-3"><p className="text-xs leading-5 text-red-100/80">{t.serverSettings.confirmBan(member.displayName)}</p><div className="mt-3 flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>{t.common.cancel}</Button><Button variant="danger" size="sm" onClick={run}>{t.serverSettings.banAction}</Button></div></div>}
+    {confirming && <div role="alertdialog" aria-label={t.serverSettings.confirmBan(member.username)} className="basis-full rounded-xl border border-red-400/15 bg-red-400/[.055] p-3"><p className="text-xs leading-5 text-red-100/80">{t.serverSettings.confirmBan(member.username)}</p><div className="mt-3 flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>{t.common.cancel}</Button><Button variant="danger" size="sm" onClick={run}>{t.serverSettings.banAction}</Button></div></div>}
   </div>;
 }
 
@@ -177,10 +255,10 @@ function MemberManagementRow({ member, profile, isCurrentUser, action, confirmTe
   function run(): void { onAction(); setConfirming(false); }
   return <div className="rounded-2xl border border-white/[.07] bg-[#26282c] p-3">
     <div className="flex items-center gap-3">
-      <ProfilePreview profile={{ displayName: member.displayName, username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusColor: member.customStatusColor, isCurrentUser }}>
-        <Avatar name={member.displayName} image={member.avatar ?? (isCurrentUser ? profile.avatar : null)} color={member.avatarColor} size="md" status={member.status} statusColor={member.customStatus ? member.customStatusColor : undefined} />
+      <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser }}>
+        <Avatar name={member.username} image={member.avatar ?? (isCurrentUser ? profile.avatar : null)} color={member.avatarColor} size="md" status={member.status} />
       </ProfilePreview>
-      <div className="min-w-0 flex-1"><p className="flex items-center gap-1 truncate text-sm font-semibold text-slate-200">{member.serverRole === "administrator" && <ShieldCheck className="size-3.5 shrink-0 text-violet-300" />}{member.displayName}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
+      <div className="min-w-0 flex-1"><p className="flex items-center gap-1 truncate text-sm font-semibold text-slate-200">{member.serverRole === "administrator" && <ShieldCheck className="size-3.5 shrink-0 text-violet-300" />}{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
       <Button variant={destructive ? "danger" : "secondary"} size="sm" disabled={disabled || confirming} onClick={() => confirmText ? setConfirming(true) : run()}>{action}</Button>
     </div>
     {confirming && confirmText && <div role="alertdialog" aria-label={confirmText} className="mt-3 rounded-xl border border-red-400/15 bg-red-400/[.055] p-3"><p className="text-xs leading-5 text-red-100/80">{confirmText}</p><div className="mt-3 flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>{t.common.cancel}</Button><Button variant="danger" size="sm" onClick={run}>{action}</Button></div></div>}

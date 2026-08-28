@@ -10,23 +10,15 @@ import { cn } from "@/lib/utils";
 import { randomDiscriminator, type LocalProfile } from "@/shared/state";
 
 export function Onboarding({ language, onLanguageChange, onComplete }: { language: Language; onLanguageChange: (language: Language) => void; onComplete: (profile: LocalProfile) => void }): React.ReactElement {
-  const [name, setName] = useState("");
   const [username, setUsername] = useState("");
-  const [usernameTouched, setUsernameTouched] = useState(false);
   const [bio, setBio] = useState("");
   const [discriminator, setDiscriminator] = useState<string | null>(null);
   const { t } = useI18n();
-  const usernameValid = /^[a-z0-9_.-]{2,32}$/u.test(username.trim().toLowerCase());
-  const valid = name.trim().length >= 2 && usernameValid;
+  const valid = /^[a-z0-9_.-]{2,32}$/u.test(username.trim().toLowerCase());
 
   useEffect(() => {
     void window.openCord?.identity?.getOrCreate().then((identity) => setDiscriminator(identity.discriminator)).catch(() => setDiscriminator(null));
   }, []);
-
-  function changeName(value: string): void {
-    setName(value);
-    if (!usernameTouched) setUsername(slugifyUsername(value));
-  }
 
   async function submit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
@@ -36,7 +28,7 @@ export function Onboarding({ language, onLanguageChange, onComplete }: { languag
       try { nextDiscriminator = (await window.openCord?.identity?.getOrCreate())?.discriminator ?? null; } catch { nextDiscriminator = null; }
     }
     // В браузере без моста идентичности (демо-режим) дискриминатор генерируется локально.
-    onComplete({ id: "local-user", username: username.trim().toLowerCase(), discriminator: nextDiscriminator ?? randomDiscriminator(), displayName: name.trim(), bio: bio.trim(), avatar: null, banner: null, createdAt: new Date().toISOString() });
+    onComplete({ id: "local-user", username: username.trim().toLowerCase(), discriminator: nextDiscriminator ?? randomDiscriminator(), bio: bio.trim(), avatar: null, banner: null, createdAt: new Date().toISOString() });
   }
 
   return (
@@ -56,11 +48,9 @@ export function Onboarding({ language, onLanguageChange, onComplete }: { languag
           <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{t.onboarding.title}</h1>
           <p className="mt-3 text-sm leading-6 text-slate-400">{t.onboarding.description}</p>
           <div className="mt-8 space-y-5">
-            <label className="grid gap-2 text-sm font-medium text-slate-300">{t.onboarding.name}<Input autoFocus value={name} onChange={(event) => changeName(event.target.value)} placeholder={t.onboarding.namePlaceholder} maxLength={32} /></label>
-            <label className="grid gap-2 text-sm font-medium text-slate-300">{t.onboarding.username}<Input value={username} onChange={(event) => { setUsername(event.target.value); setUsernameTouched(true); }} placeholder="username" maxLength={32} className={username && !usernameValid ? "border-red-400/60" : ""} /></label>
+            <label className="grid gap-2 text-sm font-medium text-slate-300">{t.onboarding.username}<Input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} placeholder="username" maxLength={32} className={username && !valid ? "border-red-400/60" : ""} /></label>
             <p className="flex items-center gap-1.5 text-xs text-slate-500"><AtSign className="size-3.5" />{t.onboarding.usernameHint}</p>
             <label className="grid gap-2 text-sm font-medium text-slate-300">{t.onboarding.bio}<Textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder={t.onboarding.bioPlaceholder} maxLength={160} /></label>
-            {usernameValid && <p className="rounded-xl border border-violet-400/15 bg-violet-400/[.05] px-4 py-2.5 text-xs text-violet-200/80">{t.onboarding.tagPreview}<span className="font-semibold text-violet-100">{username.trim().toLowerCase()}#{discriminator ?? t.onboarding.tagPending}</span></p>}
           </div>
           <Button type="submit" disabled={!valid} className="mt-6 h-12">{t.onboarding.submit}<ArrowRight className="size-4" /></Button>
           <p className="mt-5 rounded-xl border border-amber-400/10 bg-amber-400/5 p-3 text-xs leading-5 text-amber-200/65">{t.onboarding.privacy}</p>
@@ -68,11 +58,6 @@ export function Onboarding({ language, onLanguageChange, onComplete }: { languag
       </section>
     </main>
   );
-}
-
-function slugifyUsername(displayName: string): string {
-  const slug = displayName.toLocaleLowerCase().replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 32);
-  return slug.length >= 2 ? slug : "user";
 }
 
 function Feature({ icon, text }: { icon: React.ReactNode; text: string }): React.ReactElement {

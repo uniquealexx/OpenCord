@@ -8,7 +8,6 @@ const profile: LocalProfile = {
   id: "local-user",
   username: "lina",
   discriminator: "1234",
-  displayName: "Лина",
   bio: "Описание Лины",
   avatar: null,
   banner: "data:image/webp;base64,AQ==",
@@ -149,7 +148,7 @@ describe("server connection", () => {
       expect(result.current.deleteChannel(channelId)).toBe(true);
       expect(result.current.updateMessage(channelId, "Исправлено", [channelId], ["user-1"])).toBe(true);
       expect(result.current.deleteMessage(channelId)).toBe(true);
-      expect(result.current.updateProfile({ username: "lina", discriminator: "1234", displayName: "Новое имя", bio: "Описание профиля", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "dnd" })).toBe(true);
+      expect(result.current.updateProfile({ username: "lina", discriminator: "1234", bio: "Описание профиля", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "dnd" })).toBe(true);
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
       expect(result.current.updateServerBanner("data:image/webp;base64,AQ==")).toBe(true);

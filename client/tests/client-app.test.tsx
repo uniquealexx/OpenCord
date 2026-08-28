@@ -13,7 +13,7 @@ function readyState(): PersistedClientState {
   const state: PersistedClientState = {
     ...createDefaultState(),
     onboardingComplete: true,
-    profile: { id: "local-user", username: "lina", discriminator: "1234", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
+    profile: { id: "local-user", username: "lina", discriminator: "1234", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
   };
   state.servers = [{
     id: "test-server",
@@ -312,7 +312,7 @@ describe("ClientApp", () => {
   it("opens a profile preview from both the message avatar and author name", async () => {
     const user = userEvent.setup();
     const message = readyState().messages[0]!;
-    const member = { id: message.authorId, displayName: message.authorName, bio: "Описание с сервера", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: message.authorColor, avatar: null };
+    const member = { id: message.authorId, username: message.authorName, bio: "Описание с сервера", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: message.authorColor, avatar: null };
     render(<Message message={message} member={member} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
 
     const profileButtons = screen.getAllByRole("button", { name: `Открыть профиль ${message.authorName}` });
@@ -341,8 +341,8 @@ describe("ClientApp", () => {
     render(<ClientApp />);
     await screen.findByText("Тестовый сервер");
 
-    await user.click(screen.getByRole("button", { name: "Открыть профиль Лина" }));
-    expect(screen.getByRole("dialog", { name: "Профиль Лина" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Открыть профиль lina" }));
+    expect(screen.getByRole("dialog", { name: "Профиль lina" })).toBeInTheDocument();
     expect(screen.getByText("Это вы")).toBeInTheDocument();
   });
 
@@ -367,8 +367,8 @@ describe("ClientApp", () => {
   it("groups the member list by role with the highest role first", async () => {
     const state = readyState();
     state.servers[0]!.members = [
-      { id: "member-1", displayName: "Обычный", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" },
-      { id: "admin-1", displayName: "Админ", bio: "", role: "Администратор", serverRole: "administrator" as const, status: "online" as const, avatarColor: "#7c5cff" },
+      { id: "member-1", username: "Обычный", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" },
+      { id: "admin-1", username: "Админ", bio: "", role: "Администратор", serverRole: "administrator" as const, status: "online" as const, avatarColor: "#7c5cff" },
     ];
     window.openCord!.storage.load = vi.fn(async () => state);
     render(<ClientApp />);
@@ -379,7 +379,7 @@ describe("ClientApp", () => {
     const headers = within(memberList!).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent ?? "");
     expect(headers).toEqual(["Владелец сервера — 1", "Администраторы — 1", "Участники — 1"]);
     const order = within(memberList!).getAllByRole("button", { name: /Открыть профиль/u }).map((button) => button.getAttribute("aria-label"));
-    expect(order).toEqual(["Открыть профиль Лина", "Открыть профиль Админ", "Открыть профиль Обычный"]);
+    expect(order).toEqual(["Открыть профиль lina", "Открыть профиль Админ", "Открыть профиль Обычный"]);
   });
 
   it("shows uploaded attachments in the composer and allows removing them", async () => {
@@ -553,7 +553,7 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
-      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", displayName: "Анна", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null }],
+      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
@@ -565,7 +565,7 @@ describe("ClientApp", () => {
     expect(next.servers[0]?.screenShareMaxFrameRate).toBe(30);
     expect(next.servers[0]?.channels[0]?.serverId).toBe("test-server");
     expect(next.servers[0]?.members[0]).toMatchObject({
-      displayName: "Анна",
+      username: "anna",
       bio: "Администрирую сообщество",
       role: "Administrator",
       serverRole: "administrator",
@@ -614,7 +614,7 @@ describe("ClientApp", () => {
 
   it("shows a voice avatar ring, mute states and a profile preview", () => {
     const profile = readyState().profile!;
-    const member = { id: "voice-member", displayName: "Марина", bio: "Люблю голосовые разговоры", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==" };
+    const member = { id: "voice-member", username: "Марина", bio: "Люблю голосовые разговоры", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==" };
     const participant = { userId: member.id, channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
     const { rerender } = render(<VoiceParticipantRow participant={participant} member={member} profile={profile} currentUserId="local-user" speaking />);
 
@@ -657,7 +657,7 @@ describe("ClientApp", () => {
     const state = readyState();
     const profile = state.profile!;
     const voiceChannel = state.servers[0]!.channels[2]!;
-    const server = { ...state.servers[0]!, members: [{ id: "voice-member", displayName: "Марина", bio: "Профиль из голосовой комнаты", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null, banner: "data:image/webp;base64,AQ==" }] };
+    const server = { ...state.servers[0]!, members: [{ id: "voice-member", username: "Марина", bio: "Профиль из голосовой комнаты", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null, banner: "data:image/webp;base64,AQ==" }] };
     const participant = { userId: "voice-member", channelId: voiceChannel.id, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
     const viewer = { userId: "local-user", channelId: voiceChannel.id, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: "voice-member" };
     const stream = { participantIdentity: "voice-member", participantName: "Марина", local: false, track: {} } as unknown as ScreenShareStream;
@@ -671,7 +671,7 @@ describe("ClientApp", () => {
     const { rerender } = render(<VoiceChannelView {...commonProps} screenShares={[stream]} viewingScreenShareId={null} />);
 
     expect(screen.getByRole("button", { name: "Выключить микрофон" })).toHaveClass("size-11");
-    expect(screen.getByLabelText("Смотрят: Лина")).toHaveTextContent("1");
+    expect(screen.getByLabelText("Смотрят: lina")).toHaveTextContent("1");
 
     await user.click(screen.getByRole("button", { name: "Открыть профиль Марина" }));
     expect(screen.getByRole("dialog", { name: "Профиль Марина" })).toBeInTheDocument();
@@ -820,14 +820,14 @@ describe("ClientApp", () => {
 
   it("renders a mention as a highlighted chip that opens the profile preview", async () => {
     const user = userEvent.setup();
-    const member = { id: "user-mark", username: "mark", discriminator: "5678", fingerprint: "abcd-ef01-2345-6789", displayName: "Марк", bio: "Про упоминания", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
+    const member = { id: "user-mark", username: "mark", discriminator: "5678", fingerprint: "abcd-ef01-2345-6789", bio: "Про упоминания", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
     const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-mark>!", createdAt: new Date().toISOString(), mentions: ["user-mark"] };
     render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
 
-    const mention = screen.getByRole("button", { name: "Упоминание: Марк" });
+    const mention = screen.getByRole("button", { name: "Упоминание: mark" });
     expect(mention).toHaveClass("h-[18px]", "bg-blue-500/18", "text-[12px]");
     await user.click(mention);
-    expect(screen.getByRole("dialog", { name: "Профиль Марк" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Профиль mark" })).toBeInTheDocument();
     expect(screen.getByText("@mark#5678")).toBeInTheDocument();
     expect(screen.getByText("abcd-ef01-2345-6789")).toBeInTheDocument();
   });
@@ -841,15 +841,15 @@ describe("ClientApp", () => {
   it("suggests members after @ in the composer and inserts the chosen tag", async () => {
     const user = userEvent.setup();
     const candidates: MentionCandidate[] = [
-      { id: "user-lina", username: "lina", discriminator: "1234", displayName: "Лина", status: "online" },
-      { id: "user-lina2", username: "lina", discriminator: "9999", displayName: "Лина Вторая", status: "offline" },
+      { id: "user-lina", username: "lina", discriminator: "1234", status: "online" },
+      { id: "user-lina2", username: "lina", discriminator: "9999", status: "offline" },
     ];
     render(<StatefulComposer candidates={candidates} />);
     const input = screen.getByRole("textbox", { name: "Написать в #общий" });
 
     await user.type(input, "@lin");
     expect(screen.getByRole("listbox", { name: "Упоминание участников" })).toBeInTheDocument();
-    expect(screen.getByText("@lina#1234")).toBeInTheDocument();
+    expect(screen.getAllByText("@lina")).toHaveLength(2);
 
     await user.keyboard("{Enter}");
     expect(input).toHaveValue("@lina#1234");
@@ -920,7 +920,7 @@ describe("ClientApp", () => {
   it("stores a local private message with a badge in the demo mode", async () => {
     const user = userEvent.setup();
     const state = readyState();
-    state.servers[0]!.members = [{ id: "user-mark", username: "mark", discriminator: "5678", displayName: "Марк", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" }];
+    state.servers[0]!.members = [{ id: "user-mark", username: "mark", discriminator: "5678", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" }];
     window.openCord!.storage.load = vi.fn(async () => state);
     render(<ClientApp />);
     await screen.findByText("Тестовый сервер");
@@ -955,7 +955,7 @@ describe("ClientApp", () => {
   it("renders reaction chips with a count and toggles on click", async () => {
     const user = userEvent.setup();
     const onToggleReaction = vi.fn();
-    const member = { id: "user-mark", displayName: "Марк", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" };
+    const member = { id: "user-mark", username: "Марк", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" };
     const message = { id: "reaction-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "С реакциями", createdAt: new Date().toISOString(), reactions: [{ emoji: "👍", userIds: ["user-mark"] }, { emoji: "🔥", userIds: ["user-gone"] }, { emoji: "❤️", userIds: ["local-user"] }] };
     render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={onToggleReaction} canReact />);
 
@@ -1097,7 +1097,7 @@ describe("ClientApp", () => {
         handler({ data: JSON.stringify({ type: "message.reactions.updated", messageId: "c7a83bb4-4d14-4b4f-9e2f-1f6e0f2f4d4c", channelId, reactions: [{ emoji: "🔥", userIds: ["local-user"] }] }) });
       }
     });
-    expect(await screen.findByRole("button", { name: "Реакция 🔥: 1 — Лина" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Реакция 🔥: 1 — lina" })).toBeInTheDocument();
   });
 
   it("keeps the anonymous label on demo search results", async () => {

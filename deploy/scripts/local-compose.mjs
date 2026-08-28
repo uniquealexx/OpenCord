@@ -23,6 +23,7 @@ if (!new Set(["up", "down", "logs"]).has(action)) {
 }
 
 if (action === "up") ensureLocalSecrets();
+writeEnvironmentFile();
 
 const composeArguments = [
   "compose",
@@ -54,7 +55,14 @@ function ensureLocalSecrets() {
   if (!existsSync(ownerPublicKeyFile)) writeFileSync(ownerPublicKeyFile, "local-development-owner-is-claimed-by-first-user-0000\n", { encoding: "utf8", mode: 0o600 });
   if (!existsSync(serverNameFile)) writeFileSync(serverNameFile, "OpenCord Local Docker\n", { encoding: "utf8", mode: 0o600 });
   if (!existsSync(deploymentIdFile)) writeFileSync(deploymentIdFile, `${randomUUID()}\n`, { encoding: "utf8", mode: 0o600 });
-  writeFileSync(environmentFile, `OPENCORD_DOMAIN=localhost\nACME_EMAIL=local@example.invalid\nOPENCORD_VERSION=${rootPackage.version}\nOPENCORD_RELEASE_CHANNEL=development\nOPENCORD_BUILD_COMMIT=\nSERVER_LOG_LEVEL=info\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+// Контекст сборки задаётся абсолютным путём: Compose v5 резолвит относительный build.context
+// от --project-directory, а Compose v2 — от каталога compose-файла, поэтому один относительный
+// путь не может быть верным для обеих версий сразу.
+function writeEnvironmentFile() {
+  const buildContext = repositoryRoot.replaceAll("\\", "/");
+  writeFileSync(environmentFile, `OPENCORD_DOMAIN=localhost\nACME_EMAIL=local@example.invalid\nOPENCORD_VERSION=${rootPackage.version}\nOPENCORD_RELEASE_CHANNEL=development\nOPENCORD_BUILD_COMMIT=\nSERVER_LOG_LEVEL=info\nOPENCORD_BUILD_CONTEXT=${buildContext}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 async function waitForHealth(url) {

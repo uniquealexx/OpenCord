@@ -3,7 +3,7 @@ name: opencord-local
 services:
   server:
     build:
-      context: ..
+      context: ${OPENCORD_BUILD_CONTEXT:?Run the stack through pnpm docker:up}
       dockerfile: deploy/Dockerfile.bundle
       target: runtime
       args:
@@ -16,15 +16,11 @@ services:
       VOICE_SECURE_MODE: "false"
     ports:
       - "127.0.0.1:3210:3210"
+  # attachments-init использует тот же образ, что и server, и намеренно не собирает его сам:
+  # два таргета с одним тегом экспортируются параллельно и падают на "image already exists".
+  # Образ собирает server, а pull_policy запрещает ходить за локальной версией в registry.
   attachments-init:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.bundle
-      target: runtime
-      args:
-        OPENCORD_VERSION: ${OPENCORD_VERSION}
-        OPENCORD_RELEASE_CHANNEL: ${OPENCORD_RELEASE_CHANNEL:-development}
-        OPENCORD_BUILD_COMMIT: ${OPENCORD_BUILD_COMMIT:-}
+    pull_policy: never
 
   livekit:
     environment:

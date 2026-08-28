@@ -31,7 +31,7 @@ function stateWithTwoServers(): PersistedClientState {
   const state: PersistedClientState = {
     ...createDefaultState(),
     onboardingComplete: true,
-    profile: { id: "local-user", username: "lina", discriminator: "1234", displayName: "Лина", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
+    profile: { id: "local-user", username: "lina", discriminator: "1234", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
   };
   state.servers = [
     {

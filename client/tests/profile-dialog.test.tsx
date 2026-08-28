@@ -8,7 +8,6 @@ const profile: LocalProfile = {
   id: "local-user",
   username: "lina",
   discriminator: "1234",
-  displayName: "Лина",
   bio: "",
   avatar: null,
   banner: null,
@@ -41,7 +40,7 @@ describe("ProfileDialog status", () => {
     expect(screen.getByText("Для остальных участников вы будете отображаться не в сети.")).toBeInTheDocument();
   });
 
-  it("saves a length-limited custom status and selected color", async () => {
+  it("saves a length-limited custom status with the chosen emoji", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
     render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
@@ -49,26 +48,22 @@ describe("ProfileDialog status", () => {
     const input = screen.getByRole("textbox", { name: "Свой статус" });
     await user.type(input, "Работаю над релизом");
     expect(input).toHaveAttribute("maxlength", "32");
-    expect(document.querySelector('input[type="color"]')).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Цвет своего статуса" }));
-    await user.click(screen.getByRole("button", { name: "#34d399" }));
+    await user.click(screen.getByRole("button", { name: "Открыть панель эмодзи" }));
+    await user.click(screen.getByRole("button", { name: "Вставить 😀" }));
     await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ customStatus: "Работаю над релизом", customStatusColor: "#34d399" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ customStatus: "Работаю над релизом", customStatusEmoji: "😀" }));
   });
 
-  it("accepts an arbitrary valid HEX color in the glass palette", async () => {
+  it("clears the custom status together with its emoji", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
-    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+    render(<ProfileDialog profile={{ ...profile, customStatus: "Раньше", customStatusEmoji: "🚀" }} open onOpenChange={vi.fn()} onSave={onSave} />);
 
-    await user.click(screen.getByRole("button", { name: "Цвет своего статуса" }));
-    const hex = screen.getByRole("textbox", { name: "Цвет своего статуса HEX" });
-    await user.clear(hex);
-    await user.type(hex, "#123abc");
+    await user.click(screen.getByRole("button", { name: "Очистить свой статус" }));
     await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ customStatusColor: "#123abc" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ customStatus: "", customStatusEmoji: "" }));
   });
 
   it("opens the crop editor before saving a selected profile banner", async () => {

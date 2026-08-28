@@ -3,10 +3,10 @@ import { buildMentionToken } from "@opencord/shared";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseCommandTarget, parseMuteDuration, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 
 const members: MentionCandidate[] = [
-  { id: "user-lina", username: "lina", discriminator: "1234", displayName: "Лина", status: "online" },
-  { id: "user-mark", username: "mark", discriminator: "5678", displayName: "Марк", status: "offline" },
-  { id: "user-lina2", username: "lina", discriminator: "9999", displayName: "Лина Вторая", status: "offline" },
-  { id: "user-marina", username: "marina", discriminator: "4242", displayName: "Марина Аналитик", status: "online" },
+  { id: "user-lina", username: "lina", discriminator: "1234", status: "online" },
+  { id: "user-mark", username: "mark", discriminator: "5678", status: "offline" },
+  { id: "user-lina2", username: "lina", discriminator: "9999", status: "offline" },
+  { id: "user-marina", username: "marina", discriminator: "4242", status: "online" },
 ];
 
 describe("mentions", () => {
@@ -23,8 +23,8 @@ describe("mentions", () => {
     expect(byPrefix.map((candidate) => candidate.id)).toEqual(["user-lina", "user-lina2"]);
     const byTag = matchMentionCandidates(members, "lina", "9999");
     expect(byTag.map((candidate) => candidate.id)).toEqual(["user-lina2"]);
-    const byDisplayName = matchMentionCandidates(members, "аналит", "");
-    expect(byDisplayName.map((candidate) => candidate.id)).toEqual(["user-marina"]);
+    const bySubstring = matchMentionCandidates(members, "arin", "");
+    expect(bySubstring.map((candidate) => candidate.id)).toEqual(["user-marina"]);
     const empty = matchMentionCandidates(members, "", "");
     expect(empty.length).toBeLessThanOrEqual(8);
   });
@@ -60,7 +60,7 @@ describe("mentions", () => {
 
   it("expands markers back to readable tags for editing", () => {
     const content = `Смотри ${buildMentionToken("user-lina2")} и ${buildMentionToken("user-unknown")}`;
-    expect(expandMentionsForEditing(content, members)).toBe(`Смотри @lina#9999 и ${buildMentionToken("user-unknown")}`);
+    expect(expandMentionsForEditing(content, members)).toBe(`Смотри @lina и ${buildMentionToken("user-unknown")}`);
   });
 
   it("splits content into text and mention segments", () => {

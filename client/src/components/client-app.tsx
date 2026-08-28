@@ -218,13 +218,12 @@ export function ClientApp(): React.ReactElement {
                       username: member.username,
                       discriminator: member.discriminator,
                       fingerprint: member.fingerprint,
-                      displayName: member.displayName,
                       bio: member.bio,
                       role: roleLabel(member.role),
                       serverRole: member.role,
                       status: member.status,
                       customStatus: member.customStatus,
-                      customStatusColor: member.customStatusColor,
+                      customStatusEmoji: member.customStatusEmoji,
                       avatarColor: colorFromId(member.id),
                       avatar: member.avatar,
                       banner: member.banner,
@@ -238,7 +237,7 @@ export function ClientApp(): React.ReactElement {
             message.authorId === member.id
               ? {
                   ...message,
-                  authorName: member.displayName,
+                  authorName: member.username,
                   authorAvatar: member.avatar,
                 }
               : message,
@@ -553,7 +552,6 @@ export function ClientApp(): React.ReactElement {
             username: profile.username,
             discriminator: profile.discriminator,
             fingerprint: selfIdentity?.fingerprint,
-            displayName: profile.displayName,
             role: t.roles.you,
             serverRole: currentAccess?.role,
             status: visibleProfileStatus(profile.status),
@@ -789,7 +787,7 @@ export function ClientApp(): React.ReactElement {
         message.authorId === profile.id || message.authorId === currentAccess?.id
           ? {
               ...message,
-              authorName: profile.displayName,
+              authorName: profile.username,
               authorAvatar: profile.avatar,
             }
           : message,
@@ -800,13 +798,12 @@ export function ClientApp(): React.ReactElement {
       !connection.updateProfile({
         username: profile.username,
         discriminator: profile.discriminator,
-        displayName: profile.displayName,
         bio: profile.bio,
         avatar: profile.avatar,
         banner: profile.banner,
         status: profile.status ?? "online",
         customStatus: profile.customStatus ?? "",
-        customStatusColor: profile.customStatusColor ?? "#4d6bfe",
+        customStatusEmoji: profile.customStatusEmoji ?? "",
       })
     )
       setNotice(t.notices.profileSavedLocalOnly);
@@ -880,7 +877,7 @@ export function ClientApp(): React.ReactElement {
           id: createId("message"),
           channelId: activeChannel.id,
           authorId: profile.id,
-          authorName: profile.displayName,
+          authorName: profile.username,
           authorColor: "#4d6bfe",
           content: command.content,
           createdAt: new Date().toISOString(),
@@ -949,7 +946,7 @@ export function ClientApp(): React.ReactElement {
       id: createId("message"),
       channelId: activeChannel.id,
       authorId: profile.id,
-      authorName: profile.displayName,
+      authorName: profile.username,
       authorColor: "#4d6bfe",
       content: trimmed,
       createdAt: new Date().toISOString(),
@@ -1633,9 +1630,9 @@ function HomeScreen({ serverCount, profile, onCreate, onConnect, onProfile, onSe
           )}
         </div>
         <div className="mx-auto mt-10 flex max-w-lg flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/[.04] p-3 text-left">
-          <Avatar name={profile.displayName} image={profile.avatar} size="lg" status={visibleProfileStatus(profile.status)} />
+          <Avatar name={profile.username} image={profile.avatar} size="lg" status={visibleProfileStatus(profile.status)} />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-slate-100">{profile.displayName}</p>
+            <p className="truncate text-sm font-semibold text-slate-100">{profile.username}</p>
             <p className="truncate text-xs text-slate-500">{profile.bio?.trim() || t.home.profileHint}</p>
           </div>
           <Button variant="secondary" size="sm" onClick={onProfile}>
@@ -1747,10 +1744,12 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
       {activeVoiceChannel && onLeaveVoice && onMuted && onDeafened && <VoicePanel mobile={mobile} channel={activeVoiceChannel} status={voiceStatus} muted={muted} serverMuted={serverMuted} deafened={deafened} isScreenSharing={isScreenSharing} onMuted={onMuted} onDeafened={onDeafened} onStartScreenShare={onStartScreenShare} onStopScreenShare={onStopScreenShare} onLeave={onLeaveVoice} />}
       <div className="flex h-14 items-center gap-2 border-t border-white/[.06] bg-rail px-2">
         <button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5">
-          <Avatar name={profile.displayName} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} statusColor={profile.customStatus ? profile.customStatusColor : undefined} />
+          <Avatar name={profile.username} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} />
           <span className="min-w-0">
-            <span className="block truncate text-xs font-semibold text-slate-200">{profile.displayName}</span>
-            <span className={cn("block truncate text-[10px]", !profile.customStatus && (profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400"))} style={profile.customStatus ? { color: profile.customStatusColor } : undefined}>{profile.customStatus || t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>
+            <span className="block truncate text-xs font-semibold text-slate-200">{profile.username}</span>
+            {profile.customStatus
+              ? <span className="block truncate text-[10px] text-slate-400">{profile.customStatusEmoji ? `${profile.customStatusEmoji} ` : ""}{profile.customStatus}</span>
+              : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
           </span>
         </button>
         <button title={t.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200">
@@ -1792,7 +1791,7 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
 export function VoiceParticipantRow({ participant, member, profile, currentUserId, speaking, sharing = false, onViewScreenShare }: { participant: VoicePresence; member?: MockMember; profile: LocalProfile; currentUserId: string; speaking: boolean; sharing?: boolean; onViewScreenShare?: (participantIdentity: string) => void }): React.ReactElement {
   const { t } = useI18n();
   const isCurrentUser = participant.userId === currentUserId;
-  const displayName = member?.displayName ?? (isCurrentUser ? profile.displayName : t.voice.participant);
+  const memberName = member?.username ?? (isCurrentUser ? profile.username : t.voice.participant);
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
   return (
@@ -1801,8 +1800,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
       wrapperClassName="ml-6 flex"
       triggerClassName="flex min-h-9 w-[224px] max-w-full items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200"
       profile={{
-        displayName,
-        username: member?.username ?? (isCurrentUser ? profile.username : undefined),
+        username: member?.username ?? (isCurrentUser ? profile.username : memberName),
         discriminator: member?.discriminator ?? (isCurrentUser ? profile.discriminator : undefined),
         fingerprint: member?.fingerprint,
         avatar,
@@ -1810,21 +1808,21 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         color: member?.avatarColor,
         status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
         customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
-        customStatusColor: member?.customStatusColor ?? (isCurrentUser ? profile.customStatusColor : undefined),
+        customStatusEmoji: member?.customStatusEmoji ?? (isCurrentUser ? profile.customStatusEmoji : undefined),
         role: member?.role,
         bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined),
         isCurrentUser,
       }}
     >
-      <Avatar name={displayName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#1d1f23] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
+      <Avatar name={memberName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#1d1f23] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
       <span className="min-w-0 flex-1 truncate">
-        {displayName}
+        {memberName}
         {isCurrentUser && ` ${t.voice.youSuffix}`}
       </span>
       {sharing && (
         <span
-          title={t.voice.viewScreen(displayName)}
-          aria-label={t.voice.viewScreen(displayName)}
+          title={t.voice.viewScreen(memberName)}
+          aria-label={t.voice.viewScreen(memberName)}
           onClick={(event) => {
             event.stopPropagation();
             onViewScreenShare?.(participant.userId);
@@ -1835,15 +1833,15 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         </span>
       )}
       {participant.serverMuted ? (
-        <span aria-label={t.voice.adminMutedOf(displayName)} title={t.voice.adminMuted} className="grid size-6 shrink-0 place-items-center text-red-300">
+        <span aria-label={t.voice.adminMutedOf(memberName)} title={t.voice.adminMuted} className="grid size-6 shrink-0 place-items-center text-red-300">
           <MicOff className="size-3.5" />
         </span>
       ) : participant.deafened ? (
-        <span aria-label={t.voice.soundAndMicOffOf(displayName)} title={t.voice.soundAndMicOff} className="grid size-6 shrink-0 place-items-center text-red-300">
+        <span aria-label={t.voice.soundAndMicOffOf(memberName)} title={t.voice.soundAndMicOff} className="grid size-6 shrink-0 place-items-center text-red-300">
           <VolumeX className="size-3.5" />
         </span>
       ) : participant.muted ? (
-        <span aria-label={t.voice.micOffOf(displayName)} title={t.voice.micOff} className="grid size-6 shrink-0 place-items-center text-red-300">
+        <span aria-label={t.voice.micOffOf(memberName)} title={t.voice.micOff} className="grid size-6 shrink-0 place-items-center text-red-300">
           <MicOff className="size-3.5" />
         </span>
       ) : null}
@@ -1901,7 +1899,7 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
     color?: string;
     status: PublicMemberStatus;
     customStatus?: string;
-    customStatusColor?: string;
+    customStatusEmoji?: string;
     role?: string;
     bio?: string;
     username?: string;
@@ -1912,7 +1910,7 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
     const member = server.members.find((item) => item.id === identity);
     const isCurrentUser = identity === currentUserId;
     return {
-      name: member?.displayName ?? (isCurrentUser ? profile.displayName : (fallbackName ?? t.voice.participant)),
+      name: member?.username ?? (isCurrentUser ? profile.username : (fallbackName ?? t.voice.participant)),
       username: member?.username ?? (isCurrentUser ? profile.username : undefined),
       discriminator: member?.discriminator ?? (isCurrentUser ? profile.discriminator : undefined),
       fingerprint: member?.fingerprint,
@@ -1921,7 +1919,7 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
       color: member?.avatarColor,
       status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
       customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
-      customStatusColor: member?.customStatusColor ?? (isCurrentUser ? profile.customStatusColor : undefined),
+      customStatusEmoji: member?.customStatusEmoji ?? (isCurrentUser ? profile.customStatusEmoji : undefined),
       role: member?.role,
       bio: member?.bio ?? (isCurrentUser ? profile.bio : undefined),
       isCurrentUser,
@@ -2082,8 +2080,7 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
                         )}
                         <ProfilePreview
                           profile={{
-                            displayName: participantData.name,
-                            username: participantData.username,
+                            username: participantData.username ?? participantData.name,
                             discriminator: participantData.discriminator,
                             fingerprint: participantData.fingerprint,
                             avatar: participantData.avatar,
@@ -2091,7 +2088,7 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
                             color: participantData.color,
                             status: participantData.status,
                             customStatus: participantData.customStatus,
-                            customStatusColor: participantData.customStatusColor,
+                            customStatusEmoji: participantData.customStatusEmoji,
                             role: participantData.role,
                             bio: participantData.bio,
                             isCurrentUser: participantData.isCurrentUser,
@@ -2743,8 +2740,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
   const hasReactions = Boolean(message.reactions?.length);
   const replyPreview = replyToMessage?.content.trim() || replyToMessage?.attachments?.[0]?.fileName || t.chat.replyAttachment;
   const previewProfile = {
-    displayName: message.authorName,
-    username: member?.username ?? (own ? profile?.username : undefined),
+    username: member?.username ?? (own ? profile?.username : undefined) ?? message.authorName,
     discriminator: member?.discriminator ?? (own ? profile?.discriminator : undefined),
     fingerprint: member?.fingerprint,
     avatar: message.authorAvatar ?? ownAvatar,
@@ -2752,7 +2748,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
     color: message.authorColor,
     status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : ("offline" as const)),
     customStatus: member?.customStatus ?? (own ? profile?.customStatus : undefined),
-    customStatusColor: member?.customStatusColor ?? (own ? profile?.customStatusColor : undefined),
+    customStatusEmoji: member?.customStatusEmoji ?? (own ? profile?.customStatusEmoji : undefined),
     role: member?.role,
     bio: member?.bio ?? (own ? profile?.bio : undefined),
     isCurrentUser: own,
@@ -2832,7 +2828,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
           <Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} />
         </ProfilePreview>
       ) : (
-        <span className="w-9 shrink-0 self-start text-right text-[9px] leading-6 text-transparent group-hover:text-slate-600">{time}</span>
+        <span className="w-9 shrink-0 self-start whitespace-nowrap text-right text-[9px] leading-6 text-transparent group-hover:text-slate-600">{time}</span>
       )}
       <div className="min-w-0 flex-1">
         {(!grouped || compact) && (
@@ -2840,7 +2836,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
             <ProfilePreview profile={previewProfile} wrapperClassName="min-w-0 max-w-full" triggerClassName="block min-w-0 max-w-full truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
               {message.authorName}
             </ProfilePreview>
-            <time className="shrink-0 text-[10px] text-slate-600">{time}</time>
+            <time className="shrink-0 whitespace-nowrap text-[10px] text-slate-600">{time}</time>
             {message.editedAt && <span className="shrink-0 text-[10px] text-slate-600">{t.chat.edited}</span>}
           </div>
         )}
@@ -2901,7 +2897,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
               <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1">
                 {message.reactions?.map((reaction) => {
                   const selected = Boolean(currentUserId && reaction.userIds.includes(currentUserId));
-                  const reactionNames = reaction.userIds.map((userId) => members.find((member) => member.id === userId)?.displayName ?? (userId === currentUserId ? (profile?.displayName ?? (own ? message.authorName : undefined)) : undefined) ?? t.chat.unknownUser);
+                  const reactionNames = reaction.userIds.map((userId) => members.find((member) => member.id === userId)?.username ?? (userId === currentUserId ? (profile?.username ?? (own ? message.authorName : undefined)) : undefined) ?? t.chat.unknownUser);
                   const reactionLabel = reactionNames.join(", ");
                   return (
                     <button key={reaction.emoji} type="button" title={reactionLabel} aria-label={t.chat.reactionsAria(reaction.emoji, reaction.userIds.length, reactionLabel)} aria-pressed={selected} disabled={!canReact} onClick={() => onToggleReaction(message.id, reaction.emoji)} className={cn("inline-flex h-6 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:cursor-not-allowed disabled:opacity-50", selected ? "border-violet-400/45 bg-violet-400/12 text-violet-200" : "border-white/8 bg-white/[.04] text-slate-300", canReact && (selected ? "hover:border-violet-400/60 hover:bg-violet-400/15" : "hover:border-white/15 hover:bg-white/[.07]"))}>
@@ -3006,7 +3002,6 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
       wrapperClassName="inline-flex align-middle"
       triggerClassName="inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 text-[12px] font-medium leading-none text-blue-200 transition hover:bg-blue-500/28 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60"
       profile={{
-        displayName: member.displayName,
         username: member.username,
         discriminator: member.discriminator,
         fingerprint: member.fingerprint,
@@ -3015,13 +3010,13 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
         color: member.avatarColor,
         status: member.status,
         customStatus: member.customStatus,
-        customStatusColor: member.customStatusColor,
+        customStatusEmoji: member.customStatusEmoji,
         role: member.role,
         bio: member.bio,
       }}
-      label={t.chat.mentionAria(member.displayName)}
+      label={t.chat.mentionAria(member.username)}
     >
-      <span>@{member.displayName}</span>
+      <span>@{member.username}</span>
     </ProfilePreview>
   );
 }
@@ -3031,13 +3026,12 @@ function memberToMentionCandidate(member: MockMember): MentionCandidate {
     id: member.id,
     username: member.username,
     discriminator: member.discriminator,
-    displayName: member.displayName,
     avatar: member.avatar ?? null,
     banner: member.banner ?? null,
     color: member.avatarColor,
     status: member.status,
     customStatus: member.customStatus,
-    customStatusColor: member.customStatusColor,
+    customStatusEmoji: member.customStatusEmoji,
     role: member.role,
     bio: member.bio,
     fingerprint: member.fingerprint,
@@ -3151,7 +3145,9 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
 
   function applyMention(candidate: MentionCandidate): void {
     if (!mentionQuery) return;
-    const token = `@${candidate.username ?? candidate.displayName}${candidate.discriminator ? `#${candidate.discriminator}` : ""}`;
+    // Тег с дискриминатором подставляется только когда username неоднозначен на сервере.
+    const ambiguous = members.filter((item) => item.username.toLowerCase() === candidate.username.toLowerCase()).length > 1;
+    const token = `@${candidate.username}${ambiguous && candidate.discriminator ? `#${candidate.discriminator}` : ""}`;
     const next = `${draft.slice(0, mentionQuery.start)}${token}${draft.slice(mentionQuery.end)}`;
     onDraft(next);
     insertedMentionRef.current = next;
@@ -3383,13 +3379,10 @@ function MentionSuggestions({ suggestions, activeIndex, onSelect, onHover }: { s
     <div role="listbox" aria-label={t.chat.mentionUsers} className="glass absolute bottom-[calc(100%+4px)] left-3 z-30 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.5)] sm:left-5">
       {suggestions.map((candidate, index) => (
         <button key={candidate.id} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => onHover(index)} onClick={() => onSelect(candidate)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition", index === activeIndex ? "bg-violet-400/10" : "hover:bg-white/[.04]")}>
-          <Avatar name={candidate.displayName} image={candidate.avatar} color={candidate.color} size="sm" status={candidate.status} />
+          <Avatar name={candidate.username} image={candidate.avatar} color={candidate.color} size="sm" status={candidate.status} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-semibold text-slate-200">{candidate.displayName}</span>
-            <span className="block truncate text-[10px] text-slate-500">
-              {candidate.username ? `@${candidate.username}${candidate.discriminator ? `#${candidate.discriminator}` : ""}` : t.chat.mentionCandidate}
-              {candidate.fingerprint ? ` · ${candidate.fingerprint.slice(0, 4)}…` : ""}
-            </span>
+            <span className="block truncate text-xs font-semibold text-slate-200">@{candidate.username}</span>
+            <span className="block truncate text-[10px] text-slate-500">{candidate.customStatus ? `${candidate.customStatusEmoji ? `${candidate.customStatusEmoji} ` : ""}${candidate.customStatus}` : (candidate.role ?? t.chat.mentionCandidate)}</span>
           </span>
         </button>
       ))}
@@ -3571,7 +3564,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
         : [
             {
               id: profile.id,
-              displayName: profile.displayName,
+              username: profile.username,
               role: t.roles.you,
               serverRole: "owner" as const,
               status: visibleProfileStatus(profile.status),
@@ -3584,7 +3577,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
   );
   const groups = useMemo(() => {
     const roleOrder = { owner: 0, administrator: 1, member: 2 } as const;
-    const sorted = [...members].sort((left, right) => roleOrder[left.serverRole ?? "member"] - roleOrder[right.serverRole ?? "member"] || left.displayName.localeCompare(right.displayName));
+    const sorted = [...members].sort((left, right) => roleOrder[left.serverRole ?? "member"] - roleOrder[right.serverRole ?? "member"] || left.username.localeCompare(right.username));
     return (
       [
         { key: "owner", label: t.roles.owner },
@@ -3619,8 +3612,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                     wrapperClassName="min-w-0 flex-1"
                     triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2"
                     profile={{
-                      displayName: member.displayName,
-                      username: member.username ?? (isCurrentUser ? profile.username : undefined),
+                      username: member.username ?? (isCurrentUser ? profile.username : "unknown"),
                       discriminator: member.discriminator ?? (isCurrentUser ? profile.discriminator : undefined),
                       fingerprint: member.fingerprint,
                       avatar,
@@ -3628,21 +3620,23 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                       color: member.avatarColor,
                       status: member.status,
                       customStatus: member.customStatus,
-                      customStatusColor: member.customStatusColor,
+                      customStatusEmoji: member.customStatusEmoji,
                       role: member.role,
                       bio: member.bio ?? (isCurrentUser ? profile.bio : undefined),
                       isCurrentUser,
                     }}
                   >
-                    <Avatar name={member.displayName} image={avatar} color={member.avatarColor} size="sm" status={member.status} statusColor={member.customStatus ? member.customStatusColor : undefined} />
+                    <Avatar name={member.username} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
                     <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}>
                       <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">
                         {member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}
                         {member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}
-                        {member.displayName}
+                        {member.username}
                         {isChatMutedNow(member) && <MessageCircleOff aria-label={t.members.chatMuted} className="size-3 shrink-0 text-red-300" />}
                       </span>
-                      <span className={cn("block truncate text-[10px]", !member.customStatus && (member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600"))} style={member.customStatus ? { color: member.customStatusColor } : undefined}>{member.customStatus || member.role}</span>
+                      {member.customStatus
+                        ? <span className="block truncate text-[10px] text-slate-400">{member.customStatusEmoji ? `${member.customStatusEmoji} ` : ""}{member.customStatus}</span>
+                        : <span className={cn("block truncate text-[10px]", member.serverRole === "owner" ? "text-amber-300/70" : member.serverRole === "administrator" ? "text-violet-300/70" : "text-slate-600")}>{member.role}</span>}
                     </span>
                   </ProfilePreview>
                 </div>
@@ -3728,11 +3722,12 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     username: member.username,
     discriminator: member.discriminator,
     fingerprint: member.fingerprint,
-    displayName: member.displayName,
     bio: member.bio,
     role: roleLabel(member.role),
     serverRole: member.role,
     status: member.status,
+    customStatus: member.customStatus,
+    customStatusEmoji: member.customStatusEmoji,
     avatarColor: colorFromId(member.id),
     avatar: member.avatar,
     banner: member.banner,
