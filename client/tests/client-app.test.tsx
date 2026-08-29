@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
@@ -22,9 +22,9 @@ function readyState(): PersistedClientState {
     accent: "#7c5cff",
     maxAttachmentBytes: 10 * 1024 * 1024,
     channels: [
-      { id: "welcome", serverId: "test-server", name: "добро-пожаловать", kind: "text", description: "Начните знакомство", participantLimit: null },
-      { id: "general", serverId: "test-server", name: "общий", kind: "text", description: "Разговоры обо всём", participantLimit: null },
-      { id: "voice", serverId: "test-server", name: "Гостиная", kind: "voice", description: "Голосовой канал", participantLimit: 25 },
+      { id: "welcome", serverId: "test-server", name: "добро-пожаловать", kind: "text", description: "Начните знакомство", participantLimit: null, slowmodeSeconds: 0 },
+      { id: "general", serverId: "test-server", name: "общий", kind: "text", description: "Разговоры обо всём", participantLimit: null, slowmodeSeconds: 0 },
+      { id: "voice", serverId: "test-server", name: "Гостиная", kind: "voice", description: "Голосовой канал", participantLimit: 25, slowmodeSeconds: 0 },
     ],
     members: [],
   }];
@@ -522,7 +522,7 @@ describe("ClientApp", () => {
       address: null,
       accent: "#36c5f0",
       maxAttachmentBytes: 10 * 1024 * 1024,
-      channels: [{ id: "next-general", serverId: "next-server", name: "общий", kind: "text", description: "Следующий канал", participantLimit: null }],
+      channels: [{ id: "next-general", serverId: "next-server", name: "общий", kind: "text", description: "Следующий канал", participantLimit: null, slowmodeSeconds: 0 }],
       members: [],
     });
     vi.mocked(window.openCord!.storage.load).mockResolvedValue(state);
@@ -552,7 +552,7 @@ describe("ClientApp", () => {
       maxAttachmentBytes: 25 * 1024 * 1024,
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
-      channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null }],
+      channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null, slowmodeSeconds: 0 }],
       members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -574,6 +574,28 @@ describe("ClientApp", () => {
     });
   });
 
+  it("adopts the discriminator the server assigned to the local identity", () => {
+    const state = readyState();
+    state.profile!.discriminator = "4242";
+    const next = applyServerSnapshot(state, {
+      id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
+      name: "OpenCord Server",
+      avatar: null,
+      banner: null,
+      maxAttachmentBytes: null,
+      screenShareMaxResolution: 1080,
+      screenShareMaxFrameRate: 60,
+      channels: state.servers[0]!.channels.map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
+      // Тег 4242 уже занят другой идентичностью, поэтому сервер выдал локальному профилю свой.
+      members: [
+        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, status: "online", role: "member", chatMuted: false, chatMutedUntil: null },
+        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, status: "online", role: "owner", chatMuted: false, chatMutedUntil: null },
+      ],
+      currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
+    });
+    expect(next.profile?.discriminator).toBe("0731");
+  });
+
   it("removes cached messages when a server snapshot deletes a channel", () => {
     const state = readyState();
     const removedId = state.servers[0]!.channels[0]!.id;
@@ -586,7 +608,7 @@ describe("ClientApp", () => {
       maxAttachmentBytes: null,
       screenShareMaxResolution: 1080,
       screenShareMaxFrameRate: 60,
-      channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit })),
+      channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
       members: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -715,7 +737,44 @@ describe("ClientApp", () => {
     fireEvent.change(slider, { target: { value: "26" } });
     expect(screen.getAllByText("∞", { selector: "span" })).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить изменения" }));
-    expect(onSave).toHaveBeenCalledWith("Гостиная", "Голосовой канал", 0);
+    expect(onSave).toHaveBeenCalledWith("Гостиная", "Голосовой канал", 0, 0);
+  });
+
+  it("offers a slowmode picker for a text channel only", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const textChannel = readyState().servers[0]!.channels[0]!;
+    const { unmount } = render(<EditChannelDialog channel={textChannel} open onOpenChange={vi.fn()} onSave={onSave} />);
+    await user.click(screen.getByRole("radio", { name: "30 с" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить изменения" }));
+    expect(onSave).toHaveBeenCalledWith(textChannel.name, textChannel.description, null, 30);
+    unmount();
+
+    // У голосового канала сообщений нет, поэтому и выбора ограничения быть не должно.
+    render(<EditChannelDialog channel={readyState().servers[0]!.channels[2]!} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByRole("radiogroup", { name: "Ограничение отправки" })).not.toBeInTheDocument();
+  });
+
+  it("applies a bulk slowmode to every selected text channel", async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    const channels = readyState().servers[0]!.channels;
+    render(<ChannelSlowmodeDialog channels={channels} open onOpenChange={vi.fn()} onApply={onApply} />);
+
+    // Голосовые каналы в список массовой настройки не попадают.
+    const textChannels = channels.filter((channel) => channel.kind === "text");
+    expect(screen.getAllByRole("checkbox")).toHaveLength(textChannels.length);
+
+    await user.click(screen.getByRole("button", { name: "Выбрать все" }));
+    expect(screen.getByText(`Выбрано каналов: ${textChannels.length}`)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "10 с" }));
+    await user.click(screen.getByRole("button", { name: "Применить к выбранным" }));
+    expect(onApply).toHaveBeenCalledWith(textChannels.map((channel) => channel.id), 10);
+  });
+
+  it("keeps the bulk slowmode apply button disabled until channels are selected", () => {
+    render(<ChannelSlowmodeDialog channels={readyState().servers[0]!.channels} open onOpenChange={vi.fn()} onApply={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Применить к выбранным" })).toBeDisabled();
   });
 
   it("opens the home screen and starts the connect flow", async () => {
@@ -756,7 +815,7 @@ describe("ClientApp", () => {
   it("clears the message draft when switching servers", async () => {
     const user = userEvent.setup();
     const state = readyState();
-    state.servers = [...state.servers, { id: "second-server", name: "Второй сервер", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [{ id: "second-general", serverId: "second-server", name: "главный", kind: "text" as const, description: "", participantLimit: null }], members: [] }];
+    state.servers = [...state.servers, { id: "second-server", name: "Второй сервер", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [{ id: "second-general", serverId: "second-server", name: "главный", kind: "text" as const, description: "", participantLimit: null, slowmodeSeconds: 0 }], members: [] }];
     window.openCord!.storage.load = vi.fn(async () => state);
     render(<ClientApp />);
     await screen.findByText("Тестовый сервер");
@@ -772,7 +831,7 @@ describe("ClientApp", () => {
   it("closes the search panel and drops results when switching servers", async () => {
     const user = userEvent.setup();
     const state = readyState();
-    state.servers = [...state.servers, { id: "second-server", name: "Второй сервер", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [{ id: "second-general", serverId: "second-server", name: "главный", kind: "text" as const, description: "", participantLimit: null }], members: [] }];
+    state.servers = [...state.servers, { id: "second-server", name: "Второй сервер", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [{ id: "second-general", serverId: "second-server", name: "главный", kind: "text" as const, description: "", participantLimit: null, slowmodeSeconds: 0 }], members: [] }];
     window.openCord!.storage.load = vi.fn(async () => state);
     render(<ClientApp />);
     await screen.findByText("Тестовый сервер");

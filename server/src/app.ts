@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
+import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
@@ -11,6 +11,7 @@ import { runMigrations } from "./database/migrations";
 import { ChatRepository, messageForViewer, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, type AttachmentStorage } from "./attachments/storage";
+import { createFloodLimiter } from "./rate-limit";
 import { DisabledVoiceService, VoiceRoomFullError, VoiceUnavailableError, type VoiceService } from "./voice";
 import type { ServerBuildInfo } from "./build-info";
 
@@ -41,11 +42,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await runMigrations(options.database);
   const repository = new ChatRepository(options.database);
   await repository.performRetentionCleanup();
+  const purgedReactions = await repository.purgeInvalidReactions();
   const attachmentStorage = options.attachmentStorage ?? new FileSystemAttachmentStorage(options.attachmentsDir ?? path.resolve(".data", "attachments"));
   const voice = options.voiceService ?? new DisabledVoiceService();
   if (options.serverName && options.deploymentId) await repository.configureServer(options.serverName, options.deploymentId);
   const connections = new Set<ConnectionState>();
   const sessions = new Map<string, { userId: string; expiresAt: number }>();
+  // Предел на идентичность, а не на канал: медленный режим настраивают модераторы,
+  // а это — нижняя граница, которую модифицированный клиент не обходит.
+  const floodLimiter = createFloodLimiter({ capacity: MESSAGE_FLOOD_BURST, refillIntervalMs: MESSAGE_FLOOD_WINDOW_MS / MESSAGE_FLOOD_SUSTAINED });
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 2_100_000 });
   const voiceReconcileTimer = setInterval(() => { void reconcileVoicePresence(); }, 30_000);
   voiceReconcileTimer.unref();
@@ -53,6 +58,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     void runRetentionCleanup().catch((error: unknown) => app.log.error(error));
   }, 15 * 60_000);
   retentionCleanupTimer.unref();
+
+  if (purgedReactions > 0) app.log.info(`Удалено реакций, не являющихся эмодзи: ${purgedReactions}`);
 
   await app.register(cors, { origin: false });
   await app.register(websocket, { options: { maxPayload: 2_100_000 } });
@@ -166,6 +173,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "ping") return send(connection.socket, { type: "pong", requestId: event.requestId, serverTime: new Date().toISOString() });
     if (event.type === "chat.send" || event.type === "chat.pm" || event.type === "chat.apm") {
       if (await repository.isChatMuted(connection.userId)) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Вы отключены от чата администратором");
+      const flood = floodLimiter.consume(`message:${connection.userId}`);
+      if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком много сообщений подряд, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
+    }
+    if (event.type === "message.react") {
+      const flood = floodLimiter.consume(`react:${connection.userId}`);
+      if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком много реакций подряд, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
     }
     if (event.type === "profile.update") {
       if (!(await repository.updateUserProfile(connection.userId, event.profile))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Профиль пользователя не найден");
@@ -198,6 +211,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "chat.send") {
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      const waitMs = await slowmodeDelay(connection.userId, event.channelId);
+      if (waitMs > 0) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Медленный режим канала: следующее сообщение можно отправить через ${formatDelay(waitMs)}`, waitMs);
       if (event.replyToMessageId && !(await repository.canReplyToMessage(event.replyToMessageId, event.channelId, connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Исходное сообщение для ответа не найдено или недоступно");
       const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds, event.mentions, "chat", null, false, event.replyToMessageId);
       if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Одно или несколько вложений недоступны или уже отправлены");
@@ -251,6 +266,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "message.react") {
       const access = await repository.getMessageAccess(event.messageId);
       if (!access) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      // Реагировать можно только на видимое сообщение: посторонний с чужим идентификатором
+      // получает тот же ответ, что и на несуществующее, — существование ЛС не подтверждается.
+      if (access.kind !== "chat" && access.authorId !== connection.userId && access.targetUserId !== connection.userId) {
+        return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      }
       if (access.kind === "apm" && access.authorId === connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя реагировать на собственное анонимное сообщение");
       const reactions = await repository.toggleReaction(event.messageId, connection.userId, event.emoji);
       if (reactions === null) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
@@ -270,7 +290,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const existingChannel = await repository.getChannel(event.channelId);
       if (!existingChannel) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       if (existingChannel.kind === "voice" && event.participantLimit === null) return sendError(connection.socket, event.requestId, "INVALID_EVENT", "Для голосового канала необходим лимит участников");
-      if (!(await repository.updateChannel(event.channelId, event.name, event.description, event.participantLimit))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (!(await repository.updateChannel(event.channelId, event.name, event.description, event.participantLimit, event.slowmodeSeconds))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "channel.slowmode.set") {
+      if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения каналов");
+      const updated = await repository.setChannelsSlowmode(event.channelIds, event.slowmodeSeconds);
+      if (!updated.length) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Не найдено ни одного текстового канала из списка");
       await broadcastSnapshots();
       return;
     }
@@ -470,6 +497,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return permissionsForRole(await repository.getMemberRole(userId)).includes(permission);
   }
 
+  /**
+   * Сколько ещё нельзя писать в канал из-за медленного режима; 0 — можно прямо сейчас.
+   * Модераторы с MANAGE_MESSAGES режим не ощущают, как и в Discord.
+   */
+  async function slowmodeDelay(userId: string, channelId: string): Promise<number> {
+    const channel = await repository.getChannel(channelId);
+    if (!channel || channel.kind !== "text" || channel.slowmodeSeconds <= 0) return 0;
+    if (await hasPermission(userId, "MANAGE_MESSAGES")) return 0;
+    const lastAt = await repository.lastChatMessageAt(channelId, userId);
+    if (!lastAt) return 0;
+    return Math.max(0, channel.slowmodeSeconds * 1_000 - (Date.now() - lastAt.getTime()));
+  }
+
   async function sendSnapshot(connection: ConnectionState): Promise<void> {
     if (!connection.userId || connection.socket.readyState !== connection.socket.OPEN) return;
     const server = await repository.getServer();
@@ -558,7 +598,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 function decodeFileName(header: string | string[] | undefined): string | null {
   if (typeof header !== "string" || header.length > 500) return null;
   try {
-    const decoded = Buffer.from(header, "base64url").toString("utf8").replaceAll("\\", "/").split("/").at(-1)?.trim() ?? "";
+    const withoutPath = Buffer.from(header, "base64url").toString("utf8").replaceAll("\\", "/").split("/").at(-1) ?? "";
+    // Управляющие символы двунаправленного текста вырезаются до trim: иначе имя
+    // `счёт-<U+202E>fdp.exe` показывается как `счёт-exe.pdf` и .exe выглядит документом.
+    const decoded = stripBidiControls(withoutPath).trim();
     return decoded && decoded.length <= 255 && !/[\u0000-\u001f\u007f]/u.test(decoded) ? decoded : null;
   } catch { return null; }
 }
@@ -573,6 +616,13 @@ function send(socket: WebSocket, event: ServerEvent): void {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
 }
 
-function sendError(socket: WebSocket, requestId: string | null, code: Extract<ServerEvent, { type: "error" }>["code"], message: string): void {
-  send(socket, { type: "error", requestId, code, message });
+function sendError(socket: WebSocket, requestId: string | null, code: Extract<ServerEvent, { type: "error" }>["code"], message: string, retryAfterMs?: number): void {
+  send(socket, { type: "error", requestId, code, message, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+}
+
+/** «через 4 с» / «через 2 мин» — сообщение об ожидании читается людьми, а не машиной. */
+function formatDelay(milliseconds: number): string {
+  const seconds = Math.ceil(milliseconds / 1000);
+  if (seconds < 60) return `${seconds} с`;
+  return `${Math.ceil(seconds / 60)} мин`;
 }

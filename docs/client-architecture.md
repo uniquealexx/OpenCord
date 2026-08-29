@@ -20,7 +20,7 @@ An Android prototype wraps the same static renderer in a Capacitor 8 WebView (`c
 
 ## Local State
 
-The `client-state.json` file lives in Electron's system `userData` directory. Data is validated against a Zod schema before writing and after reading. Writes go through a temporary file and an atomic rename. If the JSON is corrupted or does not match the schema, the original file is copied as `client-state.corrupt-<timestamp>.json`, after which a safe initial state is created. Versioned migrations preserve user servers and settings; the v1→v2 migration removes the former built-in `open-space` server and only the local messages associated with it.
+The `client-state.json` file lives in Electron's system `userData` directory. Data is validated against a Zod schema before writing and after reading. Writes go through a temporary file and an atomic rename. If the JSON is corrupted or does not match the schema, the original file is copied as `client-state.corrupt-<timestamp>.json`, after which a safe initial state is created. Versioned migrations preserve user servers and settings; the v1→v2 migration removes the former built-in `open-space` server and only the local messages associated with it. The contents are encrypted with the OS key store through Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret/kwallet on Linux) and written as an `opencord-encrypted-state@1` envelope: the state caches message history including private messages, and mode `0o600` alone protects nothing on Windows, where ACLs are not set. A plaintext file left by an older version is read as before and rewritten encrypted on the first save. If the key store is unavailable — a Linux session without a keyring — the state stays in clear text as before instead of the profile being lost, and state that cannot be decrypted is treated as corrupt and backed up. On Android the same cache lives in the WebView `localStorage`, which lands in `adb backup`, so it is sealed with AES-GCM under a key kept in the Keystore through `SecureStorage`; only the key goes into the Keystore, because the state itself grows to megabytes on avatars.
 
 The JSON stores the profile, addresses of added servers, their local cache, and UI settings. For servers deployed through the client, non-secret parameters for repeat SSH deployment are also stored: host, port, user, domain, ACME email, install mode, and authentication type. The SSH password, sudo password, passphrase, fingerprint, and private key contents are not stored; before an update, the required secret is selected or entered again. The initial state no longer creates built-in demo servers.
 
@@ -35,6 +35,7 @@ The interface is available in English, Russian, and Chinese. English is the defa
 - `contextIsolation: true`;
 - `sandbox: true`;
 - `nodeIntegration: false`;
+- a Content-Security-Policy meta tag in `src/app/layout.tsx` with `default-src 'none'`, `object-src 'none'`, `frame-src 'none'`, `base-uri 'none'`, and `form-action 'none'`. The renderer loads from `file://`, where there are no HTTP headers, so `onHeadersReceived` cannot deliver it. The policy allows what the app genuinely needs: `'unsafe-inline'` scripts for the Next.js static export flight data, `'wasm-unsafe-eval'` and `blob:` scripts for the RNNoise AudioWorklet, `data:`/`blob:`/`file:` images and media for previews, and `ws:`/`wss:`/`http:`/`https:` in `connect-src` because the user picks the server. It is defence in depth — there is no `dangerouslySetInnerHTML` and no HTML rendering of message content — but an injection would otherwise reach the whole `window.openCord` bridge;
 - external navigation is blocked, HTTPS links open in the system browser;
 - preload does not expose `ipcRenderer` wholesale;
 - the renderer does not receive the path to the selected file: system dialogs and attachment reads and writes happen in main, and preload accepts only a validated server context and public metadata;
@@ -91,7 +92,7 @@ Android-прототип упаковывает тот же статически
 
 ## Локальное состояние
 
-Файл `client-state.json` находится в системном каталоге Electron `userData`. Перед записью и после чтения данные проверяются Zod-схемой. Запись выполняется через временный файл и атомарное переименование. Если JSON повреждён или не соответствует схеме, исходный файл копируется как `client-state.corrupt-<timestamp>.json`, после чего создаётся безопасное начальное состояние. Версионированные миграции сохраняют пользовательские серверы и настройки; миграция v1→v2 удаляет прежний встроенный сервер `open-space` и только связанные с ним локальные сообщения.
+Файл `client-state.json` находится в системном каталоге Electron `userData`. Перед записью и после чтения данные проверяются Zod-схемой. Запись выполняется через временный файл и атомарное переименование. Если JSON повреждён или не соответствует схеме, исходный файл копируется как `client-state.corrupt-<timestamp>.json`, после чего создаётся безопасное начальное состояние. Версионированные миграции сохраняют пользовательские серверы и настройки; миграция v1→v2 удаляет прежний встроенный сервер `open-space` и только связанные с ним локальные сообщения. Содержимое шифруется ключом ОС через Electron `safeStorage` (DPAPI в Windows, Keychain в macOS, libsecret/kwallet в Linux) и пишется конвертом `opencord-encrypted-state@1`: состояние кэширует историю сообщений, включая личные, а режим 0o600 сам по себе ничего не защищает на Windows, где ACL не выставляются. Открытый файл, оставшийся от прежних версий, читается как раньше и при первой же записи переписывается зашифрованным. Если хранилище ключей недоступно — сессия Linux без связки ключей, — состояние остаётся открытым, как и прежде, вместо потери профиля, а состояние, которое не удалось расшифровать, считается повреждённым и уходит в резервную копию. На Android тот же кэш лежит в `localStorage` WebView и попадает в `adb backup`, поэтому запечатывается AES-GCM ключом из Keystore через `SecureStorage`; в Keystore уходит только ключ, потому что само состояние вырастает до мегабайтов на аватарах.
 
 В JSON сохраняются профиль, адреса добавленных серверов, их локальный кэш и UI-настройки. Для серверов, развёрнутых через клиент, также сохраняются несекретные параметры повторного SSH-развёртывания: host, порт, пользователь, домен, ACME email, режим установки и тип аутентификации. SSH-пароль, sudo-пароль, passphrase, fingerprint и содержимое приватного ключа не сохраняются; перед обновлением нужный секрет выбирается или вводится заново. Встроенных демонстрационных серверов начальное состояние больше не создаёт.
 
@@ -106,6 +107,7 @@ Ed25519-приватный ключ хранится отдельно в `identi
 - `contextIsolation: true`;
 - `sandbox: true`;
 - `nodeIntegration: false`;
+- meta-тег Content-Security-Policy в `src/app/layout.tsx` с `default-src 'none'`, `object-src 'none'`, `frame-src 'none'`, `base-uri 'none'` и `form-action 'none'`. Renderer грузится с `file://`, где HTTP-заголовков нет, поэтому через `onHeadersReceived` политику не доставить. Разрешено ровно то, что приложению действительно нужно: inline-скрипты для flight-данных статического экспорта Next.js, `'wasm-unsafe-eval'` и `blob:` для AudioWorklet RNNoise, изображения и медиа из `data:`/`blob:`/`file:` для превью, а также `ws:`/`wss:`/`http:`/`https:` в `connect-src`, потому что сервер выбирает пользователь. Это защита в глубину — `dangerouslySetInnerHTML` и рендера содержимого сообщений как HTML в клиенте нет, — но без неё инъекция получила бы весь мост `window.openCord`;
 - внешняя навигация блокируется, HTTPS-ссылки открываются системным браузером;
 - preload не раскрывает `ipcRenderer` целиком;
 - renderer не получает путь к выбранному файлу: системные диалоги, чтение и запись вложений выполняются в main, а preload принимает только валидированный контекст сервера и публичные метаданные;
@@ -162,7 +164,7 @@ Android 原型将同一个静态 renderer 打包进 Capacitor 8 WebView（`clien
 
 ## 本地状态
 
-`client-state.json` 文件位于 Electron 的系统 `userData` 目录中。写入前和读取后都会用 Zod 模式校验数据。写入通过临时文件和原子重命名完成。如果 JSON 损坏或不符合模式，原始文件会被复制为 `client-state.corrupt-<timestamp>.json`，随后创建安全的初始状态。带版本的迁移会保留用户服务器和设置；v1→v2 迁移会删除先前内置的 `open-space` 服务器以及仅与其关联的本地消息。
+`client-state.json` 文件位于 Electron 的系统 `userData` 目录中。写入前和读取后都会用 Zod 模式校验数据。写入通过临时文件和原子重命名完成。如果 JSON 损坏或不符合模式，原始文件会被复制为 `client-state.corrupt-<timestamp>.json`，随后创建安全的初始状态。带版本的迁移会保留用户服务器和设置；v1→v2 迁移会删除先前内置的 `open-space` 服务器以及仅与其关联的本地消息。文件内容通过 Electron `safeStorage` 用操作系统密钥库加密（Windows 上是 DPAPI，macOS 上是 Keychain，Linux 上是 libsecret/kwallet），并以 `opencord-encrypted-state@1` 信封写入：该状态缓存了包括私聊在内的消息历史，而在不设置 ACL 的 Windows 上，仅靠 0o600 模式并不能提供保护。旧版本遗留的明文文件仍按原方式读取，并在首次保存时改写为加密形式。如果密钥库不可用（例如没有钥匙串的 Linux 会话），状态会像以前一样保持明文，而不是丢失个人资料；无法解密的状态会被视为损坏并备份。在 Android 上，同样的缓存位于 WebView 的 `localStorage` 中并会进入 `adb backup`，因此使用 AES-GCM 加密，密钥通过 `SecureStorage` 保存在 Keystore 中；只有密钥进入 Keystore，因为状态本身会因头像而增长到数兆字节。
 
 JSON 中保存着个人资料、已添加服务器的地址、它们的本地缓存和 UI 设置。对于通过客户端部署的服务器，还会保存用于重复 SSH 部署的非机密参数：host、端口、用户、域名、ACME email、安装模式和认证类型。SSH 密码、sudo 密码、passphrase、fingerprint 以及私钥内容不会被保存；更新前需要重新选择或输入所需的密钥。初始状态不再创建内置的演示服务器。
 
@@ -177,6 +179,7 @@ Ed25519 私钥以加密的 Windows `safeStorage` 形式单独存储在 `identity
 - `contextIsolation: true`;
 - `sandbox: true`;
 - `nodeIntegration: false`;
+- `src/app/layout.tsx` 中的 Content-Security-Policy meta 标签，包含 `default-src 'none'`、`object-src 'none'`、`frame-src 'none'`、`base-uri 'none'` 和 `form-action 'none'`。渲染进程从 `file://` 加载，那里没有 HTTP 头，因此无法通过 `onHeadersReceived` 下发该策略。策略只允许应用真正需要的内容：用于 Next.js 静态导出 flight 数据的内联脚本、用于 RNNoise AudioWorklet 的 `'wasm-unsafe-eval'` 和 `blob:` 脚本、用于预览的 `data:`/`blob:`/`file:` 图片与媒体，以及 `connect-src` 中的 `ws:`/`wss:`/`http:`/`https:`，因为服务器由用户选择。这是纵深防御——客户端没有 `dangerouslySetInnerHTML`，也不会把消息内容渲染为 HTML——但若没有它，注入将触及整个 `window.openCord` 桥接；
 - 阻止外部导航，HTTPS 链接在系统浏览器中打开；
 - preload 不会完整暴露 `ipcRenderer`；
 - 渲染进程不会收到所选文件的路径：系统对话框以及附件的读取和写入在 main 中完成，preload 只接受经过校验的服务器上下文和公开元数据；

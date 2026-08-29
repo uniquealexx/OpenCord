@@ -86,12 +86,27 @@ describe("mobile platform bridge", () => {
   });
 
   describe("storage", () => {
-    it("returns a default state on the first load and persists it", async () => {
+    it("returns a default state on the first load and persists it encrypted", async () => {
       const bridge = createMobileBridge();
       const state = await bridge.storage.load();
       expect(state.version).toBe(4);
       expect(state.servers).toEqual([]);
-      expect(localStorage.getItem("opencord.client-state")).toContain("\"version\":4");
+      // localStorage WebView лежит на диске открытым и попадает в adb backup,
+      // поэтому кэш переписки хранится зашифрованным ключом из Keystore.
+      const stored = localStorage.getItem("opencord.client-state");
+      expect(stored).toMatch(/^opencord-encrypted-state@1:/u);
+      expect(stored).not.toContain("\"version\":4");
+      // Расшифровка возвращает то же состояние.
+      await expect(createMobileBridge().storage.load()).resolves.toEqual(state);
+    });
+
+    it("re-encrypts a plaintext state left by an older version", async () => {
+      const legacy = await createMobileBridge().storage.load();
+      localStorage.setItem("opencord.client-state", JSON.stringify({ ...legacy, onboardingComplete: true }));
+
+      const migrated = await createMobileBridge().storage.load();
+      expect(migrated.onboardingComplete).toBe(true);
+      expect(localStorage.getItem("opencord.client-state")).toMatch(/^opencord-encrypted-state@1:/u);
     });
 
     it("falls back to the default state when stored JSON is corrupted", async () => {

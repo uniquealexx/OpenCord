@@ -5,6 +5,7 @@ import path from "node:path";
 import { IPC } from "../src/shared/bridge";
 import { selectedSshKeySchema } from "../src/shared/deployment";
 import { parsePersistedState } from "../src/shared/state";
+import { createSafeStorageCipher } from "./state-cipher";
 import { ClientStateStore } from "./storage";
 import { IdentityStore } from "./identity";
 import { DeploymentManager } from "./deployment";
@@ -426,7 +427,7 @@ if (!singleInstanceLock) {
   void app.whenReady().then(async () => {
   configureMediaPermissions();
   attachmentPreviewDirectory = await prepareAttachmentPreviewDirectory(app.getPath("temp"));
-  store = new ClientStateStore(app.getPath("userData"));
+  store = new ClientStateStore(app.getPath("userData"), createSafeStorageCipher());
   identityStore = new IdentityStore(app.getPath("userData"));
   const releaseDirectory = app.isPackaged ? path.join(process.resourcesPath, "server-bundles") : path.resolve(app.getAppPath(), "..", "release");
   const localBundleProvider = new LocalServerBundleProvider(releaseDirectory, app.getVersion(), async () => {

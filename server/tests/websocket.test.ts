@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { PROTOCOL_VERSION, serverEventSchema, type ServerEvent } from "@opencord/shared";
+import { MESSAGE_FLOOD_BURST, PROTOCOL_VERSION, serverEventSchema, type ServerEvent } from "@opencord/shared";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
@@ -96,6 +96,13 @@ describe("WebSocket chat flow", () => {
     first.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: randomUUID(), emoji: "👍" }));
     expect((await notFound).code).toBe("NOT_FOUND");
 
+    // Реакция — ровно одно эмодзи: свободный текст протокол до обработчика не пускает.
+    for (const junk of ["ЛОЛ", "a̶̡̜̽͊", "‮работа", "👍👍"]) {
+      const invalid = waitForEvent(first.socket, "error");
+      first.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: created.message.id, emoji: junk }));
+      expect((await invalid).code).toBe("INVALID_EVENT");
+    }
+
     const closed = [once(first.socket, "close"), once(second.socket, "close")];
     first.socket.close();
     second.socket.close();
@@ -139,6 +146,152 @@ it("forbids the sender from reacting to their own anonymous private message", as
     await Promise.all(closed);
   }, 15_000);
 
+  it("enforces channel slowmode for members and lets moderators bypass it", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: exportPublicKey(ownerKeys.publicKey) });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const owner = await connectAndAuthenticate(url, "Владелец", ownerKeys);
+    const member = await connectAndAuthenticate(url, "Участник");
+    const channel = owner.snapshot.server.channels.find((item) => item.kind === "text");
+    if (!channel) throw new Error("Text channel expected");
+    expect(channel.slowmodeSeconds).toBe(0);
+
+    const configured = waitForEventMatching(member.socket, "server.snapshot", (event) => event.server.channels.some((item) => item.id === channel.id && item.slowmodeSeconds === 30));
+    owner.socket.send(JSON.stringify({ type: "channel.update", requestId: randomUUID(), channelId: channel.id, name: channel.name, description: channel.description, participantLimit: null, slowmodeSeconds: 30 }));
+    await configured;
+
+    // Первое сообщение проходит, второе упирается в медленный режим.
+    const first = waitForEvent(member.socket, "message.created");
+    member.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: "Первое" }));
+    await first;
+    const limited = waitForEvent(member.socket, "error");
+    member.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: "Второе" }));
+    const rejection = await limited;
+    expect(rejection.code).toBe("RATE_LIMITED");
+    expect(rejection.retryAfterMs).toBeGreaterThan(0);
+    expect(rejection.retryAfterMs).toBeLessThanOrEqual(30_000);
+
+    // Владелец держит MANAGE_MESSAGES, поэтому пишет подряд без задержки.
+    const ownerFirst = waitForEvent(owner.socket, "message.created");
+    owner.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: "Модератор раз" }));
+    await ownerFirst;
+    const ownerSecond = waitForEventMatching(owner.socket, "message.created", (event) => event.message.content === "Модератор два");
+    owner.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: "Модератор два" }));
+    await ownerSecond;
+
+    const closed = [once(owner.socket, "close"), once(member.socket, "close")];
+    owner.socket.close();
+    member.socket.close();
+    await Promise.all(closed);
+  }, 20_000);
+
+  it("applies a bulk slowmode to selected text channels and ignores voice ones", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: exportPublicKey(ownerKeys.publicKey) });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const owner = await connectAndAuthenticate(url, "Владелец", ownerKeys);
+    const member = await connectAndAuthenticate(url, "Участник");
+    const textChannels = owner.snapshot.server.channels.filter((item) => item.kind === "text");
+    const voiceChannel = owner.snapshot.server.channels.find((item) => item.kind === "voice");
+    expect(textChannels.length).toBeGreaterThan(1);
+    if (!voiceChannel) throw new Error("Voice channel expected");
+
+    // Одним событием настраиваем все текстовые каналы разом плюс голосовой в выборке.
+    const applied = waitForEventMatching(owner.socket, "server.snapshot", (event) =>
+      textChannels.every((item) => event.server.channels.find((candidate) => candidate.id === item.id)?.slowmodeSeconds === 10));
+    owner.socket.send(JSON.stringify({ type: "channel.slowmode.set", requestId: randomUUID(), channelIds: [...textChannels.map((item) => item.id), voiceChannel.id], slowmodeSeconds: 10 }));
+    const snapshot = await applied;
+    expect(snapshot.server.channels.find((item) => item.id === voiceChannel.id)?.slowmodeSeconds).toBe(0);
+
+    // Обычный участник массовую настройку выполнить не может.
+    const forbidden = waitForEvent(member.socket, "error");
+    member.socket.send(JSON.stringify({ type: "channel.slowmode.set", requestId: randomUUID(), channelIds: [textChannels[0]!.id], slowmodeSeconds: 0 }));
+    expect((await forbidden).code).toBe("FORBIDDEN");
+
+    // Выборка без единого текстового канала — ошибка, а не молчаливый успех.
+    const notFound = waitForEvent(owner.socket, "error");
+    owner.socket.send(JSON.stringify({ type: "channel.slowmode.set", requestId: randomUUID(), channelIds: [voiceChannel.id], slowmodeSeconds: 5 }));
+    expect((await notFound).code).toBe("NOT_FOUND");
+
+    const closed = [once(owner.socket, "close"), once(member.socket, "close")];
+    owner.socket.close();
+    member.socket.close();
+    await Promise.all(closed);
+  }, 20_000);
+
+  it("stops a flooding client even when the channel has no slowmode", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const flooder = await connectAndAuthenticate(url, "Флудер");
+    const channel = flooder.snapshot.server.channels.find((item) => item.kind === "text");
+    if (!channel) throw new Error("Text channel expected");
+    expect(channel.slowmodeSeconds).toBe(0);
+
+    // Модифицированный клиент шлёт сообщения в цикле, не дожидаясь ответов.
+    const limited = waitForEvent(flooder.socket, "error");
+    for (let attempt = 0; attempt < MESSAGE_FLOOD_BURST + 5; attempt += 1) {
+      flooder.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: `Флуд ${attempt}` }));
+    }
+    const rejection = await limited;
+    expect(rejection.code).toBe("RATE_LIMITED");
+    expect(rejection.retryAfterMs).toBeGreaterThan(0);
+
+    const closed = once(flooder.socket, "close");
+    flooder.socket.close();
+    await closed;
+  }, 20_000);
+
+  it("rejects reactions on a private message from outside the conversation", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const sender = await connectAndAuthenticate(url, "Отправитель");
+    const receiver = await connectAndAuthenticate(url, "Получатель");
+    const stranger = await connectAndAuthenticate(url, "Посторонний");
+    const channel = sender.snapshot.server.channels.find((item) => item.kind === "text");
+    expect(channel).toBeDefined();
+
+    const delivered = waitForEvent(sender.socket, "message.created");
+    sender.socket.send(JSON.stringify({ type: "chat.pm", requestId: randomUUID(), channelId: channel!.id, content: "Только между нами", targetUserId: receiver.userId }));
+    const privateMessage = await delivered;
+    if (privateMessage.type !== "message.created") throw new Error("Private message expected");
+
+    // Посторонний знает идентификатор, но ответ такой же, как на несуществующее сообщение.
+    const rejected = waitForEvent(stranger.socket, "error");
+    stranger.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: privateMessage.message.id, emoji: "👍" }));
+    expect((await rejected).code).toBe("NOT_FOUND");
+
+    // Участники переписки о вторжении не узнают: реакций на сообщении нет.
+    const reacted = waitForEventMatching(sender.socket, "message.reactions.updated", (event) => event.messageId === privateMessage.message.id);
+    receiver.socket.send(JSON.stringify({ type: "message.react", requestId: randomUUID(), messageId: privateMessage.message.id, emoji: "👍" }));
+    expect(await reacted).toMatchObject({ reactions: [{ emoji: "👍", userIds: [receiver.userId] }] });
+
+    const closed = [once(sender.socket, "close"), once(receiver.socket, "close"), once(stranger.socket, "close")];
+    sender.socket.close();
+    receiver.socket.close();
+    stranger.socket.close();
+    await Promise.all(closed);
+  }, 15_000);
+
   it("uploads, attaches and downloads a file through an authenticated session", async () => {
     const attachmentsDir = await mkdtemp(path.join(tmpdir(), "opencord-attachments-"));
     temporaryDirectories.push(attachmentsDir);
@@ -168,6 +321,21 @@ it("forbids the sender from reacting to their own anonymous private message", as
     const attachment = await upload.json() as { id: string; fileName: string; sizeBytes: number };
     expect(attachment).toMatchObject({ fileName: "проверка.txt", sizeBytes: file.length });
 
+    // U+202E перевернул бы хвост имени: .exe отобразился бы как .pdf.
+    const disguised = await fetch(`${baseUrl}/api/attachments`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${client.sessionToken}`,
+        "content-type": "application/octet-stream",
+        "content-length": String(file.length),
+        "x-opencord-file-name": Buffer.from("счёт-‮fdp.exe").toString("base64url"),
+        "x-opencord-mime-type": "application/octet-stream",
+      },
+      body: file,
+    });
+    expect(disguised.status).toBe(201);
+    expect((await disguised.json() as { fileName: string }).fileName).toBe("счёт-fdp.exe");
+
     const createdPromise = waitForEvent(client.socket, "message.created");
     client.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: "", attachmentIds: [attachment.id] }));
     const created = await createdPromise;
@@ -189,6 +357,60 @@ it("forbids the sender from reacting to their own anonymous private message", as
     const closed = once(client.socket, "close");
     client.socket.close();
     await closed;
+  }, 15_000);
+
+  it("serves a private message attachment to its participants only", async () => {
+    const attachmentsDir = await mkdtemp(path.join(tmpdir(), "opencord-private-attachments-"));
+    temporaryDirectories.push(attachmentsDir);
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, attachmentsDir });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const url = `${baseUrl.replace("http", "ws")}/ws`;
+
+    const sender = await connectAndAuthenticate(url, "Отправитель");
+    const recipient = await connectAndAuthenticate(url, "Получатель");
+    const stranger = await connectAndAuthenticate(url, "Посторонний");
+    const channel = sender.snapshot.server.channels.find((item) => item.kind === "text");
+    if (!channel) throw new Error("Text channel expected");
+
+    const file = Buffer.from("Личный файл", "utf8");
+    const upload = await fetch(`${baseUrl}/api/attachments`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sender.sessionToken}`,
+        "content-type": "application/octet-stream",
+        "content-length": String(file.length),
+        "x-opencord-file-name": Buffer.from("личное.txt").toString("base64url"),
+        "x-opencord-mime-type": "text/plain",
+      },
+      body: file,
+    });
+    expect(upload.status).toBe(201);
+    const attachment = await upload.json() as { id: string };
+
+    // Личное сообщение получает вложение через редактирование — своих полей у chat.pm нет.
+    const privateMessage = waitForEvent(recipient.socket, "message.created");
+    sender.socket.send(JSON.stringify({ type: "chat.pm", requestId: randomUUID(), channelId: channel.id, content: "Держи файл", targetUserId: recipient.userId }));
+    const created = await privateMessage;
+    if (created.type !== "message.created") throw new Error("Message expected");
+    const attached = waitForEvent(recipient.socket, "message.updated");
+    sender.socket.send(JSON.stringify({ type: "message.update", requestId: randomUUID(), messageId: created.message.id, content: "Держи файл", attachmentIds: [attachment.id] }));
+    expect((await attached).type === "message.updated").toBe(true);
+
+    const fetchAs = (token: string): Promise<Response> => fetch(`${baseUrl}/api/attachments/${attachment.id}`, { headers: { authorization: `Bearer ${token}` } });
+    expect((await fetchAs(sender.sessionToken)).status).toBe(200);
+    expect((await fetchAs(recipient.sessionToken)).status).toBe(200);
+    // Посторонний участник сервера знает идентификатор, но переписка не его.
+    expect((await fetchAs(stranger.sessionToken)).status).toBe(404);
+
+    const closed = [once(sender.socket, "close"), once(recipient.socket, "close"), once(stranger.socket, "close")];
+    sender.socket.close();
+    recipient.socket.close();
+    stranger.socket.close();
+    await Promise.all(closed);
   }, 15_000);
 
   it("broadcasts profile replacement and removes a leaving member", async () => {
@@ -450,7 +672,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
     expect(moderationCalls).toEqual([{ userId: target.userId, muted: true }, { userId: target.userId, muted: false }]);
   }, 15_000);
 
-  it("coexists identical username#discriminator members and delivers mentions with membership validation", async () => {
+  it("refuses to hand out a taken username#discriminator tag and delivers mentions with membership validation", async () => {
     const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
     openApps.push(app);
     await app.listen({ host: "127.0.0.1", port: 0 });
@@ -462,8 +684,12 @@ it("forbids the sender from reacting to their own anonymous private message", as
     const observer = await connectAndAuthenticate(url, "Наблюдатель", generateKeyPairSync("ed25519"), null, "observer", "7777");
     const secondTwin = await connectAndAuthenticate(url, "Близнец второй", generateKeyPairSync("ed25519"), null, "twins", "4242");
 
-    const twins = secondTwin.snapshot.server.members.filter((member) => member.username === "twins" && member.discriminator === "4242");
+    // Оба просили тег twins#4242, но он принадлежит идентичности: второй получает свой.
+    const twins = secondTwin.snapshot.server.members.filter((member) => member.username === "twins");
     expect(twins).toHaveLength(2);
+    expect(twins.filter((member) => member.discriminator === "4242")).toHaveLength(1);
+    expect(new Set(twins.map((member) => member.discriminator)).size).toBe(2);
+    expect(twins.find((member) => member.id === firstTwin.userId)!.discriminator).toBe("4242");
     expect(twins[0]!.fingerprint).toMatch(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){3}$/u);
     expect(twins[0]!.fingerprint).not.toBe(twins[1]!.fingerprint);
 
@@ -496,6 +722,35 @@ it("forbids the sender from reacting to their own anonymous private message", as
     firstTwin.socket.close();
     observer.socket.close();
     secondTwin.socket.close();
+    await Promise.all(closed);
+  }, 15_000);
+
+  it("ignores a client-supplied discriminator in profile.update so a tag cannot be impersonated", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const victim = await connectAndAuthenticate(url, "Жертва", generateKeyPairSync("ed25519"), null, "victim", "4242");
+    const impostor = await connectAndAuthenticate(url, "Самозванец", generateKeyPairSync("ed25519"), null, "impostor", "1111");
+    const impostorDiscriminator = impostor.snapshot.server.members.find((member) => member.id === impostor.userId)!.discriminator;
+
+    // Модифицированный клиент присылает чужой тег целиком: username повторяется, тег — нет.
+    const stolen = waitForMemberUpdated(victim.socket, (member) => member.id === impostor.userId && member.username === "victim");
+    impostor.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "victim", discriminator: "4242", bio: "", avatar: null, banner: null, status: "online" } }));
+    expect((await stolen).member.discriminator).toBe(impostorDiscriminator);
+    expect((await stolen).member.discriminator).not.toBe("4242");
+
+    // Свой дискриминатор нельзя сменить и себе: тег закреплён за идентичностью.
+    const renamed = waitForMemberUpdated(impostor.socket, (member) => member.id === victim.userId && member.bio === "Всё ещё я");
+    victim.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "victim", discriminator: "0000", bio: "Всё ещё я", avatar: null, banner: null, status: "online" } }));
+    expect((await renamed).member.discriminator).toBe("4242");
+
+    const closed = [once(victim.socket, "close"), once(impostor.socket, "close")];
+    victim.socket.close();
+    impostor.socket.close();
     await Promise.all(closed);
   }, 15_000);
 

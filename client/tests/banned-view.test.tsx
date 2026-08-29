@@ -18,7 +18,7 @@ function bannedState(): PersistedClientState {
       address: "http://127.0.0.1:3210",
       accent: "#4d6bfe",
       maxAttachmentBytes: 10 * 1024 * 1024,
-      channels: [{ id: "general", serverId: "banned-server", name: "общий", kind: "text", description: "", participantLimit: null }],
+      channels: [{ id: "general", serverId: "banned-server", name: "общий", kind: "text", description: "", participantLimit: null, slowmodeSeconds: 0 }],
       members: [],
     },
   ];

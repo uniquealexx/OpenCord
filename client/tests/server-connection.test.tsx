@@ -172,7 +172,7 @@ describe("server connection", () => {
     const channelId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
     let searchRequestId: string | null = null;
     act(() => {
-      expect(result.current.updateChannel(channelId, "анонсы", "Важные новости", null)).toBe(true);
+      expect(result.current.updateChannel(channelId, "анонсы", "Важные новости", null, 0)).toBe(true);
       expect(result.current.deleteChannel(channelId)).toBe(true);
       expect(result.current.updateMessage(channelId, "Исправлено", [channelId], ["user-1"])).toBe(true);
       expect(result.current.deleteMessage(channelId)).toBe(true);

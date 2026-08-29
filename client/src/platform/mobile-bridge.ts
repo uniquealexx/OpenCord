@@ -149,6 +149,32 @@ async function publicIdentity(publicKey: string, discriminator: string): Promise
 
 // --- Состояние клиента (localStorage + Zod) ------------------------------------------------
 
+/**
+ * Состояние клиента содержит кэш переписки, включая личные сообщения. localStorage
+ * WebView лежит на диске открытым текстом и попадает в `adb backup`, поэтому оно
+ * шифруется AES-GCM. Сам ключ — единственное, что уходит в Keystore через
+ * SecureStorage: класть туда весь стейт нельзя, он вырастает до мегабайтов на аватарах
+ * и вложениях.
+ */
+const STATE_KEY_STORAGE_KEY = "opencord.client-state.key";
+const STATE_ENCRYPTED_PREFIX = "opencord-encrypted-state@1:";
+
+async function stateEncryptionKey(): Promise<CryptoKey | null> {
+  try {
+    const stored = await SecureStorage.getItem(STATE_KEY_STORAGE_KEY);
+    if (typeof stored === "string" && stored.length > 0) {
+      return crypto.subtle.importKey("raw", base64ToBytes(stored), "AES-GCM", false, ["encrypt", "decrypt"]);
+    }
+    const raw = crypto.getRandomValues(new Uint8Array(32));
+    await SecureStorage.setItem(STATE_KEY_STORAGE_KEY, bytesToBase64(raw));
+    return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  } catch {
+    // Keystore недоступен — состояние остаётся открытым, как и до шифрования,
+    // но профиль и история не теряются.
+    return null;
+  }
+}
+
 async function loadState(): Promise<PersistedClientState> {
   let raw: string | null = null;
   try { raw = localStorage.getItem(STATE_STORAGE_KEY); } catch { raw = null; }
@@ -158,7 +184,11 @@ async function loadState(): Promise<PersistedClientState> {
     return initial;
   }
   try {
-    return parsePersistedState(JSON.parse(raw) as unknown);
+    const decoded = raw.startsWith(STATE_ENCRYPTED_PREFIX) ? await decryptState(raw) : raw;
+    const state = parsePersistedState(JSON.parse(decoded) as unknown);
+    // Открытый стейт, оставшийся от прежних версий, переписывается зашифрованным.
+    if (!raw.startsWith(STATE_ENCRYPTED_PREFIX)) await saveState(state);
+    return state;
   } catch {
     const fallback = createDefaultState();
     await saveState(fallback);
@@ -166,9 +196,28 @@ async function loadState(): Promise<PersistedClientState> {
   }
 }
 
+async function decryptState(raw: string): Promise<string> {
+  const key = await stateEncryptionKey();
+  if (!key) throw new Error("Ключ шифрования состояния недоступен");
+  const payload = base64ToBytes(raw.slice(STATE_ENCRYPTED_PREFIX.length));
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: payload.slice(0, 12) }, key, payload.slice(12));
+  return new TextDecoder().decode(plain);
+}
+
 async function saveState(input: unknown): Promise<PersistedClientState> {
   const state = parsePersistedState(input);
-  localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(state));
+  const serialized = JSON.stringify(state);
+  const key = await stateEncryptionKey();
+  let stored = serialized;
+  if (key) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(serialized)));
+    const payload = new Uint8Array(iv.length + sealed.length);
+    payload.set(iv, 0);
+    payload.set(sealed, iv.length);
+    stored = `${STATE_ENCRYPTED_PREFIX}${bytesToBase64(payload)}`;
+  }
+  localStorage.setItem(STATE_STORAGE_KEY, stored);
   return state;
 }
 

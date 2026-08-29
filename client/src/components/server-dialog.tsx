@@ -60,8 +60,8 @@ export function ServerDialog({ open, onOpenChange, onAdd }: { open: boolean; onO
       screenShareMaxResolution: DEFAULT_SCREEN_SHARE_MAX_RESOLUTION,
       screenShareMaxFrameRate: DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE,
       channels: [
-        { id: `${id}-general`, serverId: id, name: t.server.generalChannel, kind: "text", description: t.server.generalDescription, participantLimit: null },
-        { id: `${id}-voice`, serverId: id, name: t.server.voiceChannel, kind: "voice", description: t.server.voiceDescription, participantLimit: 25 },
+        { id: `${id}-general`, serverId: id, name: t.server.generalChannel, kind: "text", description: t.server.generalDescription, participantLimit: null, slowmodeSeconds: 0 },
+        { id: `${id}-voice`, serverId: id, name: t.server.voiceChannel, kind: "voice", description: t.server.voiceDescription, participantLimit: 25, slowmodeSeconds: 0 },
       ],
       members: [],
     });

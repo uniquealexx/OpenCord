@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -36,7 +36,7 @@ import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 // В Electron мост уже установлен preload-скриптом, в браузере/тестах вызов ничего не делает.
 installPlatformBridge();
 
-type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "server-banner" | "channel" | "channel-edit" | "channel-delete" | "screen-share" | null;
+type Modal = "create" | "update" | "connect" | "profile" | "settings" | "leave" | "server-avatar" | "server-banner" | "channel" | "channel-edit" | "channel-delete" | "channel-slowmode" | "screen-share" | null;
 type CurrentAccess = {
   id: string;
   role: MemberRole;
@@ -206,6 +206,12 @@ export function ClientApp(): React.ReactElement {
       onMember: (member) =>
         commit((current) => ({
           ...current,
+          // Тег username#1234 закрепляет за идентичностью сервер, поэтому подтверждённый
+          // им дискриминатор возвращается в локальный профиль.
+          profile:
+            current.profile && member.id === currentAccess?.id && member.discriminator !== current.profile.discriminator
+              ? { ...current.profile, discriminator: member.discriminator }
+              : current.profile,
           servers: current.servers.map((server) =>
             server.id !== current.activeServerId
               ? server
@@ -362,27 +368,14 @@ export function ClientApp(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Сверка дискриминатора профиля с дискриминатором ключей: у легаси-профилей (v1–v3)
-  // он был сгенерирован локально, а тег username#1234 должен совпадать с ключами.
+  // Дискриминатор из ключей — лишь пожелание, которое клиент отправляет при регистрации:
+  // тег username#1234 закрепляет за идентичностью сервер, и его подтверждённое значение
+  // приходит в снапшоте. Поэтому локальный профиль здесь не переписывается.
   useEffect(() => {
     void window.openCord?.identity
       ?.getOrCreate()
-      .then((identity) => {
-        setSelfIdentity(identity);
-        commit((current) =>
-          !current.profile || current.profile.discriminator === identity.discriminator
-            ? current
-            : {
-                ...current,
-                profile: {
-                  ...current.profile,
-                  discriminator: identity.discriminator,
-                },
-              },
-        );
-      })
+      .then(setSelfIdentity)
       .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Мобильная оболочка: при входе запрашиваем доступ к микрофону (системный диалог
@@ -1116,14 +1109,23 @@ export function ClientApp(): React.ReactElement {
     setNotice(t.notices.channelCreateRequested);
   }
 
-  function editServerChannel(channel: MockChannel, name: string, description: string, participantLimit: number | null): void {
-    if (!connection.updateChannel(channel.id, name, description, participantLimit)) {
+  function editServerChannel(channel: MockChannel, name: string, description: string, participantLimit: number | null, slowmodeSeconds: number): void {
+    if (!connection.updateChannel(channel.id, name, description, participantLimit, slowmodeSeconds)) {
       setNotice(t.channel.updateUnavailable);
       return;
     }
     setModal(null);
     setManagedChannel(null);
     setNotice(t.channel.updateRequested);
+  }
+
+  function applyChannelsSlowmode(channelIds: string[], slowmodeSeconds: number): void {
+    if (!connection.setChannelsSlowmode(channelIds, slowmodeSeconds)) {
+      setNotice(t.channel.slowmodeBulkUnavailable);
+      return;
+    }
+    setModal(null);
+    setNotice(t.channel.slowmodeBulkRequested);
   }
 
   function deleteServerChannel(channel: MockChannel): void {
@@ -1264,6 +1266,7 @@ export function ClientApp(): React.ReactElement {
                 onCreateChannel={() => setModal("channel")}
                 onEditChannel={(channel) => openChannelModal(channel, "channel-edit")}
                 onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")}
+                onBulkSlowmode={() => setModal("channel-slowmode")}
                 onSelectChannel={selectChannel}
                 onServerMenu={() => setModal("leave")}
                 onProfile={() => setModal("profile")}
@@ -1299,6 +1302,7 @@ export function ClientApp(): React.ReactElement {
               onCreateChannel={() => setModal("channel")}
               onEditChannel={(channel) => openChannelModal(channel, "channel-edit")}
               onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")}
+                onBulkSlowmode={() => setModal("channel-slowmode")}
               onSelectChannel={selectChannel}
               onServerMenu={() => setModal("leave")}
               onProfile={() => setModal("profile")}
@@ -1502,7 +1506,16 @@ export function ClientApp(): React.ReactElement {
             setModal(open ? "channel-edit" : null);
             if (!open) setManagedChannel(null);
           }}
-          onSave={(name, description, participantLimit) => editServerChannel(managedChannel, name, description, participantLimit)}
+          onSave={(name, description, participantLimit, slowmodeSeconds) => editServerChannel(managedChannel, name, description, participantLimit, slowmodeSeconds)}
+        />
+      )}
+      {activeServer && (
+        <ChannelSlowmodeDialog
+          key={modal === "channel-slowmode" ? "slowmode-open" : "slowmode-closed"}
+          channels={activeServer.channels}
+          open={modal === "channel-slowmode"}
+          onOpenChange={(open) => setModal(open ? "channel-slowmode" : null)}
+          onApply={applyChannelsSlowmode}
         />
       )}
       {managedChannel && (
@@ -1652,7 +1665,7 @@ function HomeScreen({ serverCount, profile, onCreate, onConnect, onProfile, onSe
   );
 }
 
-export function ChannelSidebar({ mobile = false, server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, serverMuted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onSelectChannel, onServerMenu, onProfile, onSettings, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice }: { mobile?: boolean; server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; serverMuted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void }): React.ReactElement {
+export function ChannelSidebar({ mobile = false, server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, serverMuted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onBulkSlowmode, onSelectChannel, onServerMenu, onProfile, onSettings, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice }: { mobile?: boolean; server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; serverMuted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onBulkSlowmode?: () => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void }): React.ReactElement {
   const { t } = useI18n();
   const textChannels = server.channels.filter((channel) => channel.kind === "text");
   const voiceChannels = server.channels.filter((channel) => channel.kind === "voice");
@@ -1714,7 +1727,10 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
           {textChannels.map((channel) => (
             <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}>
               <Hash className="size-4 shrink-0" />
-              <span className="truncate">{channel.name}</span>
+              <span className="min-w-0 flex-1 truncate text-left">{channel.name}</span>
+              {channel.slowmodeSeconds > 0 && (
+                <Timer aria-label={t.channel.slowmodeBadge(channel.slowmodeSeconds)} className="size-3.5 shrink-0 text-slate-600" />
+              )}
             </button>
           ))}
         </ChannelGroup>
@@ -1776,6 +1792,17 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
           >
             <Pencil className="size-3.5" />
             {t.channel.edit}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setContextMenu(null);
+              onBulkSlowmode?.();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-300 hover:bg-white/[.06] hover:text-white"
+          >
+            <Timer className="size-3.5" />
+            {t.channel.slowmodeBulk}
           </button>
           <button
             role="menuitem"
@@ -2284,16 +2311,38 @@ function ChannelDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpen
   );
 }
 
-export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { channel: MockChannel; open: boolean; onOpenChange: (open: boolean) => void; onSave: (name: string, description: string, participantLimit: number | null) => void }): React.ReactElement {
+/** Пресеты медленного режима: сегментированный выбор, общий для одиночной и массовой настройки. */
+export function SlowmodePicker({ value, onChange, ariaLabel }: { value: number; onChange: (seconds: number) => void; ariaLabel: string }): React.ReactElement {
+  const { t } = useI18n();
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="flex flex-wrap gap-1.5">
+      {SLOWMODE_SECONDS_OPTIONS.map((seconds) => (
+        <button
+          key={seconds}
+          type="button"
+          role="radio"
+          aria-checked={value === seconds}
+          onClick={() => onChange(seconds)}
+          className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${value === seconds ? "bg-violet-500/25 text-violet-100 ring-1 ring-violet-400/50" : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"}`}
+        >
+          {seconds === 0 ? t.channel.slowmodeOff : t.channel.slowmodeValue(seconds)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { channel: MockChannel; open: boolean; onOpenChange: (open: boolean) => void; onSave: (name: string, description: string, participantLimit: number | null, slowmodeSeconds: number) => void }): React.ReactElement {
   const { t } = useI18n();
   const [name, setName] = useState(channel.name);
   const [description, setDescription] = useState(channel.description);
   const [participantLimitStep, setParticipantLimitStep] = useState(channel.participantLimit === 0 ? VOICE_PARTICIPANT_LIMIT_MAX + 1 : (channel.participantLimit ?? VOICE_PARTICIPANT_LIMIT_MAX));
+  const [slowmodeSeconds, setSlowmodeSeconds] = useState(channel.slowmodeSeconds ?? 0);
   function submit(event: React.FormEvent): void {
     event.preventDefault();
     if (!name.trim()) return;
     const participantLimit = channel.kind === "voice" ? (participantLimitStep > VOICE_PARTICIPANT_LIMIT_MAX ? 0 : participantLimitStep) : null;
-    onSave(name.trim(), description.trim(), participantLimit);
+    onSave(name.trim(), description.trim(), participantLimit, channel.kind === "text" ? slowmodeSeconds : 0);
   }
   const participantLimitLabel = participantLimitStep > VOICE_PARTICIPANT_LIMIT_MAX ? "∞" : String(participantLimitStep);
   return (
@@ -2315,6 +2364,13 @@ export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { cha
             {t.channel.description}
             <Input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={120} />
           </label>
+          {channel.kind === "text" && (
+            <div className="rounded-xl border border-white/8 bg-black/15 p-4">
+              <p className="text-sm font-medium text-slate-300">{t.channel.slowmode}</p>
+              <p className="mb-3 mt-1 text-xs text-slate-500">{t.channel.slowmodeHint}</p>
+              <SlowmodePicker value={slowmodeSeconds} onChange={setSlowmodeSeconds} ariaLabel={t.channel.slowmode} />
+            </div>
+          )}
           {channel.kind === "voice" && (
             <div className="rounded-xl border border-white/8 bg-black/15 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -2337,6 +2393,69 @@ export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { cha
             {t.channel.save}
           </Button>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Массовая настройка медленного режима. Голосовые каналы в список не попадают: сообщений
+ * в них нет, а сервер такие идентификаторы всё равно отбросит.
+ */
+export function ChannelSlowmodeDialog({ channels, open, onOpenChange, onApply }: { channels: MockChannel[]; open: boolean; onOpenChange: (open: boolean) => void; onApply: (channelIds: string[], slowmodeSeconds: number) => void }): React.ReactElement {
+  const { t } = useI18n();
+  const textChannels = channels.filter((channel) => channel.kind === "text");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [slowmodeSeconds, setSlowmodeSeconds] = useState(0);
+  const selectedSet = new Set(selected);
+  const allSelected = textChannels.length > 0 && selected.length === textChannels.length;
+
+  function toggle(channelId: string): void {
+    setSelected((current) => (current.includes(channelId) ? current.filter((id) => id !== channelId) : [...current, channelId]));
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <div className="mb-3 grid size-11 place-items-center rounded-2xl bg-violet-400/10 text-violet-300">
+            <Timer className="size-5" />
+          </div>
+          <DialogTitle>{t.channel.slowmodeBulkTitle}</DialogTitle>
+          <DialogDescription>{t.channel.slowmodeBulkDescription}</DialogDescription>
+        </DialogHeader>
+        {textChannels.length === 0 ? (
+          <p className="rounded-xl border border-white/8 bg-black/15 p-4 text-sm text-slate-400">{t.channel.slowmodeBulkEmpty}</p>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-slate-500">{t.channel.slowmodeBulkSelected(selected.length)}</span>
+              <Button type="button" variant="ghost" className="h-8 px-2.5 text-xs" onClick={() => setSelected(allSelected ? [] : textChannels.map((channel) => channel.id))}>
+                {allSelected ? t.channel.slowmodeBulkClear : t.channel.slowmodeBulkSelectAll}
+              </Button>
+            </div>
+            <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-white/8 bg-black/15 p-2">
+              {textChannels.map((channel) => (
+                <label key={channel.id} className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-white/5">
+                  <input type="checkbox" checked={selectedSet.has(channel.id)} onChange={() => toggle(channel.id)} className="size-4 accent-violet-500" />
+                  <Hash className="size-3.5 shrink-0 text-slate-500" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-slate-300">{channel.name}</span>
+                  {channel.slowmodeSeconds > 0 && (
+                    <span className="shrink-0 rounded-md bg-violet-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-200">{t.channel.slowmodeValue(channel.slowmodeSeconds)}</span>
+                  )}
+                </label>
+              ))}
+            </div>
+            <div>
+              <p className="mb-2 text-sm font-medium text-slate-300">{t.channel.slowmode}</p>
+              <SlowmodePicker value={slowmodeSeconds} onChange={setSlowmodeSeconds} ariaLabel={t.channel.slowmodeBulkTitle} />
+            </div>
+            <Button type="button" className="w-full" disabled={selected.length === 0} onClick={() => onApply(selected, slowmodeSeconds)}>
+              <Timer className="size-4" />
+              {t.channel.slowmodeBulkApply}
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -3793,8 +3912,12 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     chatMuted: member.chatMuted,
     chatMutedUntil: member.chatMutedUntil,
   }));
+  const self = members.find((member) => member.id === snapshot.currentUser.id);
   return {
     ...current,
+    // Дискриминатор выдаёт сервер: локальное значение — только пожелание при регистрации,
+    // поэтому профиль подтягивает подтверждённый тег.
+    profile: current.profile && self && self.discriminator !== current.profile.discriminator ? { ...current.profile, discriminator: self.discriminator } : current.profile,
     servers: current.servers.map((server) =>
       server.id === targetId
         ? {

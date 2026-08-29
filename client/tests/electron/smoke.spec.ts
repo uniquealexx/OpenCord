@@ -32,7 +32,8 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   expect(surface, electronErrors.join("\n")).toEqual({ hasBridge: true, bridgeKeys: ["attachments", "deployment", "identity", "screenShare", "server", "storage", "updates", "window"], hasNodeRequire: false });
 
   // Свежая установка стартует на английском языке.
-  const onboardingName = page.getByPlaceholder("Nickname");
+  // Плейсхолдер поля не локализуется: единственное имя пользователя — username.
+  const onboardingName = page.getByPlaceholder("username");
   await page.waitForTimeout(process.env.ELECTRON_RENDERER_URL ? 15_000 : 1_000);
   if (!(await onboardingName.isVisible())) {
     const diagnostics = await page.evaluate(() => ({
@@ -50,9 +51,9 @@ test("packaged renderer exposes only the typed OpenCord bridge", async () => {
   await page.screenshot({ path: "test-results/onboarding.png" });
   // Выбор языка на экране первого запуска: переключаемся на русский до создания профиля.
   await page.getByRole("button", { name: "Русский" }).click();
-  const russianOnboardingName = page.getByPlaceholder("Никнейм");
-  await expect(russianOnboardingName).toBeVisible();
-  await russianOnboardingName.fill("Лина");
+  await expect(page.getByText("Создайте локальный профиль", { exact: false })).toBeVisible();
+  // Username принимает только строчные латинские буквы, цифры и `_.-`.
+  await onboardingName.fill("lina");
   await page.getByRole("button", { name: "Создать локальный профиль" }).click();
   await expect(page.getByRole("heading", { name: "Главный экран" })).toBeVisible();
   // Кнопка настроек доступна и на главном экране.

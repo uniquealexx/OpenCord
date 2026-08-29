@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMIT_MAX_BYTES, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, messageReactionSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, isReactionEmoji, stripBidiControls, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, messageReactionSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -228,5 +228,35 @@ describe("OpenCord protocol", () => {
     expect(clientEventSchema.parse({ type: "message.search", requestId, filters: { query: "котик", authorId: "user-1", channelId, contentTypes: ["text", "image"], offset: 0, limit: 25 } })).toMatchObject({ type: "message.search", filters: { query: "котик", contentTypes: ["text", "image"] } });
     expect(() => clientEventSchema.parse({ type: "message.search", requestId, filters: { query: "", authorId: null, channelId: null, contentTypes: [] } })).toThrow();
     expect(() => clientEventSchema.parse({ type: "message.search", requestId, filters: { query: "котик", contentTypes: ["image", "image"] } })).toThrow();
+  });
+
+  it("strips bidirectional controls that disguise a file extension", () => {
+    // U+202E переставляет хвост имени: .exe показывается как .pdf.
+    expect(stripBidiControls("счёт-‮fdp.exe")).toBe("счёт-fdp.exe");
+    expect(stripBidiControls("‭photo‬.png")).toBe("photo.png");
+    expect(stripBidiControls("⁦a⁧b⁨c⁩.txt")).toBe("abc.txt");
+    expect(stripBidiControls("؜‎‏report.pdf")).toBe("report.pdf");
+    // Обычные имена, включая арабские и ивритские буквы, не меняются.
+    expect(stripBidiControls("отчёт.pdf")).toBe("отчёт.pdf");
+    expect(stripBidiControls("تقرير.pdf")).toBe("تقرير.pdf");
+  });
+
+  it("accepts only a single real emoji as a reaction", () => {
+    const requestId = crypto.randomUUID();
+    const messageId = crypto.randomUUID();
+    const react = (emoji: string): unknown => ({ type: "message.react", requestId, messageId, emoji });
+
+    // Простое эмодзи, вариационная селекция, ZWJ-последовательность, флаг, keycap, модификатор тона.
+    for (const emoji of ["👍", "❤️", "👨‍👩‍👧‍👦", "🇺🇦", "1️⃣", "👍🏽"]) {
+      expect(clientEventSchema.parse(react(emoji))).toMatchObject({ emoji });
+      expect(isReactionEmoji(emoji)).toBe(true);
+    }
+
+    // Свободный текст, комбинирующая «zalgo»-стопка, RTL-override и несколько эмодзи
+    // подряд ломали бы вёрстку ленты у всех, кто её видит.
+    for (const junk of ["A", "ЛОЛ", "a̶̡̜̽͊", "‮работа", "👍👍", "👍 ", " ", "", "❤"]) {
+      expect(() => clientEventSchema.parse(react(junk))).toThrow();
+      expect(isReactionEmoji(junk)).toBe(false);
+    }
   });
 });

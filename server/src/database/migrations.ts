@@ -379,6 +379,56 @@ const migrations = [
       ALTER TABLE users ALTER COLUMN custom_status_emoji SET NOT NULL;
     `,
   },
+  {
+    // Тег username#1234 обязан указывать ровно на одну идентичность. Раньше дискриминатор
+    // приходил от клиента и никак не привязывался к ключу, поэтому чужой тег копировался
+    // целиком. Разводим уже накопленные дубликаты (старейшая запись тег сохраняет) и
+    // закрепляем уникальность индексом; анонимизированные профили с NULL под него не попадают.
+    id: "026_unique_username_discriminator",
+    sql: `
+      DO $$
+      DECLARE
+        duplicate record;
+        candidate text;
+      BEGIN
+        FOR duplicate IN
+          SELECT id, username FROM (
+            SELECT id, username,
+              row_number() OVER (PARTITION BY username, discriminator ORDER BY created_at, id) AS duplicate_rank
+            FROM users WHERE username IS NOT NULL AND discriminator IS NOT NULL
+          ) ranked WHERE ranked.duplicate_rank > 1
+        LOOP
+          SELECT to_char(free.number, 'FM0000') INTO candidate
+          FROM generate_series(0, 9999) AS free(number)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM users taken
+            WHERE taken.username = duplicate.username AND taken.discriminator = to_char(free.number, 'FM0000')
+          )
+          ORDER BY random() LIMIT 1;
+          IF candidate IS NULL THEN
+            RAISE EXCEPTION 'No free discriminator left for username %', duplicate.username;
+          END IF;
+          UPDATE users SET discriminator = candidate WHERE id = duplicate.id;
+        END LOOP;
+      END
+      $$;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS users_username_discriminator_key
+        ON users (username, discriminator)
+        WHERE username IS NOT NULL AND discriminator IS NOT NULL;
+    `,
+  },
+  {
+    // Медленный режим текстового канала. Индекс по (канал, автор, время) нужен, чтобы
+    // проверка «когда этот участник писал сюда в прошлый раз» не сканировала историю.
+    id: "027_channel_slowmode",
+    sql: `
+      ALTER TABLE channels ADD COLUMN IF NOT EXISTS slowmode_seconds integer NOT NULL DEFAULT 0
+        CHECK (slowmode_seconds BETWEEN 0 AND 21600);
+      CREATE INDEX IF NOT EXISTS messages_channel_author_created_idx
+        ON messages(channel_id, author_id, created_at DESC);
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

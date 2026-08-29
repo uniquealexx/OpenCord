@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ServerSearchPanel } from "@/components/server-search-panel";
 
-const channel = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", serverId: "server", name: "общий", kind: "text" as const, description: "", participantLimit: null };
+const channel = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", serverId: "server", name: "общий", kind: "text" as const, description: "", participantLimit: null, slowmodeSeconds: 0 };
 const member = { id: "user-1", username: "Лина", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
 const panelProps = { previewAvailable: false, onPreview: vi.fn(async () => "data:image/png;base64,AA=="), onReset: vi.fn() };
 

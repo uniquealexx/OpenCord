@@ -82,6 +82,58 @@ describe("ChatRepository", () => {
     expect(await repository.getAccessibleAttachment(firstId, "user-1")).toBeNull();
   });
 
+  it("hides and purges reactions that are not a single emoji", async () => {
+    const channel = (await repository.getServer()).channels.find((item) => item.kind === "text")!;
+    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
+    const messageId = randomUUID();
+    await repository.createMessage(messageId, channel.id, "user-1", "Сообщение с реакциями");
+    await repository.toggleReaction(messageId, "user-1", "👍");
+
+    // Мусор, сохранённый до строгой проверки: пишем в обход репозитория.
+    await database.query(
+      "INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3), ($1, $2, $4)",
+      [messageId, "user-1", "a̶̡̜̽͊", "‮работа"],
+    );
+
+    // На чтении мусор не доходит до клиента, даже пока лежит в базе.
+    const [visible] = await repository.getHistory(channel.id, 50, "user-1");
+    expect(visible?.reactions).toEqual([{ emoji: "👍", userIds: ["user-1"] }]);
+
+    expect(await repository.purgeInvalidReactions()).toBe(2);
+    expect(await repository.purgeInvalidReactions()).toBe(0);
+    const remaining = await database.query<{ emoji: string }>("SELECT emoji FROM message_reactions");
+    expect(remaining).toEqual([{ emoji: "👍" }]);
+  });
+
+  it("keeps private message attachments away from members outside the conversation", async () => {
+    const channel = (await repository.getServer()).channels.find((item) => item.kind === "text")!;
+    await repository.upsertUser("sender", "sender-key", { username: "sender", discriminator: "1111", avatar: null });
+    await repository.upsertUser("recipient", "recipient-key", { username: "recipient", discriminator: "2222", avatar: null });
+    await repository.upsertUser("stranger", "stranger-key", { username: "stranger", discriminator: "3333", avatar: null });
+
+    const privateFile = randomUUID();
+    await repository.createAttachment(privateFile, "sender", "private-storage-key", "личное.txt", "text/plain", 10, "a".repeat(64));
+    await repository.createMessage(randomUUID(), channel.id, "sender", "Только для тебя", [privateFile], [], "pm", "recipient");
+
+    // Участники переписки файл получают, посторонний — нет, даже зная идентификатор.
+    expect(await repository.getAccessibleAttachment(privateFile, "sender")).toMatchObject({ id: privateFile });
+    expect(await repository.getAccessibleAttachment(privateFile, "recipient")).toMatchObject({ id: privateFile });
+    expect(await repository.getAccessibleAttachment(privateFile, "stranger")).toBeNull();
+
+    // Анонимное личное сообщение: отправитель скрыт от получателя, но файл ему доступен.
+    const anonymousFile = randomUUID();
+    await repository.createAttachment(anonymousFile, "sender", "anonymous-storage-key", "аноним.txt", "text/plain", 10, "b".repeat(64));
+    await repository.createMessage(randomUUID(), channel.id, "sender", "Аноним", [anonymousFile], [], "apm", "recipient", true);
+    expect(await repository.getAccessibleAttachment(anonymousFile, "recipient")).toMatchObject({ id: anonymousFile });
+    expect(await repository.getAccessibleAttachment(anonymousFile, "stranger")).toBeNull();
+
+    // Вложение обычного сообщения остаётся общедоступным.
+    const publicFile = randomUUID();
+    await repository.createAttachment(publicFile, "sender", "public-storage-key", "общий.txt", "text/plain", 10, "c".repeat(64));
+    await repository.createMessage(randomUUID(), channel.id, "sender", "Всем", [publicFile]);
+    expect(await repository.getAccessibleAttachment(publicFile, "stranger")).toMatchObject({ id: publicFile });
+  });
+
   it("searches server messages by query, author, channel and content type", async () => {
     const server = await repository.getServer();
     const channel = server.channels.find((item) => item.kind === "text")!;
@@ -118,7 +170,7 @@ describe("ChatRepository", () => {
 
   it("updates channels and deletes their message history", async () => {
     const created = await repository.createChannel(randomUUID(), "черновик", "text", "Старое описание");
-    expect(await repository.updateChannel(created.id, "анонсы", "Новое описание", null)).toMatchObject({ name: "анонсы", description: "Новое описание", kind: "text", participantLimit: null });
+    expect(await repository.updateChannel(created.id, "анонсы", "Новое описание", null, 0)).toMatchObject({ name: "анонсы", description: "Новое описание", kind: "text", participantLimit: null });
     await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
     await repository.createMessage(randomUUID(), created.id, "user-1", "Будет удалено вместе с каналом");
     expect(await repository.deleteChannel(created.id)).toBe(true);
@@ -129,8 +181,8 @@ describe("ChatRepository", () => {
   it("persists finite and unlimited voice channel capacity", async () => {
     const created = await repository.createChannel(randomUUID(), "Гостиная", "voice", "Голосовой канал");
     expect(created.participantLimit).toBe(25);
-    expect(await repository.updateChannel(created.id, created.name, created.description, 7)).toMatchObject({ participantLimit: 7 });
-    expect(await repository.updateChannel(created.id, created.name, created.description, 0)).toMatchObject({ participantLimit: 0 });
+    expect(await repository.updateChannel(created.id, created.name, created.description, 7, 0)).toMatchObject({ participantLimit: 7 });
+    expect(await repository.updateChannel(created.id, created.name, created.description, 0, 0)).toMatchObject({ participantLimit: 0 });
     expect((await repository.getServer()).channels.find((channel) => channel.id === created.id)).toMatchObject({ participantLimit: 0 });
   });
 
@@ -243,7 +295,7 @@ describe("ChatRepository", () => {
     expect((await repository.getServer()).avatar).toBeNull();
   });
 
-  it("coexists two members with identical username and discriminator and distinguishes them by fingerprint", async () => {
+  it("keeps the username#discriminator tag unique when a second identity asks for a taken one", async () => {
     await repository.upsertUser("first", "first-public-key", { username: "twins", discriminator: "4242", avatar: null });
     await repository.upsertUser("second", "second-public-key", { username: "twins", discriminator: "4242", avatar: null });
     await repository.ensureMembership("first", "first-public-key", undefined, true);
@@ -252,10 +304,32 @@ describe("ChatRepository", () => {
     expect(members).toHaveLength(2);
     const first = members.find((member) => member.id === "first");
     const second = members.find((member) => member.id === "second");
+    // Тег занявшего его первым не меняется, второму сервер выдаёт свободный дискриминатор.
     expect(first).toMatchObject({ username: "twins", discriminator: "4242" });
-    expect(second).toMatchObject({ username: "twins", discriminator: "4242" });
+    expect(second).toMatchObject({ username: "twins" });
+    expect(second!.discriminator).toMatch(/^[0-9]{4}$/u);
+    expect(second!.discriminator).not.toBe("4242");
     expect(first!.fingerprint).toMatch(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){3}$/u);
     expect(first!.fingerprint).not.toBe(second!.fingerprint);
+  });
+
+  it("binds the discriminator to the identity: neither reconnect nor profile update can change it", async () => {
+    await repository.upsertUser("owner", "owner-public-key", { username: "target", discriminator: "4242", avatar: null });
+    await repository.upsertUser("impostor", "impostor-public-key", { username: "impostor", discriminator: "1111", avatar: null });
+    await repository.ensureMembership("owner", "owner-public-key", undefined, true);
+    await repository.ensureMembership("impostor", "impostor-public-key");
+
+    // Попытка забрать чужой тег через profile.update: username повторить можно, дискриминатор — нет.
+    expect(await repository.updateUserProfile("impostor", { username: "target", discriminator: "4242", avatar: null })).toBe(true);
+    // Попытка сменить свой дискриминатор при повторной аутентификации.
+    await repository.upsertUser("impostor", "impostor-public-key", { username: "target", discriminator: "4242", avatar: null });
+
+    const members = await repository.listMembers(new Map());
+    const owner = members.find((member) => member.id === "owner");
+    const impostor = members.find((member) => member.id === "impostor");
+    expect(owner).toMatchObject({ username: "target", discriminator: "4242" });
+    expect(impostor).toMatchObject({ username: "target" });
+    expect(impostor!.discriminator).not.toBe("4242");
   });
 
   it("stores only member mentions, deduplicates them and replaces them on edit", async () => {

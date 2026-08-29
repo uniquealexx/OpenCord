@@ -1,9 +1,9 @@
-import { PROFILE_RETENTION_DAYS, publicKeyFingerprint, type Attachment, type BanDurationMinutes, type BannedMember, type Channel, type ChatMessage, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
+import { isReactionEmoji, stripBidiControls, PROFILE_RETENTION_DAYS, publicKeyFingerprint, type Attachment, type BanDurationMinutes, type BannedMember, type Channel, type ChatMessage, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type PublicProfile, type ServerSettings } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; description: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
-interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null }
+interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null; slowmode_seconds?: number | null }
 interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; custom_status: string; custom_status_emoji: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
 interface BannedUserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; banned_at: Date | string; banned_by: string; expires_at: Date | string | null }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null }
@@ -12,6 +12,16 @@ interface ReactionRow extends QueryRow { message_id: string; user_id: string; em
 interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 interface MessageUpdateRow extends MessageRow { removed_storage_keys: string[] | null }
+
+/** Профиль от клиента. `discriminator` необязателен: его выдаёт сервер, клиент лишь просит. */
+type ProfileInput = Pick<PublicProfile, "username" | "avatar"> & Partial<Omit<PublicProfile, "username" | "avatar">>;
+
+const DISCRIMINATOR_ALLOCATION_ATTEMPTS = 5;
+
+/** Нарушение уникальности (SQLSTATE 23505) одинаково приходит из PGlite и из pg. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505";
+}
 
 export class ChatRepository {
   constructor(private readonly database: Database) {}
@@ -35,7 +45,7 @@ export class ChatRepository {
   async getServer(): Promise<{ id: string; avatar: string | null; banner: string | null; channels: Channel[] } & ServerSettings> {
     const [server] = await this.database.query<ServerRow>("SELECT id, name, description, avatar, banner, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
     if (!server) throw new Error("Default server is missing");
-    const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
+    const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit, slowmode_seconds FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
     return { id: server.id, name: server.name, description: server.description, avatar: server.avatar, banner: server.banner, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], channels: channels.map(mapChannel) };
   }
 
@@ -53,7 +63,7 @@ export class ChatRepository {
   }
 
   async getChannel(channelId: string): Promise<Channel | null> {
-    const rows = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit FROM channels WHERE id = $1 AND server_id = $2", [channelId, DEFAULT_SERVER_ID]);
+    const rows = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit, slowmode_seconds FROM channels WHERE id = $1 AND server_id = $2", [channelId, DEFAULT_SERVER_ID]);
     const row = rows[0];
     return row ? mapChannel(row) : null;
   }
@@ -62,21 +72,45 @@ export class ChatRepository {
     const rows = await this.database.query<ChannelRow>(
       `INSERT INTO channels (id, server_id, name, kind, description, participant_limit, position)
        VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'voice' THEN 25 ELSE NULL END, COALESCE((SELECT MAX(position) + 1 FROM channels WHERE server_id = $2), 0))
-       RETURNING id, name, kind, description, participant_limit`,
+       RETURNING id, name, kind, description, participant_limit, slowmode_seconds`,
       [id, DEFAULT_SERVER_ID, name, kind, description],
     );
     return mapChannel(required(rows[0], "Created channel is missing"));
   }
 
-  async updateChannel(channelId: string, name: string, description: string, participantLimit: number | null): Promise<Channel | null> {
+  async updateChannel(channelId: string, name: string, description: string, participantLimit: number | null, slowmodeSeconds: number): Promise<Channel | null> {
     const rows = await this.database.query<ChannelRow>(
       `UPDATE channels SET name = $3, description = $4,
-       participant_limit = CASE WHEN kind = 'voice' THEN $5::integer ELSE NULL END
+       participant_limit = CASE WHEN kind = 'voice' THEN $5::integer ELSE NULL END,
+       slowmode_seconds = CASE WHEN kind = 'text' THEN $6::integer ELSE 0 END
        WHERE id = $1 AND server_id = $2
-       RETURNING id, name, kind, description, participant_limit`,
-      [channelId, DEFAULT_SERVER_ID, name, description, participantLimit],
+       RETURNING id, name, kind, description, participant_limit, slowmode_seconds`,
+      [channelId, DEFAULT_SERVER_ID, name, description, participantLimit, slowmodeSeconds],
     );
     return rows[0] ? mapChannel(rows[0]) : null;
+  }
+
+  /** Массовая установка медленного режима: голосовые каналы в выборке молча пропускаются. */
+  async setChannelsSlowmode(channelIds: readonly string[], slowmodeSeconds: number): Promise<string[]> {
+    const rows = await this.database.query<{ id: string }>(
+      `UPDATE channels SET slowmode_seconds = $3::integer
+       WHERE server_id = $1 AND kind = 'text' AND id = ANY($2::uuid[])
+       RETURNING id`,
+      [DEFAULT_SERVER_ID, [...channelIds], slowmodeSeconds],
+    );
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * Когда участник в последний раз писал в канал обычное сообщение. Медленный режим
+   * считается по истории, а не по памяти процесса, поэтому перезапуск его не сбрасывает.
+   */
+  async lastChatMessageAt(channelId: string, authorId: string): Promise<Date | null> {
+    const [row] = await this.database.query<{ created_at: Date | string }>(
+      "SELECT created_at FROM messages WHERE channel_id = $1 AND author_id = $2 AND kind = 'chat' ORDER BY created_at DESC LIMIT 1",
+      [channelId, authorId],
+    );
+    return row ? new Date(row.created_at) : null;
   }
 
   async deleteChannel(channelId: string): Promise<boolean> {
@@ -87,22 +121,75 @@ export class ChatRepository {
     return rows.length > 0;
   }
 
-  async upsertUser(userId: string, publicKey: string, profile: Pick<PublicProfile, "username" | "discriminator" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "avatar">>): Promise<void> {
+  async upsertUser(userId: string, publicKey: string, profile: ProfileInput): Promise<void> {
     // display_name — историческая колонка: никнеймов больше нет, поэтому она хранит зеркало username.
-    await this.database.query(
-      `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator, custom_status, custom_status_emoji) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_emoji = EXCLUDED.custom_status_emoji, updated_at = now()
-       WHERE users.public_key = EXCLUDED.public_key`,
-      [userId, publicKey, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? ""],
-    );
+    await this.withAllocatedDiscriminator(userId, profile.username, profile.discriminator ?? null, async (discriminator) => {
+      await this.database.query(
+        `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator, custom_status, custom_status_emoji) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_emoji = EXCLUDED.custom_status_emoji, updated_at = now()
+         WHERE users.public_key = EXCLUDED.public_key`,
+        [userId, publicKey, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? ""],
+      );
+      return true;
+    });
   }
 
-  async updateUserProfile(userId: string, profile: Pick<PublicProfile, "username" | "discriminator" | "avatar"> & Partial<Omit<PublicProfile, "username" | "discriminator" | "avatar">>): Promise<boolean> {
-    const rows = await this.database.query<{ id: string }>(
-      "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, custom_status = $8, custom_status_emoji = $9, updated_at = now() WHERE id = $1 RETURNING id",
-      [userId, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, profile.discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? ""],
+  async updateUserProfile(userId: string, profile: ProfileInput): Promise<boolean> {
+    const [existing] = await this.database.query<{ id: string }>("SELECT id FROM users WHERE id = $1", [userId]);
+    if (!existing) return false;
+    // Дискриминатор здесь не пожелание, а собственность идентичности: что бы клиент ни
+    // прислал, за пользователем остаётся уже закреплённый тег.
+    const updated = await this.withAllocatedDiscriminator(userId, profile.username, null, async (discriminator) => {
+      const rows = await this.database.query<{ id: string }>(
+        "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, custom_status = $8, custom_status_emoji = $9, updated_at = now() WHERE id = $1 RETURNING id",
+        [userId, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? ""],
+      );
+      return rows.length > 0;
+    });
+    return updated !== null;
+  }
+
+  /**
+   * Выдаёт дискриминатор и выполняет запись. Пара username#discriminator уникальна, а
+   * гонку двух одновременных регистраций ловит уникальный индекс — поэтому конфликт
+   * отрабатывается повтором с новым свободным значением.
+   */
+  private async withAllocatedDiscriminator(userId: string, username: string, requested: string | null, write: (discriminator: string) => Promise<boolean>): Promise<string | null> {
+    for (let attempt = 0; attempt < DISCRIMINATOR_ALLOCATION_ATTEMPTS; attempt += 1) {
+      const discriminator = await this.allocateDiscriminator(userId, username, attempt === 0 ? requested : null);
+      try {
+        return (await write(discriminator)) ? discriminator : null;
+      } catch (error) {
+        if (!isUniqueViolation(error) || attempt === DISCRIMINATOR_ALLOCATION_ATTEMPTS - 1) throw error;
+      }
+    }
+    throw new Error(`Не удалось закрепить дискриминатор за username ${username}`);
+  }
+
+  /**
+   * Тег `username#1234` принадлежит идентичности, а не клиенту. Уже закреплённый за
+   * пользователем дискриминатор сохраняется всегда; присланное клиентом значение — лишь
+   * пожелание при первой регистрации ключа и принимается, только если пара свободна.
+   * Иначе выдаётся случайный свободный дискриминатор, поэтому скопировать чужой тег
+   * целиком нельзя.
+   */
+  private async allocateDiscriminator(userId: string, username: string, requested: string | null): Promise<string> {
+    const [row] = await this.database.query<{ discriminator: string | null }>(
+      `SELECT COALESCE(
+         (SELECT owned.discriminator FROM users owned
+          WHERE owned.id = $1 AND owned.discriminator IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM users taken WHERE taken.id <> $1 AND taken.username = $2 AND taken.discriminator = owned.discriminator)),
+         (SELECT $3::text WHERE $3::text IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM users taken WHERE taken.id <> $1 AND taken.username = $2 AND taken.discriminator = $3::text)),
+         (SELECT to_char(free.number, 'FM0000') FROM generate_series(0, 9999) AS free(number)
+          WHERE NOT EXISTS (SELECT 1 FROM users taken WHERE taken.id <> $1 AND taken.username = $2 AND taken.discriminator = to_char(free.number, 'FM0000'))
+          ORDER BY random() LIMIT 1)
+       ) AS discriminator`,
+      [userId, username, requested],
     );
-    return rows.length > 0;
+    const discriminator = row?.discriminator ?? null;
+    if (!discriminator) throw new Error(`Свободных дискриминаторов для username ${username} не осталось`);
+    return discriminator;
   }
 
   async leaveServer(userId: string, reason: "leave" | "kick" = "leave"): Promise<MemberRole | null> {
@@ -307,11 +394,22 @@ export class ChatRepository {
     return Number(row?.count ?? 0);
   }
 
+  /**
+   * Вложение доступно, только если оно своё (ещё не прикреплённое к сообщению) либо висит
+   * на сообщении, которое пользователю видно. Условие видимости то же, что в `getHistory`:
+   * личная переписка не открывается посторонним по одному лишь идентификатору файла.
+   */
   async getAccessibleAttachment(attachmentId: string, userId: string): Promise<(Attachment & { storageKey: string }) | null> {
     const [row] = await this.database.query<AttachmentRow>(
       `SELECT a.id, a.storage_key, a.original_name, a.mime_type, a.size_bytes, a.sha256
        FROM attachments a WHERE a.id = $1 AND a.server_id = $3
-       AND (a.uploader_id = $2 OR EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id))`,
+       AND (a.uploader_id = $2 OR EXISTS (
+         SELECT 1 FROM message_attachments ma
+         JOIN messages m ON m.id = ma.message_id
+         JOIN channels c ON c.id = m.channel_id
+         WHERE ma.attachment_id = a.id AND c.server_id = $3
+           AND (m.kind = 'chat' OR m.author_id = $2 OR m.target_user_id = $2)
+       ))`,
       [attachmentId, userId, DEFAULT_SERVER_ID],
     );
     return row ? { ...mapAttachment(row), storageKey: row.storage_key } : null;
@@ -564,6 +662,22 @@ export class ChatRepository {
     return result;
   }
 
+  /**
+   * Разовая чистка реакций, сохранённых до строгой проверки эмодзи. Проверка идёт тем же
+   * валидатором, что и на входе, — SQL-приближение отсеяло бы либо не всё, либо лишнее.
+   * Различных значений в таблице мало, поэтому DISTINCT дешёв.
+   */
+  async purgeInvalidReactions(): Promise<number> {
+    const rows = await this.database.query<{ emoji: string }>("SELECT DISTINCT emoji FROM message_reactions");
+    const invalid = rows.map((row) => row.emoji).filter((emoji) => !isReactionEmoji(emoji));
+    if (!invalid.length) return 0;
+    const deleted = await this.database.query<{ emoji: string }>(
+      "DELETE FROM message_reactions WHERE emoji = ANY($1::text[]) RETURNING emoji",
+      [invalid],
+    );
+    return deleted.length;
+  }
+
   private async getReactionsForMessages(messageIds: string[]): Promise<Map<string, MessageReaction[]>> {
     const result = new Map<string, MessageReaction[]>();
     if (!messageIds.length) return result;
@@ -574,6 +688,9 @@ export class ChatRepository {
     );
     for (const row of rows) {
       if (!row.message_id) continue;
+      // Реакции, сохранённые до строгой проверки, до клиентов не доходят: показывать
+      // чужую «zalgo»-строку под сообщением — то же самое, что и принимать её.
+      if (!isReactionEmoji(row.emoji)) continue;
       const current = result.get(row.message_id) ?? [];
       const existing = current.find((reaction) => reaction.emoji === row.emoji);
       if (existing) existing.userIds.push(row.user_id);
@@ -630,11 +747,13 @@ export function messageForViewer(message: ChatMessage, viewerId: string): ChatMe
 }
 
 function mapAttachment(row: AttachmentRow): Attachment {
-  return { id: row.id, fileName: row.original_name, mimeType: row.mime_type, sizeBytes: Number(row.size_bytes), sha256: row.sha256 };
+  // Имена, сохранённые до фильтрации, тоже не должны переставляться при отображении.
+  return { id: row.id, fileName: stripBidiControls(row.original_name), mimeType: row.mime_type, sizeBytes: Number(row.size_bytes), sha256: row.sha256 };
 }
 
 function mapChannel(row: ChannelRow): Channel {
-  return { id: row.id, name: row.name, kind: row.kind, description: row.description, participantLimit: row.kind === "voice" ? Number(row.participant_limit ?? 25) : null };
+  // Медленный режим существует только у текстовых каналов: в голосовом сообщений нет.
+  return { id: row.id, name: row.name, kind: row.kind, description: row.description, participantLimit: row.kind === "voice" ? Number(row.participant_limit ?? 25) : null, slowmodeSeconds: row.kind === "text" ? Number(row.slowmode_seconds ?? 0) : 0 };
 }
 
 function required<T>(value: T | undefined, message: string): T {

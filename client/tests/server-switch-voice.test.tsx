@@ -41,8 +41,8 @@ function stateWithTwoServers(): PersistedClientState {
       accent: "#4d6bfe",
       maxAttachmentBytes: 10 * 1024 * 1024,
       channels: [
-        { id: "general", serverId: "first-server", name: "общий", kind: "text", description: "", participantLimit: null },
-        { id: "voice", serverId: "first-server", name: "Гостиная", kind: "voice", description: "", participantLimit: 25 },
+        { id: "general", serverId: "first-server", name: "общий", kind: "text", description: "", participantLimit: null, slowmodeSeconds: 0 },
+        { id: "voice", serverId: "first-server", name: "Гостиная", kind: "voice", description: "", participantLimit: 25, slowmodeSeconds: 0 },
       ],
       members: [],
     },
@@ -53,7 +53,7 @@ function stateWithTwoServers(): PersistedClientState {
       accent: "#4d6bfe",
       maxAttachmentBytes: 10 * 1024 * 1024,
       channels: [
-        { id: "second-general", serverId: "second-server", name: "главный", kind: "text", description: "", participantLimit: null },
+        { id: "second-general", serverId: "second-server", name: "главный", kind: "text", description: "", participantLimit: null, slowmodeSeconds: 0 },
       ],
       members: [],
     },

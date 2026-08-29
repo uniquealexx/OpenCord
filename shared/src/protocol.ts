@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 35 as const;
+export const PROTOCOL_VERSION = 36 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -46,6 +46,24 @@ export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
 export const VOICE_PARTICIPANT_LIMIT_UNLIMITED = 0 as const;
 export const voiceParticipantLimitSchema = z.number().int().min(VOICE_PARTICIPANT_LIMIT_UNLIMITED).max(VOICE_PARTICIPANT_LIMIT_MAX);
 
+// Медленный режим текстового канала: минимальная пауза между сообщениями одного участника.
+// 0 — режим выключен. Держатели MANAGE_MESSAGES его не ощущают, как и в Discord.
+export const SLOWMODE_SECONDS_OPTIONS = [0, 5, 10, 30, 60, 300, 900, 3600] as const;
+export const slowmodeSecondsSchema = z.number().int().refine(
+  (value) => (SLOWMODE_SECONDS_OPTIONS as readonly number[]).includes(value),
+  "Unsupported slowmode interval",
+);
+/** Сколько каналов разрешено настроить одним событием — хватает на сервер целиком. */
+export const CHANNEL_BULK_LIMIT = 100 as const;
+
+/**
+ * Базовая защита от флуда, которую нельзя выключить настройками: она ограничивает не
+ * канал, а саму идентичность, поэтому модифицированный клиент её не обходит.
+ */
+export const MESSAGE_FLOOD_BURST = 10 as const;
+export const MESSAGE_FLOOD_WINDOW_MS = 5_000 as const;
+export const MESSAGE_FLOOD_SUSTAINED = 5 as const;
+
 export const memberRoleSchema = z.enum(["owner", "administrator", "member"]);
 export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
 
@@ -89,6 +107,7 @@ export const channelSchema = z.object({
   kind: z.enum(["text", "voice"]),
   description: z.string().max(120),
   participantLimit: voiceParticipantLimitSchema.nullable(),
+  slowmodeSeconds: slowmodeSecondsSchema.default(0),
 });
 
 export const voiceCapabilitySchema = z.object({
@@ -136,6 +155,19 @@ export const bannedMemberSchema = z.object({
   expiresAt: z.string().datetime().nullable(),
 });
 
+/**
+ * Управляющие символы двунаправленного текста. Смысла в имени файла они не несут, но
+ * переставляют его при отображении: `счёт-<U+202E>fdp.exe` читается как `счёт-exe.pdf`,
+ * и исполняемый файл выглядит документом. Классический приём маскировки вложений.
+ */
+// ALM, LRM, RLM, встраивания и override (LRE/RLE/PDF/LRO/RLO), изоляты (LRI/RLI/FSI/PDI).
+// Записаны кодами: в исходнике сами символы невидимы и правились бы вслепую.
+const BIDI_CONTROLS = "\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069";
+
+export function stripBidiControls(value: string): string {
+  return value.replace(new RegExp(`[${BIDI_CONTROLS}]`, "gu"), "");
+}
+
 export const attachmentSchema = z.object({
   id: z.string().uuid(),
   fileName: z.string().min(1).max(255),
@@ -152,7 +184,26 @@ export const mentionIdsSchema = z.array(z.string().min(1).max(200)).max(20).refi
 // Реакции на сообщения: эмодзи и список пользователей, которые его поставили.
 export const REACTION_EMOJI_MAX_LENGTH = 32;
 export const REACTION_EMOJI_MAX = 64;
+
+/**
+ * Реакция обязана быть ровно одним эмодзи из RGI — набора последовательностей,
+ * рекомендованных Unicode к обмену. Свободная строка здесь давала бы участнику
+ * вставлять в чужие сообщения комбинирующие «zalgo»-стопки, RTL-override и просто
+ * длинный текст, ломающие вёрстку ленты у всех, кто её видит.
+ */
+// Флаг `v` нужен для свойства RGI_Emoji, но литерал с ним требует target ES2024,
+// а пакеты собираются под ES2022 — поэтому регулярное выражение строится явно.
+const RGI_EMOJI_PATTERN = new RegExp("^\\p{RGI_Emoji}$", "v");
+export const reactionEmojiSchema = z.string().regex(RGI_EMOJI_PATTERN, "Reaction must be a single emoji");
+
+export function isReactionEmoji(value: string): boolean {
+  return reactionEmojiSchema.safeParse(value).success;
+}
+
 export const messageReactionSchema = z.object({
+  // Исходящая схема намеренно мягче входящей: реакции, сохранённые до появления
+  // строгой проверки, отсеиваются на чтении в репозитории. Ужесточать её здесь
+  // опасно — одна неожиданная строка сделала бы весь snapshot неразбираемым.
   emoji: z.string().min(1).max(REACTION_EMOJI_MAX_LENGTH),
   userIds: z.array(z.string().min(1).max(200)).max(100),
 });
@@ -219,12 +270,14 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("chat.mute.set"), requestId: requestIdSchema, userId: z.string().min(1), muted: z.boolean(), durationMinutes: z.number().int().min(1).max(10_080).nullable().default(null) }),
   z.object({ type: z.literal("message.update"), requestId: requestIdSchema, messageId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]) }),
   z.object({ type: z.literal("message.delete"), requestId: requestIdSchema, messageId: z.string().uuid() }),
-  z.object({ type: z.literal("message.react"), requestId: requestIdSchema, messageId: z.string().uuid(), emoji: z.string().min(1).max(REACTION_EMOJI_MAX_LENGTH) }),
+  z.object({ type: z.literal("message.react"), requestId: requestIdSchema, messageId: z.string().uuid(), emoji: reactionEmojiSchema }),
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
   z.object({ type: z.literal("channel.create"), requestId: requestIdSchema, name: z.string().trim().min(1).max(48), kind: z.enum(["text", "voice"]), description: z.string().trim().max(120).default("") }),
-  z.object({ type: z.literal("channel.update"), requestId: requestIdSchema, channelId: z.string().uuid(), name: z.string().trim().min(1).max(48), description: z.string().trim().max(120).default(""), participantLimit: voiceParticipantLimitSchema.nullable() }),
+  z.object({ type: z.literal("channel.update"), requestId: requestIdSchema, channelId: z.string().uuid(), name: z.string().trim().min(1).max(48), description: z.string().trim().max(120).default(""), participantLimit: voiceParticipantLimitSchema.nullable(), slowmodeSeconds: slowmodeSecondsSchema.default(0) }),
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
+  // Массовая настройка: один медленный режим сразу на выбранные текстовые каналы.
+  z.object({ type: z.literal("channel.slowmode.set"), requestId: requestIdSchema, channelIds: z.array(z.string().uuid()).min(1).max(CHANNEL_BULK_LIMIT).refine((ids) => new Set(ids).size === ids.length, "Channel IDs must be unique"), slowmodeSeconds: slowmodeSecondsSchema }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
   z.object({ type: z.literal("member.kick"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("member.ban"), requestId: requestIdSchema, userId: z.string().min(1), durationMinutes: banDurationMinutesSchema }),
@@ -267,7 +320,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),
   // banExpiresAt сопровождает только код BANNED: ISO-дата снятия бана либо null для
   // перманентного. Поле необязательное, чтобы сервер прошлой версии оставался совместимым.
-  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string(), banExpiresAt: z.string().datetime().nullable().optional() }),
+  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "RATE_LIMITED", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string(), banExpiresAt: z.string().datetime().nullable().optional(), retryAfterMs: z.number().int().min(0).optional() }),
 ]);
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;

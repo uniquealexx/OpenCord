@@ -1,8 +1,10 @@
-# OpenCord Protocol v35 (English)
+# OpenCord Protocol v36 (English)
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
 
-Protocol v35 removes the separate nickname: `username` is now the only user name in profiles, members, messages, and mentions. The custom status keeps its text of up to 32 characters and replaces the `#RRGGBB` color with an optional `customStatusEmoji` of up to 16 characters, the way Discord shows it. These fields travel through `server.settings.update`, `auth.respond.profile`, snapshots, and `member.updated` events.
+Protocol v36 binds the `username#1234` tag to the identity — the server assigns and owns the discriminator — and adds the per-channel `slowmodeSeconds` rate limit together with the `channel.slowmode.set` bulk event and the `RATE_LIMITED` error code.
+
+Protocol v35 removed the separate nickname: `username` is now the only user name in profiles, members, messages, and mentions. The custom status keeps its text of up to 32 characters and replaces the `#RRGGBB` color with an optional `customStatusEmoji` of up to 16 characters, the way Discord shows it. These fields travel through `server.settings.update`, `auth.respond.profile`, snapshots, and `member.updated` events.
 
 ## Transport
 
@@ -26,7 +28,7 @@ The challenge is single-use within a connection. The private key is not included
 
 The username, description, avatar, and banner are returned in `server.snapshot.members` and `member.updated`; the current username and avatar are also used by events and the message history. Therefore one server profile is used by the member list, the text chat, and the voice room interface, while the banner is shown in the profile preview that opens. When the profile or status changes, the client sends `profile.update` over the existing WebSocket without reconnecting. The server replaces the previous public fields in the user's single record and broadcasts `member.updated` to all active clients. On explicit leave, the public description, avatar, and banner are cleared on the server.
 
-`auth.respond.profile` additionally contains `username` (2–32 lowercase letters, digits, dots, underscores, or dashes; it is used for @mentions) and the four-digit `discriminator` that completes the `username#1234` tag. The discriminator is generated once by the client together with the Ed25519 key pair and stored next to the keys; resetting the identity generates a new one. Identical tags belonging to different people are allowed by design. Each member entry also carries `fingerprint` — the SHA-256 fingerprint of the public key formatted as `XXXX-XXXX-XXXX-XXXX` — so identical tags can be told apart by comparing the identity codes shown in profile previews. The fingerprint is derived from the public key the server already stores, so it adds no new disclosure.
+`auth.respond.profile` additionally contains `username` (2–32 lowercase letters, digits, dots, underscores, or dashes; it is used for @mentions) and the four-digit `discriminator` that completes the `username#1234` tag. The discriminator in `auth.respond.profile` is only a request: the server assigns the discriminator when a key registers for the first time, keeps it bound to that identity afterwards, and ignores the value a client sends later. The requested value is honoured only when `username#discriminator` is still free; otherwise a random free discriminator is issued. The pair is unique per server, so a tag always points at exactly one identity and cannot be copied to impersonate another member. The authoritative tag reaches the client through `server.snapshot` and `member.updated`. Each member entry also carries `fingerprint` — the SHA-256 fingerprint of the public key formatted as `XXXX-XXXX-XXXX-XXXX` — so identical tags can be told apart by comparing the identity codes shown in profile previews. The fingerprint is derived from the public key the server already stores, so it adds no new disclosure.
 
 The status is stored locally and re-sent on the next connection. The server keeps presence only in the memory of the active WebSocket connection: `online`, `idle`, and `dnd` are visible to other members as "Online", "Idle", and "Do Not Disturb". `invisible` is never revealed to other clients and is converted by the server into a public `offline`; after the last connection is closed, any user also becomes `offline`.
 
@@ -38,7 +40,7 @@ On explicit leave, the client sends `server.leave`. For a regular member the ser
 - `chat.send.attachmentIds` associates up to five files pre-uploaded by the current user with the message.
 - `message.update.attachmentIds` passes the final list of attachments after editing. The author may keep the previous files, detach them, or add their own pre-uploaded files; detached attachments are removed from the metadata and the file storage.
 - The `chat.send.content` text may be empty if at least one `attachmentId` is provided; a completely empty message is rejected by the protocol.
-- `GET /api/attachments/:id` is available to an authenticated member of the server and always returns the file as a download with `X-Content-Type-Options: nosniff`.
+- `GET /api/attachments/:id` always returns the file as a download with `X-Content-Type-Options: nosniff`. Authentication alone is not enough: the caller must be the uploader of a not yet attached file, or the attachment must hang on a message the caller may read. The visibility rule matches `history.request` — a regular message is open to every member, while a `pm`/`apm` attachment is limited to the sender and the recipient, so knowing an attachment id does not open somebody else's private conversation. Everything else answers `404`.
 
 Metadata and relations are stored in PostgreSQL, and the bytes through the `AttachmentStorage` abstraction; the current implementation uses the filesystem. This is not end-to-end encryption: the VPS owner has technical access to the files. Antivirus scanning, quotas, S3/MinIO, and a lost-upload collector are not implemented yet.
 
@@ -70,7 +72,7 @@ The chat renders a mention as a highlighted chip with the mentioned member's cur
 
 The client composer supports slash commands: `/pm @user message` sends a private message, `/apm @user message` sends an anonymous private message, `/roll` posts a random number from 0 to 100 (generated locally by the client), and `/mute @user` / `/unmute @user` control the chat mute.
 
-`chat.pm` and `chat.apm` create a message with `kind: "pm"` or `kind: "apm"` and a `targetUserId`. Such messages are stored in the channel but delivered only to the author and the target — both as live `message.created`/`message.updated`/`message.deleted` events and in `history.result`, which filters out private messages that the viewer does not participate in. For `/apm` the recipient receives a masked copy: a synthetic `authorId`, the name "Anonymous", and no avatar, so the sender's identity is not revealed to the recipient; the sender sees their own message as usual. Private messages do not appear in `message.search` results. Sending a private message to yourself, to a non-member, or into a non-existent channel is rejected.
+`chat.pm` and `chat.apm` create a message with `kind: "pm"` or `kind: "apm"` and a `targetUserId`. Such messages are stored in the channel but delivered only to the author and the target — both as live `message.created`/`message.updated`/`message.deleted` events and in `history.result`, which filters out private messages that the viewer does not participate in. For `/apm` the recipient receives a masked copy: a synthetic `authorId`, the name "Anonymous", and no avatar, so the sender's identity is not revealed to the recipient; the sender sees their own message as usual. Private messages do not appear in `message.search` results. Sending a private message to yourself, to a non-member, or into a non-existent channel is rejected. `message.react` respects the same boundary: a member outside the conversation receives the same `NOT_FOUND` as for a message that does not exist, so a stray reaction can neither appear in somebody else's private message nor confirm that one exists.
 
 `chat.mute.set` requires the `MANAGE_MESSAGES` permission held by the owner and administrators. The owner can mute administrators and members, an administrator only regular members; muting oneself or the owner is forbidden. The event carries an optional `durationMinutes` (1–10080): when present, the mute expires automatically after that period and the server lazily lifts it on the next message attempt; `null` means an indefinite mute. A muted member's `chat.send`, `chat.pm`, and `chat.apm` are rejected with `FORBIDDEN`; the mute state is part of each `member` entry (`chatMuted`, plus `chatMutedUntil` for a timed mute) and is updated live via `member.updated`.
 
@@ -89,6 +91,7 @@ The client sends:
 - `server.settings.update`;
 - `channel.create`;
 - `channel.update`;
+- `channel.slowmode.set`;
 - `channel.delete`;
 - `member.role.set`;
 - `member.kick`;
@@ -110,7 +113,13 @@ The server sends:
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
-`channel.create`, `channel.update`, and `channel.delete` require the `MANAGE_CHANNELS` permission, which the owner and administrators hold. The type of an existing channel is not changed; when a channel is deleted, PostgreSQL cascades deletion to its messages, after which the server broadcasts a new `server.snapshot` to all clients.
+`channel.create`, `channel.update`, `channel.slowmode.set`, and `channel.delete` require the `MANAGE_CHANNELS` permission, which the owner and administrators hold. The type of an existing channel is not changed; when a channel is deleted, PostgreSQL cascades deletion to its messages, after which the server broadcasts a new `server.snapshot` to all clients.
+
+A text channel carries `slowmodeSeconds` — the minimum pause between two `chat.send` messages from the same member, picked from `0, 5, 10, 30, 60, 300, 900, 3600` where `0` disables the limit. Voice channels always report `0`. The countdown is derived from stored history, so a server restart does not reset it, and holders of `MANAGE_MESSAGES` bypass it. An early message is answered with `RATE_LIMITED` and a `retryAfterMs` telling the client how long to wait. `channel.slowmode.set` applies one value to up to 100 channels at once; voice ids in the selection are skipped, and a selection with no text channel answers `NOT_FOUND`.
+
+`message.react.emoji` must be exactly one emoji: the value has to match `\p{RGI_Emoji}`, the set of sequences Unicode recommends for interchange, so a single pictograph, a variation-selector form, a ZWJ family, a flag, a keycap, and a skin-tone modifier are all accepted while anything else is rejected with `INVALID_EVENT`. A free-form string would let a member push combining "zalgo" stacks, a right-to-left override, or plain text into somebody else's message and break the feed layout for everyone who sees it. The outbound `messageReactionSchema` stays a bounded string on purpose — tightening it would make one unexpected legacy value break the whole snapshot — so reactions stored before this rule are filtered out when read and are deleted once at server startup.
+
+Independently of slowmode, the server enforces a fixed anti-flood limit that no setting can disable: a token bucket of 10 actions per identity refilling at 5 per 5 seconds, applied separately to messages (`chat.send`, `chat.pm`, `chat.apm`) and to `message.react`. The bucket is keyed by user, not by socket, so a second connection with the same key does not double the allowance; exceeding it also answers `RATE_LIMITED` with `retryAfterMs`.
 
 `member.kick` removes membership, ends voice and WebSocket sessions, and broadcasts `member.removed`. The departed profile follows the same seven-day retention and anonymization policy as an explicit leave. This is a removal, not a ban: the user may later manually add the server address again. The owner can kick administrators and regular members, an administrator only regular members; one cannot kick themselves or the owner.
 
@@ -138,9 +147,11 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v35 (Русский)
+# OpenCord Protocol v36 (Русский)
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
+
+Протокол v36 закрепляет тег `username#1234` за идентичностью — дискриминатор выдаёт и хранит сервер — и добавляет ограничение отправки `slowmodeSeconds` на канал вместе с массовым событием `channel.slowmode.set` и кодом ошибки `RATE_LIMITED`.
 
 В протоколе v35 убран отдельный никнейм: единственное имя пользователя в профиле, участниках, сообщениях и упоминаниях — `username`. Свой статус сохраняет текст до 32 символов, а вместо цвета `#RRGGBB` получает необязательный `customStatusEmoji` до 16 символов — как в Discord. Эти поля передаются через `server.settings.update`, `auth.respond.profile`, snapshot и события `member.updated`.
 
@@ -166,7 +177,7 @@ Challenge одноразовый в рамках соединения. Прив�
 
 `username`, описание, аватар и шапка возвращаются в `server.snapshot.members` и `member.updated`; актуальные имя и аватар также используются событиями и историей сообщений. Поэтому один серверный профиль используется списком участников, текстовым чатом и интерфейсом голосовой комнаты, а шапка показывается в открываемом превью профиля. При смене профиля или статуса клиент отправляет `profile.update` по существующему WebSocket без переподключения. Сервер заменяет прежние публичные поля в единственной записи пользователя и рассылает `member.updated` всем активным клиентам. При явном выходе публичные описание, аватар и шапка очищаются на сервере.
 
-`auth.respond.profile` дополнительно содержит `username` (2–32 строчные буквы, цифры, точки, подчёркивания или дефисы; используется для упоминаний через @) и четырёхзначный `discriminator`, дополняющий тег `username#1234`. Дискриминатор генерируется клиентом один раз вместе с парой Ed25519-ключей и хранится рядом с ключами; сброс идентичности создаёт новый. Совпадения тегов у разных людей допустимы по замыслу. Каждая запись участника также несёт `fingerprint` — SHA-256-отпечаток публичного ключа в формате `XXXX-XXXX-XXXX-XXXX`, чтобы одинаковые теги можно было различить сравнением кодов идентичности в превью профиля. Отпечаток выводится из уже хранимого на сервере публичного ключа, поэтому нового раскрытия данных не добавляет.
+`auth.respond.profile` дополнительно содержит `username` (2–32 строчные буквы, цифры, точки, подчёркивания или дефисы; используется для упоминаний через @) и четырёхзначный `discriminator`, дополняющий тег `username#1234`. Дискриминатор в `auth.respond.profile` — только пожелание: сервер выдаёт его при первой регистрации ключа, дальше держит закреплённым за идентичностью и игнорирует присланное клиентом значение. Запрошенное значение принимается, лишь если пара `username#discriminator` свободна, иначе выдаётся случайный свободный дискриминатор. Пара уникальна в пределах сервера, поэтому тег всегда указывает ровно на одну идентичность и его нельзя скопировать, чтобы выдать себя за другого участника. Подтверждённый тег приходит клиенту в `server.snapshot` и `member.updated`. Каждая запись участника также несёт `fingerprint` — SHA-256-отпечаток публичного ключа в формате `XXXX-XXXX-XXXX-XXXX`, чтобы одинаковые теги можно было различить сравнением кодов идентичности в превью профиля. Отпечаток выводится из уже хранимого на сервере публичного ключа, поэтому нового раскрытия данных не добавляет.
 
 Статус сохраняется локально и повторно отправляется при следующем подключении. Сервер держит присутствие только в памяти активного WebSocket-соединения: `online`, `idle` и `dnd` видны другим участникам как «В сети», «Недоступен» и «Не беспокоить». `invisible` никогда не раскрывается другим клиентам и преобразуется сервером в публичный `offline`; после закрытия последнего соединения любой пользователь также становится `offline`.
 
@@ -178,7 +189,7 @@ Challenge одноразовый в рамках соединения. Прив�
 - `chat.send.attachmentIds` связывает с сообщением до пяти предварительно загруженных текущим пользователем файлов.
 - `message.update.attachmentIds` передаёт итоговый список вложений после редактирования. Автор может сохранить прежние файлы, открепить их или добавить собственные предварительно загруженные файлы; снятые вложения удаляются из метаданных и файлового хранилища.
 - Текст `chat.send.content` может быть пустым, если передан хотя бы один `attachmentId`; полностью пустое сообщение отклоняется протоколом.
-- `GET /api/attachments/:id` доступен аутентифицированному участнику сервера и всегда отдаёт файл как скачивание с `X-Content-Type-Options: nosniff`.
+- `GET /api/attachments/:id` всегда отдаёт файл как скачивание с `X-Content-Type-Options: nosniff`. Одной аутентификации недостаточно: вызывающий должен быть загрузившим ещё не прикреплённый файл либо вложение должно висеть на сообщении, которое ему видно. Правило видимости то же, что у `history.request`: обычное сообщение открыто всем участникам, а вложение `pm`/`apm` — только отправителю и получателю, поэтому знание идентификатора вложения не открывает чужую личную переписку. Во всех остальных случаях ответ — `404`.
 
 Метаданные и связи хранятся в PostgreSQL, байты — через абстракцию `AttachmentStorage`; текущая реализация использует файловую систему. Это не сквозное шифрование: владелец VPS имеет технический доступ к файлам. Антивирусная проверка, квоты, S3/MinIO и сборщик потерянных загрузок пока не реализованы.
 
@@ -210,7 +221,7 @@ Electron-клиент показывает изображения до 10 МБ �
 
 Поле ввода клиента поддерживает слэш-команды: `/pm @пользователь сообщение` отправляет личное сообщение, `/apm @пользователь сообщение` — анонимное личное, `/roll` публикует случайное число от 0 до 100 (генерируется локально клиентом), а `/mute @пользователь` и `/unmute @пользователь` управляют мутом чата.
 
-`chat.pm` и `chat.apm` создают сообщение с `kind: "pm"` или `kind: "apm"` и полем `targetUserId`. Такие сообщения хранятся в канале, но доставляются только отправителю и получателю — и как живые события `message.created`/`message.updated`/`message.deleted`, и в `history.result`, который отфильтровывает личные сообщения, в которых зритель не участвует. При `/apm` получатель получает замаскированную копию: синтетический `authorId`, имя «Аноним» и без аватара — личность отправителя получателю не раскрывается; сам отправитель видит своё сообщение как обычно. В результатах `message.search` личные сообщения не появляются. Отправка личного сообщения самому себе, не-участнику или в несуществующий канал отклоняется.
+`chat.pm` и `chat.apm` создают сообщение с `kind: "pm"` или `kind: "apm"` и полем `targetUserId`. Такие сообщения хранятся в канале, но доставляются только отправителю и получателю — и как живые события `message.created`/`message.updated`/`message.deleted`, и в `history.result`, который отфильтровывает личные сообщения, в которых зритель не участвует. При `/apm` получатель получает замаскированную копию: синтетический `authorId`, имя «Аноним» и без аватара — личность отправителя получателю не раскрывается; сам отправитель видит своё сообщение как обычно. В результатах `message.search` личные сообщения не появляются. Отправка личного сообщения самому себе, не-участнику или в несуществующий канал отклоняется. `message.react` соблюдает ту же границу: посторонний участник получает тот же `NOT_FOUND`, что и на несуществующее сообщение, поэтому чужая реакция не может ни появиться в личной переписке, ни подтвердить её существование.
 
 `chat.mute.set` требует разрешения `MANAGE_MESSAGES`, которым обладают владелец и администраторы. Владелец может мутить администраторов и участников, администратор — только обычных участников; мутить себя или владельца нельзя. Событие несёт необязательный `durationMinutes` (1–10080): при наличии срока мут истекает автоматически, и сервер лениво снимает его при следующей попытке отправить сообщение; `null` означает бессрочный мут. Сообщения (`chat.send`, `chat.pm`, `chat.apm`) замьюченного участника отклоняются с `FORBIDDEN`; состояние мута входит в каждую запись `member` (`chatMuted`, а для срочного мута ещё `chatMutedUntil`) и обновляется вживую через `member.updated`.
 
@@ -229,6 +240,7 @@ Electron-клиент показывает изображения до 10 МБ �
 - `server.settings.update`;
 - `channel.create`;
 - `channel.update`;
+- `channel.slowmode.set`;
 - `channel.delete`;
 - `member.role.set`;
 - `member.kick`;
@@ -250,7 +262,13 @@ Electron-клиент показывает изображения до 10 МБ �
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
-`channel.create`, `channel.update` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`.
+`channel.create`, `channel.update`, `channel.slowmode.set` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`.
+
+У текстового канала есть `slowmodeSeconds` — минимальная пауза между двумя сообщениями `chat.send` одного участника, выбираемая из `0, 5, 10, 30, 60, 300, 900, 3600`, где `0` выключает ограничение. Голосовые каналы всегда сообщают `0`. Отсчёт берётся из сохранённой истории, поэтому перезапуск сервера его не сбрасывает, а держатели `MANAGE_MESSAGES` ограничение не ощущают. На преждевременное сообщение приходит `RATE_LIMITED` с полем `retryAfterMs`, показывающим, сколько ждать. `channel.slowmode.set` применяет одно значение сразу к 100 каналам; голосовые идентификаторы в выборке пропускаются, а выборка без единого текстового канала отвечает `NOT_FOUND`.
+
+`message.react.emoji` обязано быть ровно одним эмодзи: значение должно совпасть с `\p{RGI_Emoji}` — набором последовательностей, рекомендованных Unicode к обмену, поэтому простой пиктограф, форма с вариационным селектором, ZWJ-семья, флаг, keycap и модификатор тона кожи принимаются, а всё остальное отклоняется с `INVALID_EVENT`. Свободная строка позволяла бы участнику вставлять в чужое сообщение комбинирующие «zalgo»-стопки, RTL-override или обычный текст и ломать вёрстку ленты у всех, кто её видит. Исходящая `messageReactionSchema` намеренно остаётся ограниченной строкой — ужесточение сделало бы так, что одно неожиданное легаси-значение ломает весь snapshot, — поэтому реакции, сохранённые до этого правила, отсеиваются на чтении и один раз удаляются при старте сервера.
+
+Независимо от медленного режима действует несменяемый настройками предел против флуда: корзина на 10 действий для идентичности, восстанавливающаяся со скоростью 5 за 5 секунд, отдельно для сообщений (`chat.send`, `chat.pm`, `chat.apm`) и для `message.react`. Корзина привязана к пользователю, а не к сокету, поэтому второе подключение с тем же ключом лимит не удваивает; превышение тоже отвечает `RATE_LIMITED` с `retryAfterMs`.
 
 `member.kick` удаляет членство, завершает голосовую и WebSocket-сессии и рассылает `member.removed`. Профиль исключённого участника следует той же политике семидневного хранения и последующего обезличивания, что и при самостоятельном выходе. Это исключение, а не бан: пользователь может позднее вручную добавить адрес сервера снова. Владелец может исключать администраторов и обычных участников, администратор — только обычных участников; исключить себя или владельца нельзя.
 
@@ -278,9 +296,11 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v35 (中文)
+# OpenCord 协议 v36 (中文)
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
+
+协议 v36 将 `username#1234` 标签绑定到身份——判别号由服务器分配并持有——并新增了按频道的 `slowmodeSeconds` 发送限制，以及批量事件 `channel.slowmode.set` 和错误码 `RATE_LIMITED`。
 
 协议 v35 移除了独立的昵称：`username` 现在是个人资料、成员、消息和提及中唯一的用户名称。自定义状态保留最长 32 个字符的文本，并以最长 16 个字符的可选 `customStatusEmoji` 取代 `#RRGGBB` 颜色，与 Discord 的显示方式一致。这些字段通过 `server.settings.update`、`auth.respond.profile`、快照和 `member.updated` 事件传输。
 
@@ -306,7 +326,7 @@ Challenge 在单个连接内是一次性的。私钥不会出现在任何网络�
 
 `username`、描述、头像和横幅在 `server.snapshot.members` 和 `member.updated` 中返回；当前的 `username` 和头像也会被事件和消息历史使用。因此，一个服务器个人资料被成员列表、文本聊天和语音房间界面共同使用，而横幅显示在打开的个人资料预览中。当个人资料或状态发生变化时，客户端会通过现有 WebSocket 发送 `profile.update`，无需重新连接。服务器在用户的唯一记录中替换之前的公开字段，并向所有活动客户端广播 `member.updated`。在明确退出时，服务器会清除公开描述、头像和横幅。
 
-`auth.respond.profile` 还包含 `username`（2–32 个小写字母、数字、点、下划线或连字符；用于 @提及）以及构成 `username#1234` 标签的四位 `discriminator`。判别号由客户端与 Ed25519 密钥对一起生成一次，并存储在密钥旁边；重置身份会生成新的判别号。不同的人拥有相同的标签在设计上是允许的。每个成员条目还带有 `fingerprint`——公钥的 SHA-256 指纹，格式为 `XXXX-XXXX-XXXX-XXXX`——这样可以通过比较个人资料预览中显示的身份代码来区分相同的标签。指纹来源于服务器已存储的公钥，因此不会增加新的数据披露。
+`auth.respond.profile` 还包含 `username`（2–32 个小写字母、数字、点、下划线或连字符；用于 @提及）以及构成 `username#1234` 标签的四位 `discriminator`。`auth.respond.profile` 中的判别号只是请求：服务器在密钥首次注册时分配判别号，此后将其绑定到该身份，并忽略客户端后续发送的值。只有当 `username#discriminator` 仍然空闲时才会采用请求的值，否则会分配一个随机的空闲判别号。该组合在服务器范围内唯一，因此标签始终指向唯一一个身份，无法被复制用于冒充其他成员。确认后的标签通过 `server.snapshot` 和 `member.updated` 传给客户端。每个成员条目还带有 `fingerprint`——公钥的 SHA-256 指纹，格式为 `XXXX-XXXX-XXXX-XXXX`——这样可以通过比较个人资料预览中显示的身份代码来区分相同的标签。指纹来源于服务器已存储的公钥，因此不会增加新的数据披露。
 
 状态在本地保存，并在下次连接时重新发送。服务器仅在活动 WebSocket 连接的内存中维护在线状态：`online`、`idle` 和 `dnd` 对其他成员显示为「在线」「空闲」和「请勿打扰」。`invisible` 从不向其他客户端透露，并由服务器转换为公开的 `offline`；在最后一个连接关闭后，任何用户也会变为 `offline`。
 
@@ -318,7 +338,7 @@ Challenge 在单个连接内是一次性的。私钥不会出现在任何网络�
 - `chat.send.attachmentIds` 将当前用户预先上传的最多五个文件与消息关联。
 - `message.update.attachmentIds` 传递编辑后的最终附件列表。作者可以保留之前的文件、将其移除，或添加自己预先上传的文件；被移除的附件会从元数据和文件存储中删除。
 - 如果至少提供了一个 `attachmentId`，则 `chat.send.content` 文本可以为空；完全为空的消息会被协议拒绝。
-- `GET /api/attachments/:id` 对服务器中经过身份验证的成员可用，并且始终以带有 `X-Content-Type-Options: nosniff` 的下载形式返回文件。
+- `GET /api/attachments/:id` 始终以带有 `X-Content-Type-Options: nosniff` 的下载形式返回文件。仅通过身份验证并不够：调用者必须是尚未附加文件的上传者，或者该附件挂在调用者可以阅读的消息上。可见性规则与 `history.request` 一致——普通消息对所有成员开放，而 `pm`/`apm` 的附件仅限发送者和接收者，因此知道附件 id 并不能打开他人的私聊。其他情况一律返回 `404`。
 
 元数据和关联存储在 PostgreSQL 中，字节通过 `AttachmentStorage` 抽象存储；当前实现使用文件系统。这不是端到端加密：VPS 所有者对文件具有技术访问权限。病毒扫描、配额、S3/MinIO 和丢失上传回收器尚未实现。
 
@@ -350,7 +370,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 客户端输入框支持斜杠命令：`/pm @用户 消息` 发送私聊消息，`/apm @用户 消息` 发送匿名私聊消息，`/roll` 发布 0 到 100 的随机数字（由客户端本地生成），`/mute @用户` 和 `/unmute @用户` 控制聊天禁言。
 
-`chat.pm` 和 `chat.apm` 会创建带有 `kind: "pm"` 或 `kind: "apm"` 以及 `targetUserId` 的消息。此类消息存储在频道中，但只发送给发送者和接收者——无论是实时的 `message.created`/`message.updated`/`message.deleted` 事件，还是 `history.result`（它会过滤掉查看者未参与的私聊消息）。对于 `/apm`，接收者会收到经过遮盖的副本：合成的 `authorId`、名称为「匿名」且没有头像，因此发送者的身份不会透露给接收者；发送者本人则像平常一样看到自己的消息。私聊消息不会出现在 `message.search` 结果中。向自己、非成员或发送到不存在的频道会被拒绝。
+`chat.pm` 和 `chat.apm` 会创建带有 `kind: "pm"` 或 `kind: "apm"` 以及 `targetUserId` 的消息。此类消息存储在频道中，但只发送给发送者和接收者——无论是实时的 `message.created`/`message.updated`/`message.deleted` 事件，还是 `history.result`（它会过滤掉查看者未参与的私聊消息）。对于 `/apm`，接收者会收到经过遮盖的副本：合成的 `authorId`、名称为「匿名」且没有头像，因此发送者的身份不会透露给接收者；发送者本人则像平常一样看到自己的消息。私聊消息不会出现在 `message.search` 结果中。向自己、非成员或发送到不存在的频道会被拒绝。`message.react` 遵守同样的边界：会话之外的成员会收到与消息不存在时相同的 `NOT_FOUND`，因此他人的反应既不会出现在私聊消息中，也无法确认其存在。
 
 `chat.mute.set` 需要所有者和管理员所拥有的 `MANAGE_MESSAGES` 权限。所有者可以禁言管理员和成员，管理员只能禁言普通成员；不能禁言自己或所有者。事件带有可选的 `durationMinutes`（1–10080）：指定时长后禁言会自动到期，服务器会在下一次发送尝试时惰性解除；`null` 表示永久禁言。被禁言成员的 `chat.send`、`chat.pm` 和 `chat.apm` 会被拒绝并返回 `FORBIDDEN`；禁言状态包含在每个 `member` 条目中（`chatMuted`，定时禁言还有 `chatMutedUntil`），并通过 `member.updated` 实时更新。
 
@@ -369,6 +389,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `server.settings.update`;
 - `channel.create`;
 - `channel.update`;
+- `channel.slowmode.set`;
 - `channel.delete`;
 - `member.role.set`;
 - `member.kick`;
@@ -390,7 +411,13 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
-`channel.create`、`channel.update` 和 `channel.delete` 需要 `MANAGE_CHANNELS` 权限，所有者和管理员拥有该权限。现有频道的类型不会改变；删除频道时，PostgreSQL 会级联删除其消息，之后服务器向所有客户端广播新的 `server.snapshot`。
+`channel.create`、`channel.update`、`channel.slowmode.set` 和 `channel.delete` 需要 `MANAGE_CHANNELS` 权限，所有者和管理员拥有该权限。现有频道的类型不会改变；删除频道时，PostgreSQL 会级联删除其消息，之后服务器向所有客户端广播新的 `server.snapshot`。
+
+文字频道带有 `slowmodeSeconds`——同一成员两条 `chat.send` 消息之间的最短间隔，取值为 `0、5、10、30、60、300、900、3600`，其中 `0` 表示关闭限制。语音频道始终报告 `0`。倒计时依据已存储的历史记录计算，因此服务器重启不会重置它，持有 `MANAGE_MESSAGES` 的成员不受限制。过早发送的消息会收到 `RATE_LIMITED` 以及说明需等待多久的 `retryAfterMs`。`channel.slowmode.set` 可一次对最多 100 个频道应用同一个值；选择中的语音频道 id 会被跳过，而不含任何文字频道的选择会返回 `NOT_FOUND`。
+
+`message.react.emoji` 必须恰好是一个表情符号：该值必须匹配 `\p{RGI_Emoji}`，即 Unicode 推荐用于交换的序列集合，因此单个象形字、带变体选择符的形式、ZWJ 家庭、旗帜、keycap 和肤色修饰符都会被接受，其他内容则以 `INVALID_EVENT` 拒绝。自由字符串会让成员把组合式「zalgo」堆叠、从右到左覆盖或纯文本塞进他人的消息，破坏所有查看者的信息流版面。出站的 `messageReactionSchema` 有意保持为有界字符串——收紧它会让一个意外的历史值破坏整个快照——因此在此规则之前保存的反应会在读取时被过滤，并在服务器启动时删除一次。
+
+除慢速模式外，服务器还强制执行任何设置都无法关闭的防刷屏限制：每个身份 10 个动作的令牌桶，以每 5 秒 5 个的速度恢复，分别应用于消息（`chat.send`、`chat.apm`、`chat.pm`）和 `message.react`。令牌桶按用户而非按连接计算，因此使用同一密钥的第二个连接不会使额度翻倍；超出限制同样返回带 `retryAfterMs` 的 `RATE_LIMITED`。
 
 `member.kick` 会移除成员资格、结束语音和 WebSocket 会话，并广播 `member.removed`。被移除成员的资料遵循与主动退出相同的七天保留及匿名化策略。这是一种移除而非封禁：用户之后可以再次手动添加服务器地址。所有者可以移除管理员和普通成员，管理员只能移除普通成员；不能移除自己或所有者。
 
