@@ -338,12 +338,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const voicePresence = await voice.disconnect(event.userId, "moderated");
       if (voicePresence) broadcast({ type: "voice.participant.disconnected", userId: voicePresence.userId, channelId: voicePresence.channelId, reason: "moderated" });
       if (!(await repository.banMember(event.userId, connection.userId, event.durationMinutes))) return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось заблокировать участника");
-      broadcast({ type: "member.removed", userId: event.userId });
+      // Самому забаненному member.removed не отправляется: иначе его клиент удалил бы сервер
+      // из списка и показал бы «вас исключили» вместо экрана блокировки со сроком.
+      broadcast({ type: "member.removed", userId: event.userId }, event.userId);
+      const newBan = await repository.findActiveBan(event.userId);
       for (const targetConnection of connections) {
         if (targetConnection.userId !== event.userId) continue;
         if (targetConnection.sessionToken) sessions.delete(targetConnection.sessionToken);
         targetConnection.userId = null;
         targetConnection.sessionToken = null;
+        send(targetConnection.socket, { type: "error", requestId: null, code: "BANNED", message: "Ваша идентичность заблокирована на этом сервере", banExpiresAt: newBan?.expiresAt ?? null });
         targetConnection.socket.close(4004, "Banned from server");
       }
       await broadcastSnapshots();
@@ -433,8 +437,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     const userId = userIdFromPublicKey(event.publicKey);
     await runRetentionCleanup();
-    if (await repository.isBanned(userId)) {
-      sendError(connection.socket, event.requestId, "BANNED", "Ваша идентичность заблокирована на этом сервере");
+    const activeBan = await repository.findActiveBan(userId);
+    if (activeBan) {
+      // Клиент показывает постоянный экран блокировки, поэтому вместе с кодом уходит и срок:
+      // null означает перманентный бан.
+      send(connection.socket, { type: "error", requestId: event.requestId, code: "BANNED", message: "Ваша идентичность заблокирована на этом сервере", banExpiresAt: activeBan.expiresAt });
       connection.socket.close(4004, "Banned from server");
       return;
     }
@@ -508,8 +515,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     try { broadcast({ type: "member.updated", member: await repository.getMember(userId, status) }); } catch (error) { app.log.error(error); }
   }
 
-  function broadcast(event: ServerEvent): void {
-    for (const connection of connections) if (connection.userId && connection.socket.readyState === connection.socket.OPEN) send(connection.socket, event);
+  function broadcast(event: ServerEvent, excludeUserId?: string): void {
+    for (const connection of connections) if (connection.userId && connection.userId !== excludeUserId && connection.socket.readyState === connection.socket.OPEN) send(connection.socket, event);
   }
 
   /**

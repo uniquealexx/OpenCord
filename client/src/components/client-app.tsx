@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type Attachment, type BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldCheck, Smile, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -1233,7 +1233,14 @@ export function ClientApp(): React.ReactElement {
         />
       )}
       {mobile && mobilePanel !== null && <div aria-hidden="true" className="fixed inset-0 z-20 bg-black/45" onClick={() => setMobilePanel(null)} />}
-      {activeServer ? (
+      {activeServer && connection.status === "banned" ? (
+        <BannedView
+          server={activeServer}
+          expiresAt={connection.banExpiresAt}
+          onRetry={() => setConnectionRevision((current) => current + 1)}
+          onRemove={() => removeServerLocally(activeServer.id)}
+        />
+      ) : activeServer ? (
         <>
           {mobile ? (
             <div className={cn("absolute inset-y-0 left-[76px] z-30 w-[calc(100%-76px)] max-w-[300px] [&>aside]:w-full", mobilePanel === "channels" ? "flex" : "hidden")}>
@@ -2665,8 +2672,60 @@ function connectionLabel(status: ConnectionStatus, t: Dictionary): string {
     reconnecting: t.connection.reconnecting,
     "server-outdated": t.connection.serverOutdated,
     "client-outdated": t.connection.clientOutdated,
+    banned: t.connection.banned,
     error: t.connection.error,
   }[status];
+}
+
+/** Остаток бана в крупных единицах: дни, часы либо минуты — точность до секунд тут не нужна. */
+function formatBanRemaining(expiresAt: string, t: Dictionary): string {
+  const remainingMs = new Date(expiresAt).getTime() - Date.now();
+  if (remainingMs <= 60_000) return t.banned.lessThanMinute;
+  const minutes = Math.round(remainingMs / 60_000);
+  if (minutes < 60) return t.banned.remainingMinutes(minutes);
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return t.banned.remainingHours(hours);
+  return t.banned.remainingDays(Math.round(hours / 24));
+}
+
+function BannedView({ server, expiresAt, onRetry, onRemove }: { server: MockServer; expiresAt: string | null; onRetry: () => void; onRemove: () => void }): React.ReactElement {
+  const { t, locale } = useI18n();
+  // Пересчёт раз в минуту: срок бана отображается с точностью до минут, чаще нет смысла.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!expiresAt) return;
+    const timer = window.setInterval(() => setTick((current) => current + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, [expiresAt]);
+
+  return (
+    <section className="flex min-w-0 flex-1 flex-col items-center justify-center bg-[#212327] px-6 py-10 text-center">
+      <div className="grid size-16 place-items-center rounded-2xl bg-red-400/10 text-red-300">
+        <ShieldBan className="size-8" />
+      </div>
+      <h1 className="mt-5 text-2xl font-bold tracking-tight text-white">{t.banned.title}</h1>
+      <p className="mt-1 text-sm font-medium text-slate-400">{server.name}</p>
+      <p className="mt-4 max-w-md text-sm leading-6 text-slate-500">{t.banned.description}</p>
+      <div className="mt-5 max-w-md rounded-xl border border-red-400/20 bg-red-400/[.06] px-4 py-3 text-[13px] leading-6 text-red-100/85">
+        {expiresAt ? (
+          <>
+            <span className="block">{t.banned.expires(new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(expiresAt)))}</span>
+            <span className="mt-0.5 block text-red-100/60">{t.banned.remaining(formatBanRemaining(expiresAt, t))}</span>
+          </>
+        ) : (
+          t.banned.permanent
+        )}
+      </div>
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+        <button type="button" onClick={onRetry} className="rounded-lg bg-white/8 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/12">
+          {t.banned.retry}
+        </button>
+        <button type="button" onClick={onRemove} className="rounded-lg px-4 py-2 text-xs font-semibold text-slate-400 transition hover:text-slate-200">
+          {t.banned.remove}
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function isProtocolIncompatible(status: ConnectionStatus): boolean {

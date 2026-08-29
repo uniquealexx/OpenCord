@@ -163,18 +163,19 @@ describe("ChatRepository", () => {
     await repository.ensureMembership("member", memberKey, ownerKey);
 
     expect(await repository.banMember("member", "owner", 30)).toBe(true);
-    expect(await repository.isBanned("member")).toBe(true);
+    expect(await repository.findActiveBan("member")).toEqual({ expiresAt: expect.any(String) });
     expect((await repository.listBannedMembers())[0]).toMatchObject({ id: "member", bannedBy: "owner", expiresAt: expect.any(String) });
     await expect(repository.getMemberRole("member")).rejects.toThrow("Server membership is missing");
     await database.query("UPDATE server_bans SET expires_at = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "member"]);
-    expect(await repository.isBanned("member")).toBe(false);
+    expect(await repository.findActiveBan("member")).toBeNull();
     expect(await repository.listBannedMembers()).toEqual([]);
 
     await repository.ensureMembership("member", memberKey, ownerKey);
     expect(await repository.banMember("member", "owner", null)).toBe(true);
+    expect(await repository.findActiveBan("member")).toEqual({ expiresAt: null });
     expect((await repository.listBannedMembers())[0]).toMatchObject({ id: "member", expiresAt: null });
     expect(await repository.unbanMember("member")).toBe(true);
-    expect(await repository.isBanned("member")).toBe(false);
+    expect(await repository.findActiveBan("member")).toBeNull();
     expect(await repository.listBannedMembers()).toEqual([]);
   });
 

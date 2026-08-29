@@ -502,7 +502,22 @@ export const zh = {
     reconnecting: "重新连接中…",
     serverOutdated: "服务器版本过旧",
     clientOutdated: "客户端版本过旧",
+    banned: "已被封禁",
     error: "连接错误",
+  },
+
+  banned: {
+    title: "你已被此服务器封禁",
+    description: "你的加密身份已被封禁，因此服务器拒绝连接。在解除封禁之前，消息和频道都不可用。",
+    permanent: "该封禁是永久的——只有管理员才能解除。",
+    expires: (date: string) => `封禁将于 ${date} 自动解除。`,
+    remaining: (duration: string) => `大约还剩 ${duration}。`,
+    remainingDays: (days: number) => `${days} 天`,
+    remainingHours: (hours: number) => `${hours} 小时`,
+    remainingMinutes: (minutes: number) => `${minutes} 分钟`,
+    lessThanMinute: "不到一分钟",
+    retry: "重新尝试连接",
+    remove: "从列表中移除该服务器",
   },
 
   protocol: {

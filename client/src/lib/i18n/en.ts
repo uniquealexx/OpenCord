@@ -501,7 +501,22 @@ export const en = {
     reconnecting: "reconnecting…",
     serverOutdated: "server outdated",
     clientOutdated: "client outdated",
+    banned: "banned",
     error: "connection error",
+  },
+
+  banned: {
+    title: "You are banned on this server",
+    description: "Your cryptographic identity is blocked, so the server rejects the connection. Messages and channels stay unavailable until the ban is lifted.",
+    permanent: "The ban is permanent — only an administrator can lift it.",
+    expires: (date: string) => `The ban is lifted automatically on ${date}.`,
+    remaining: (duration: string) => `About ${duration} left.`,
+    remainingDays: (days: number) => `${days} d`,
+    remainingHours: (hours: number) => `${hours} h`,
+    remainingMinutes: (minutes: number) => `${minutes} min`,
+    lessThanMinute: "less than a minute",
+    retry: "Try connecting again",
+    remove: "Remove the server from the list",
   },
 
   protocol: {

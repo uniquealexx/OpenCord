@@ -502,7 +502,22 @@ export const ru = {
     reconnecting: "переподключение…",
     serverOutdated: "сервер устарел",
     clientOutdated: "клиент устарел",
+    banned: "блокировка",
     error: "ошибка связи",
+  },
+
+  banned: {
+    title: "Вы заблокированы на этом сервере",
+    description: "Ваша криптографическая идентичность в бане, поэтому сервер отклоняет подключение. Сообщения и каналы будут недоступны, пока блокировку не снимут.",
+    permanent: "Блокировка перманентная — снять её может только администратор.",
+    expires: (date: string) => `Блокировка снимется автоматически ${date}.`,
+    remaining: (duration: string) => `Осталось около ${duration}.`,
+    remainingDays: (days: number) => `${days} д`,
+    remainingHours: (hours: number) => `${hours} ч`,
+    remainingMinutes: (minutes: number) => `${minutes} мин`,
+    lessThanMinute: "минуты",
+    retry: "Попробовать подключиться снова",
+    remove: "Убрать сервер из списка",
   },
 
   protocol: {

@@ -265,7 +265,9 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("voice.participant.left"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.disconnected"), userId: z.string().min(1), channelId: z.string().uuid(), reason: z.enum(["moderated", "replaced", "channel_deleted"]) }),
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),
-  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string() }),
+  // banExpiresAt сопровождает только код BANNED: ISO-дата снятия бана либо null для
+  // перманентного. Поле необязательное, чтобы сервер прошлой версии оставался совместимым.
+  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string(), banExpiresAt: z.string().datetime().nullable().optional() }),
 ]);
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;

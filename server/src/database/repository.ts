@@ -122,13 +122,15 @@ export class ChatRepository {
     return role;
   }
 
-  async isBanned(userId: string): Promise<boolean> {
+  /** Активный бан пользователя либо null. `expiresAt === null` — бан перманентный. */
+  async findActiveBan(userId: string): Promise<{ expiresAt: string | null } | null> {
     await this.expireBans();
-    const [row] = await this.database.query<{ banned: boolean }>(
-      "SELECT EXISTS(SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2) AS banned",
+    const [row] = await this.database.query<{ expires_at: Date | string | null }>(
+      "SELECT expires_at FROM server_bans WHERE server_id = $1 AND user_id = $2",
       [DEFAULT_SERVER_ID, userId],
     );
-    return row?.banned === true;
+    if (!row) return null;
+    return { expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null };
   }
 
   async banMember(userId: string, bannedBy: string, durationMinutes: BanDurationMinutes): Promise<boolean> {

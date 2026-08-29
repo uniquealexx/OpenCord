@@ -110,6 +110,34 @@ describe("server connection", () => {
     unmount();
   });
 
+  it("reports a ban with its deadline and stops reconnecting", async () => {
+    vi.useFakeTimers();
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
+    const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
+    const expiresAt = "2026-09-01T10:00:00.000Z";
+    act(() => FakeWebSocket.instances[0]?.receive({ type: "error", requestId: null, code: "BANNED", message: "Ваша идентичность заблокирована на этом сервере", banExpiresAt: expiresAt }));
+
+    expect(result.current.status).toBe("banned");
+    expect(result.current.banExpiresAt).toBe(expiresAt);
+    // Блокировку показывает постоянный экран, поэтому исчезающий тост не поднимается.
+    expect(callbacks.onError).not.toHaveBeenCalled();
+
+    // Бан фатален: закрытие сокета не запускает переподключение и не сбрасывает статус в «ошибку».
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(result.current.status).toBe("banned");
+    unmount();
+  });
+
+  it("treats a permanent ban as an unknown deadline", () => {
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };
+    const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
+    act(() => FakeWebSocket.instances[0]?.receive({ type: "error", requestId: null, code: "BANNED", message: "Заблокировано", banExpiresAt: null }));
+    expect(result.current.status).toBe("banned");
+    expect(result.current.banExpiresAt).toBeNull();
+    unmount();
+  });
+
   it("authenticates and reconnects after the socket closes", async () => {
     vi.useFakeTimers();
     const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onServerBannerUpdated: vi.fn(), onHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onSearchResult: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onProfileAnonymized: vi.fn(), onServerDeleted: vi.fn(), onVoicePresence: vi.fn(), onVoiceDisconnected: vi.fn(), onError: vi.fn() };

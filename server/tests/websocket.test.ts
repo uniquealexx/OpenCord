@@ -365,21 +365,37 @@ it("forbids the sender from reacting to their own anonymous private message", as
     const member = await connectAndAuthenticate(url, "Участник", memberKeys);
 
     const bannedSnapshot = waitForEventMatching(owner.socket, "server.snapshot", (event) => event.server.bannedMembers?.some((item) => item.id === member.userId) === true);
+    // Сам забаненный получает BANNED со сроком, а не member.removed: иначе его клиент
+    // удалил бы сервер из списка вместо показа экрана блокировки.
+    const memberEvents: ServerEvent[] = [];
+    member.socket.on("message", (data: WebSocket.RawData) => {
+      const parsed = serverEventSchema.safeParse(JSON.parse(data.toString()) as unknown);
+      if (parsed.success) memberEvents.push(parsed.data);
+    });
     const memberClosed = once(member.socket, "close");
     owner.socket.send(JSON.stringify({ type: "member.ban", requestId: randomUUID(), userId: member.userId, durationMinutes: null }));
     expect((await bannedSnapshot).server.bannedMembers).toContainEqual(expect.objectContaining({ id: member.userId, username: usernameFromDisplayName("Участник"), expiresAt: null }));
     await memberClosed;
+    expect(memberEvents).toContainEqual(expect.objectContaining({ type: "error", code: "BANNED", banExpiresAt: null }));
+    expect(memberEvents.some((event) => event.type === "member.removed" && event.userId === member.userId)).toBe(false);
 
     const bannedAttempt = await connectAndExpectBanned(url, memberKeys);
-    expect(bannedAttempt).toMatchObject({ type: "error", code: "BANNED" });
+    expect(bannedAttempt).toMatchObject({ type: "error", code: "BANNED", banExpiresAt: null });
 
     const unbannedSnapshot = waitForEventMatching(owner.socket, "server.snapshot", (event) => event.server.bannedMembers?.length === 0);
     owner.socket.send(JSON.stringify({ type: "member.unban", requestId: randomUUID(), userId: member.userId }));
     await unbannedSnapshot;
     const returned = await connectAndAuthenticate(url, "Участник", memberKeys);
     expect(returned.userId).toBe(member.userId);
+
+    // Временный бан отдаёт дедлайн, по которому клиент показывает срок разблокировки.
+    const returnedClosed = once(returned.socket, "close");
+    owner.socket.send(JSON.stringify({ type: "member.ban", requestId: randomUUID(), userId: member.userId, durationMinutes: 30 }));
+    await returnedClosed;
+    const temporaryAttempt = await connectAndExpectBanned(url, memberKeys);
+    expect(temporaryAttempt.code).toBe("BANNED");
+    expect(new Date(temporaryAttempt.banExpiresAt ?? "").getTime()).toBeGreaterThan(Date.now());
     owner.socket.close();
-    returned.socket.close();
   }, 15_000);
 
   it("allows only the owner and role-superior administrators to server-mute voice members", async () => {
