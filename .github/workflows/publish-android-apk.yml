@@ -85,7 +85,11 @@ jobs:
           curl -fsSL -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
           unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools"
           mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          # Конечное число подтверждений вместо `yes |`: тот ломался о pipefail —
+          # sdkmanager закрывает пайп, `yes` получает EPIPE и валит весь шаг.
+          # Полсотни строк целиком помещаются в буфер пайпа, поэтому писать
+          # в закрытый конец никто не успевает.
+          for _ in $(seq 1 50); do echo y; done | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
           "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.1.0"
 
       - name: Install dependencies
