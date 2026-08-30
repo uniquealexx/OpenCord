@@ -20,7 +20,7 @@ type Access = { id: string; role: MemberRole; permissions: Permission[] };
 
 const UPLOAD_SLIDER_MAX = 2_025;
 
-export function ServerSettingsPage({ server, profile, access, onClose, onAvatar, onBanner, onSaveSettings, onSetRole, onKick, onBan, onUnban }: { server: MockServer; profile: LocalProfile; access: Access; onClose: () => void; onAvatar: () => void; onBanner: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onSetRole: (userId: string, role: "administrator" | "member") => void; onKick: (userId: string) => void; onBan: (userId: string, durationMinutes: BanDurationMinutes) => void; onUnban: (userId: string) => void }): React.ReactElement {
+export function ServerSettingsPage({ mobile = false, server, profile, access, onClose, onAvatar, onBanner, onSaveSettings, onSetRole, onKick, onBan, onUnban }: { mobile?: boolean; server: MockServer; profile: LocalProfile; access: Access; onClose: () => void; onAvatar: () => void; onBanner: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onSetRole: (userId: string, role: "administrator" | "member") => void; onKick: (userId: string) => void; onBan: (userId: string, durationMinutes: BanDurationMinutes) => void; onUnban: (userId: string) => void }): React.ReactElement {
   const { t } = useI18n();
   const [page, setPage] = useState<SettingsPage>("visual");
   const [usersPage, setUsersPage] = useState<UsersPage>("overview");
@@ -74,20 +74,21 @@ export function ServerSettingsPage({ server, profile, access, onClose, onAvatar,
     setLimitStep(numericValue > 2_000 ? UPLOAD_SLIDER_MAX : Math.max(1, numericValue));
   }
 
+  // На телефоне настройки занимают весь экран: колонки серверов рядом нет.
   return (
-    <section className="absolute inset-y-0 left-[76px] z-20 flex min-w-0 flex-1 overflow-hidden bg-[#212327] max-sm:flex-col" style={{ right: 0 }}>
-      <aside className="w-64 shrink-0 border-r border-white/[.055] bg-[#191b1e] px-3 py-4 max-sm:w-full max-sm:border-b max-sm:border-r-0">
+    <section className={cn("absolute inset-y-0 z-40 flex min-w-0 flex-1 overflow-hidden bg-[#212327] max-md:flex-col", mobile ? "left-0" : "left-[76px]")} style={{ right: 0 }}>
+      <aside className="w-64 shrink-0 border-r border-white/[.055] bg-[#191b1e] px-3 py-4 max-md:w-full max-md:border-b max-md:border-r-0">
         <div className="mb-5 flex items-center gap-3 px-2">
           <Avatar name={server.name} image={server.avatar} color={server.accent} size="sm" />
           <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-white">{server.name}</p><p className="text-[10px] text-slate-500">{t.serverSettings.title}</p></div>
-          <button type="button" aria-label={t.serverSettings.close} onClick={onClose} className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-200"><X className="size-4" /></button>
+          <button type="button" aria-label={t.serverSettings.close} onClick={onClose} className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-500 hover:bg-white/5 hover:text-slate-200 max-md:size-11"><X className="size-5" /></button>
         </div>
-        <nav className="space-y-1 max-sm:grid max-sm:grid-cols-2 max-sm:gap-1 max-sm:space-y-0">
+        <nav className="space-y-1 max-md:grid max-md:grid-cols-2 max-md:gap-1 max-md:space-y-0">
           <NavigationButton active={page === "visual"} icon={<Camera className="size-4" />} onClick={() => setPage("visual")}>{t.serverSettings.visual}</NavigationButton>
           <NavigationButton active={page === "limits"} icon={<SlidersHorizontal className="size-4" />} onClick={() => setPage("limits")}>{t.serverSettings.limits}</NavigationButton>
           <NavigationButton active={page === "users"} icon={<Users className="size-4" />} onClick={() => setPage("users")}>{t.serverSettings.users}</NavigationButton>
         </nav>
-        {page === "users" && <nav className="mt-4 space-y-1 border-t border-white/[.06] pt-4 max-sm:grid max-sm:grid-cols-2 max-sm:gap-1 max-sm:space-y-0">
+        {page === "users" && <nav className="mt-4 space-y-1 border-t border-white/[.06] pt-4 max-md:grid max-md:grid-cols-2 max-md:gap-1 max-md:space-y-0">
           <NavigationButton compact active={usersPage === "overview"} icon={<UserCog className="size-3.5" />} onClick={() => setUsersPage("overview")}>{t.serverSettings.admins}</NavigationButton>
           <NavigationButton compact active={usersPage === "kick"} icon={<UserMinus className="size-3.5" />} onClick={() => setUsersPage("kick")}>{t.serverSettings.kick}</NavigationButton>
           <NavigationButton compact active={usersPage === "ban"} icon={<Ban className="size-3.5" />} onClick={() => setUsersPage("ban")}>{t.serverSettings.ban}</NavigationButton>

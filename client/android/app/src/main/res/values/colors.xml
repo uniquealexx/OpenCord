@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Совпадает с токеном color-rail в client/src/app/globals.css: окно оболочки
+         и первый кадр WebView должны быть одного цвета, иначе на старте видна вспышка. -->
+    <color name="opencordSurface">#191b1e</color>
+</resources>

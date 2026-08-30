@@ -19,14 +19,17 @@ import { ServerSettingsPage } from "@/components/server-settings-page";
 import { ServerSearchPanel } from "@/components/server-search-panel";
 import { ScreenShareDialog, ScreenShareSurface, screenShareResolutionLabel } from "@/components/screen-share-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { MobileSettingsScreen } from "@/mobile/screens/settings-screen";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useMobileLayout } from "@/hooks/use-mobile-layout";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
 import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization } from "@/hooks/use-voice-session";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
+import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
 import { createDefaultState, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
@@ -59,6 +62,19 @@ export function isChatMutedNow(member: Pick<MockMember, "chatMuted" | "chatMuted
   if (member?.chatMuted !== true) return false;
   if (!member.chatMutedUntil) return true;
   return new Date(member.chatMutedUntil).getTime() > Date.now();
+}
+
+/**
+ * Остаток мута для отсчёта в поле ввода: `5:00`, а от часа — `1:02:03`.
+ * Округление вверх, чтобы последняя секунда показывалась как `0:01`, а не `0:00`.
+ */
+export function formatMuteRemaining(milliseconds: number): string {
+  const total = Math.max(0, Math.ceil(milliseconds / 1000));
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = total % 60;
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
 }
 
 export function shouldRequestVoiceJoin(status: "idle" | "connecting" | "connected" | "reconnecting" | "error", connectedChannelId: string | null, authorizedChannelId: string | null, targetChannelId: string): boolean {
@@ -105,6 +121,9 @@ export function ClientApp(): React.ReactElement {
     discriminator: string;
   } | null>(null);
   const [draggingFiles, setDraggingFiles] = useState(false);
+  // Телефонная раскладка: одна колонка, навигация в выдвижных панелях.
+  const mobile = useMobileLayout();
+  const swipeStartRef = useRef<{ x: number; y: number; edge: "left" | "right" | "panel" } | null>(null);
   const dragDepthRef = useRef(0);
   const searchRequestRef = useRef<string | null>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
@@ -408,12 +427,57 @@ export function ClientApp(): React.ReactElement {
   useEffect(() => {
     const scale = isMobilePlatform() ? (state?.preferences.uiScale ?? 1) : 1;
     document.documentElement.style.zoom = scale === 1 ? "" : String(scale);
+    // Системные отступы и клавиатура измеряются вне масштабированного дерева;
+    // `--ui-zoom` приводит их к его координатам (см. globals.css).
+    document.documentElement.style.setProperty("--ui-zoom", String(scale));
   }, [state?.preferences.uiScale]);
 
   useEffect(() => {
     const language = state?.preferences.language;
     if (language) setActiveLanguage(language);
   }, [state?.preferences.language]);
+
+  // Системная кнопка «Назад» Android закрывает верхний слой интерфейса и только на
+  // главном экране сворачивает приложение (нативная часть просит подтверждение).
+  // Порядок соответствует визуальной вложенности: оверлей → диалог → панель → чат.
+  useEffect(() =>
+    registerBackHandler(() => {
+      if (viewingScreenShareId) {
+        setViewingScreenShareId(null);
+        return true;
+      }
+      if (modal) {
+        setModal(null);
+        return true;
+      }
+      if (searchOpen) {
+        resetSearch();
+        return true;
+      }
+      if (serverSettingsOpen) {
+        setServerSettingsOpen(false);
+        return true;
+      }
+      if (mobilePanel) {
+        setMobilePanel(null);
+        return true;
+      }
+      // Из чата «Назад» ведёт к списку каналов, из списка каналов — на главный экран.
+      if (state?.activeServerId) {
+        if (mobile) setMobilePanel("channels");
+        else openHome();
+        return true;
+      }
+      return false;
+    }),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [mobile, mobilePanel, modal, searchOpen, serverSettingsOpen, state?.activeServerId, viewingScreenShareId]);
+
+  // Второе нажатие «Назад» на главном экране закрывает приложение; первое — подсказка.
+  useEffect(() => {
+    setExitHintHandler(() => setNotice(t.mobile.exitHint));
+    return () => setExitHintHandler(null);
+  }, [t]);
 
   // Прокрутка в идеальный низ при открытии канала и при новых сообщениях: scrollIntoView({block:"end"})
   // останавливается на высоте нижнего отступа контейнера, а scrollTop = scrollHeight показывает
@@ -446,6 +510,27 @@ export function ClientApp(): React.ReactElement {
       for (const timer of settleTimers) window.clearTimeout(timer);
     };
   }, [state?.messages, state?.activeChannelId]);
+
+  // Клавиатура на Android уменьшает высоту оболочки, а прокрутка ленты остаётся на
+  // прежнем scrollTop — последние сообщения уезжали под поле ввода. Пока пользователь
+  // читает низ ленты, держим его у низа при любом изменении высоты контейнера.
+  useEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    let atBottom = true;
+    const onScroll = (): void => {
+      atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 120;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    const observer = new ResizeObserver(() => {
+      if (atBottom) container.scrollTop = container.scrollHeight;
+    });
+    observer.observe(container);
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+    };
+  }, [state?.activeChannelId]);
   useEffect(() => {
     if (!highlightedMessageId) return;
     const frame = window.requestAnimationFrame(() => {
@@ -503,10 +588,6 @@ export function ClientApp(): React.ReactElement {
 
   if (!state) return <div className="grid flex-1 place-items-center bg-[#212327] text-sm text-slate-500">{t.loadingApp}</div>;
 
-  // Ветка ниже рендерится только на клиенте (после загрузки состояния), поэтому
-  // платформенный флаг здесь не влияет на статическую пререндеренную разметку.
-  const mobile = isMobilePlatform();
-
   if (!state.onboardingComplete || !state.profile) {
     return (
       <Onboarding
@@ -555,7 +636,9 @@ export function ClientApp(): React.ReactElement {
         ]
       : (activeServer?.members ?? []);
   const mentionCandidates: MentionCandidate[] = searchMembers.map(memberToMentionCandidate);
-  const selfChatMuted = isChatMutedNow(searchMembers.find((member) => member.id === (currentAccess?.id ?? profile.id)));
+  const selfMember = searchMembers.find((member) => member.id === (currentAccess?.id ?? profile.id));
+  const selfChatMuted = isChatMutedNow(selfMember);
+  const selfChatMutedUntil = selfMember?.chatMutedUntil ?? null;
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
     commit((current) => ({
@@ -1191,6 +1274,15 @@ export function ClientApp(): React.ReactElement {
     setNotice(muted ? t.notices.mutedForAll : t.notices.serverMuteRemoved);
   }
 
+  /** Сброс ключа меняет дискриминатор: локальный профиль подтягивает новый тег. */
+  function applyResetIdentity(identity: { publicKey: string; fingerprint: string; discriminator: string }): void {
+    commit((current) =>
+      current.profile && current.profile.discriminator !== identity.discriminator
+        ? { ...current, profile: { ...current.profile, discriminator: identity.discriminator } }
+        : current,
+    );
+  }
+
   async function reset(): Promise<void> {
     const resetState = window.openCord ? await window.openCord.storage.reset() : createDefaultState();
     setState(resetState);
@@ -1201,26 +1293,103 @@ export function ClientApp(): React.ReactElement {
     resetVoiceSession();
   }
 
+  // Панель серверов и список каналов собираются один раз: на телефоне они уезжают
+  // в выдвижную панель, на десктопе стоят колонками. Раньше разметка дублировалась.
+  const serverRail = (
+    <ServerRail
+      mobile={mobile}
+      servers={state.servers}
+      activeId={activeServer?.id}
+      onHome={openHome}
+      onSelect={selectServer}
+      onCreate={() => setModal("create")}
+      onConnect={() => setModal("connect")}
+      showCreate={!mobile}
+      onManage={openServerSettingsFromRail}
+      onDisconnect={disconnectFromRail}
+      canManageServer={(server) => {
+        const access = accessByServer[server.id];
+        return access?.role === "owner" || access?.role === "administrator";
+      }}
+    />
+  );
+
+  const channelSidebar = activeServer ? (
+    <ChannelSidebar
+      mobile={mobile}
+      server={activeServer}
+      activeChannelId={activeChannel?.id}
+      profile={state.profile}
+      canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true}
+      voiceCapability={voiceCapability}
+      voiceParticipants={voiceParticipants}
+      voiceChannelId={voice.channelId}
+      voiceStatus={voice.status}
+      muted={effectiveMuted}
+      serverMuted={serverMuted}
+      deafened={voice.deafened}
+      activeSpeakerIds={voice.activeSpeakerIds}
+      screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)}
+      isScreenSharing={voice.isScreenSharing}
+      currentUserId={currentAccess?.id ?? profile.id}
+      onCreateChannel={() => setModal("channel")}
+      onEditChannel={(channel) => openChannelModal(channel, "channel-edit")}
+      onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")}
+      onBulkSlowmode={() => setModal("channel-slowmode")}
+      onSelectChannel={selectChannel}
+      onServerMenu={() => setModal("leave")}
+      onProfile={() => setModal("profile")}
+      onSettings={() => setModal("settings")}
+      onJoinVoice={joinVoiceChannel}
+      onLeaveVoice={leaveVoiceChannel}
+      onMuted={(value) => {
+        if (!serverMuted) void voice.setMuted(value);
+      }}
+      onDeafened={(value) => void voice.setDeafened(value)}
+      onStartScreenShare={() => setModal("screen-share")}
+      onStopScreenShare={() => void stopScreenShare()}
+      onViewScreenShare={viewScreenShare}
+    />
+  ) : null;
+
+  // Жесты: свайп от левого края открывает каналы, от правого — участников;
+  // свайп по самой панели её закрывает. Порог по вертикали отсекает прокрутку.
+  const EDGE = 28;
+  const THRESHOLD = 56;
+  function beginSwipe(edge: "left" | "right" | "panel", event: React.TouchEvent): void {
+    const touch = event.touches[0];
+    if (!touch || event.touches.length !== 1) {
+      swipeStartRef.current = null;
+      return;
+    }
+    if (edge !== "panel") {
+      const fromEdge = edge === "left" ? touch.clientX <= EDGE : touch.clientX >= window.innerWidth - EDGE;
+      if (!fromEdge) {
+        swipeStartRef.current = null;
+        return;
+      }
+    }
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY, edge };
+  }
+  function endSwipe(event: React.TouchEvent, onOpen?: (edge: "left" | "right") => void, onClose?: () => void): void {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    if (Math.abs(touch.clientY - start.y) > Math.abs(deltaX)) return;
+    if (start.edge === "left" && deltaX > THRESHOLD) onOpen?.("left");
+    else if (start.edge === "right" && deltaX < -THRESHOLD) onOpen?.("right");
+    else if (start.edge === "panel" && Math.abs(deltaX) > THRESHOLD) onClose?.();
+  }
+
   return (
     <main className="relative flex min-h-0 flex-1 overflow-hidden bg-[#212327] text-slate-200">
-      <ServerRail
-        servers={state.servers}
-        activeId={activeServer?.id}
-        onHome={openHome}
-        onSelect={selectServer}
-        onCreate={() => setModal("create")}
-        onConnect={() => setModal("connect")}
-        showCreate={!mobile}
-        onManage={openServerSettingsFromRail}
-        onDisconnect={disconnectFromRail}
-        canManageServer={(server) => {
-          const access = accessByServer[server.id];
-          return access?.role === "owner" || access?.role === "administrator";
-        }}
-      />
+      {(!mobile || !activeServer) && serverRail}
       {serverSettingsOpen && activeServer && currentAccess && (
         <ServerSettingsPage
           key={activeServer.id}
+          mobile={mobile}
           server={activeServer}
           profile={profile}
           access={currentAccess}
@@ -1234,7 +1403,38 @@ export function ClientApp(): React.ReactElement {
           onUnban={unbanServerMember}
         />
       )}
-      {mobile && mobilePanel !== null && <div aria-hidden="true" className="fixed inset-0 z-20 bg-black/45" onClick={() => setMobilePanel(null)} />}
+      {mobile && activeServer && (
+        <>
+          <div
+            aria-hidden="true"
+            onClick={() => setMobilePanel(null)}
+            className={cn("absolute inset-0 z-30 bg-black/60 transition-opacity duration-200", mobilePanel === null ? "pointer-events-none opacity-0" : "opacity-100")}
+          />
+          <div
+            aria-hidden={mobilePanel !== "channels"}
+            onTouchStart={(event) => beginSwipe("panel", event)}
+            onTouchEnd={(event) => endSwipe(event, undefined, () => setMobilePanel(null))}
+            className={cn(
+              "absolute inset-y-0 left-0 z-40 flex w-[86%] max-w-[336px] shadow-[10px_0_44px_rgba(0,0,0,.5)] transition-transform duration-200 ease-out",
+              mobilePanel === "channels" ? "translate-x-0" : "pointer-events-none -translate-x-full",
+            )}
+          >
+            {serverRail}
+            <div className="flex min-w-0 flex-1 [&>aside]:w-full">{channelSidebar}</div>
+          </div>
+          <div
+            aria-hidden={mobilePanel !== "members"}
+            onTouchStart={(event) => beginSwipe("panel", event)}
+            onTouchEnd={(event) => endSwipe(event, undefined, () => setMobilePanel(null))}
+            className={cn(
+              "absolute inset-y-0 right-0 z-40 flex w-[80%] max-w-[320px] shadow-[-10px_0_44px_rgba(0,0,0,.5)] transition-transform duration-200 ease-out [&>aside]:w-full",
+              mobilePanel === "members" ? "translate-x-0" : "pointer-events-none translate-x-full",
+            )}
+          >
+            <MemberList server={activeServer} profile={state.profile} access={currentAccess} />
+          </div>
+        </>
+      )}
       {activeServer && connection.status === "banned" ? (
         <BannedView
           server={activeServer}
@@ -1244,83 +1444,11 @@ export function ClientApp(): React.ReactElement {
         />
       ) : activeServer ? (
         <>
-          {mobile ? (
-            <div className={cn("absolute inset-y-0 left-[76px] z-30 w-[calc(100%-76px)] max-w-[300px] [&>aside]:w-full", mobilePanel === "channels" ? "flex" : "hidden")}>
-              <ChannelSidebar
-                mobile
-                server={activeServer}
-                activeChannelId={activeChannel?.id}
-                profile={state.profile}
-                canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true}
-                voiceCapability={voiceCapability}
-                voiceParticipants={voiceParticipants}
-                voiceChannelId={voice.channelId}
-                voiceStatus={voice.status}
-                muted={effectiveMuted}
-                serverMuted={serverMuted}
-                deafened={voice.deafened}
-                activeSpeakerIds={voice.activeSpeakerIds}
-                screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)}
-                isScreenSharing={voice.isScreenSharing}
-                currentUserId={currentAccess?.id ?? profile.id}
-                onCreateChannel={() => setModal("channel")}
-                onEditChannel={(channel) => openChannelModal(channel, "channel-edit")}
-                onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")}
-                onBulkSlowmode={() => setModal("channel-slowmode")}
-                onSelectChannel={selectChannel}
-                onServerMenu={() => setModal("leave")}
-                onProfile={() => setModal("profile")}
-                onSettings={() => setModal("settings")}
-                onJoinVoice={joinVoiceChannel}
-                onLeaveVoice={leaveVoiceChannel}
-                onMuted={(value) => {
-                  if (!serverMuted) void voice.setMuted(value);
-                }}
-                onDeafened={(value) => void voice.setDeafened(value)}
-                onStartScreenShare={() => setModal("screen-share")}
-                onStopScreenShare={() => void stopScreenShare()}
-                onViewScreenShare={viewScreenShare}
-              />
-            </div>
-          ) : (
-            <ChannelSidebar
-              server={activeServer}
-              activeChannelId={activeChannel?.id}
-              profile={state.profile}
-              canManageChannels={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true}
-              voiceCapability={voiceCapability}
-              voiceParticipants={voiceParticipants}
-              voiceChannelId={voice.channelId}
-              voiceStatus={voice.status}
-              muted={effectiveMuted}
-              serverMuted={serverMuted}
-              deafened={voice.deafened}
-              activeSpeakerIds={voice.activeSpeakerIds}
-              screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)}
-              isScreenSharing={voice.isScreenSharing}
-              currentUserId={currentAccess?.id ?? profile.id}
-              onCreateChannel={() => setModal("channel")}
-              onEditChannel={(channel) => openChannelModal(channel, "channel-edit")}
-              onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")}
-                onBulkSlowmode={() => setModal("channel-slowmode")}
-              onSelectChannel={selectChannel}
-              onServerMenu={() => setModal("leave")}
-              onProfile={() => setModal("profile")}
-              onSettings={() => setModal("settings")}
-              onJoinVoice={joinVoiceChannel}
-              onLeaveVoice={leaveVoiceChannel}
-              onMuted={(value) => {
-                if (!serverMuted) void voice.setMuted(value);
-              }}
-              onDeafened={(value) => void voice.setDeafened(value)}
-              onStartScreenShare={() => setModal("screen-share")}
-              onStopScreenShare={() => void stopScreenShare()}
-              onViewScreenShare={viewScreenShare}
-            />
-          )}
+          {!mobile && channelSidebar}
           {activeChannel?.kind === "voice" ? (
             <VoiceChannelView
               mobile={mobile}
+              onOpenChannels={() => setMobilePanel("channels")}
               channel={activeChannel}
               server={activeServer}
               profile={profile}
@@ -1356,6 +1484,8 @@ export function ClientApp(): React.ReactElement {
           ) : activeChannel ? (
             <section
               className="relative flex min-w-0 flex-1 flex-col bg-[#212327]"
+              onTouchStart={mobile ? (event) => beginSwipe((event.touches[0]?.clientX ?? 0) <= EDGE ? "left" : "right", event) : undefined}
+              onTouchEnd={mobile ? (event) => endSwipe(event, (edge) => setMobilePanel(edge === "right" ? "members" : "channels")) : undefined}
               onDragEnter={(event) => {
                 if (event.dataTransfer.types.includes("Files")) {
                   dragDepthRef.current += 1;
@@ -1412,19 +1542,13 @@ export function ClientApp(): React.ReactElement {
               <ProtocolNotice status={connection.status} />
               <div className="flex min-h-0 flex-1">
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <div ref={messageScrollRef} className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-sm:px-3 max-sm:py-3", state.preferences.compactMode && "py-3")}>
+                  <div ref={messageScrollRef} className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-md:px-2.5 max-md:py-3", state.preferences.compactMode && "py-3")}>
                     <ChannelIntro name={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
                     {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} replyToMessage={message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : undefined} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} privateStackPosition={privateMessageStackPosition(messages, index)} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} onToggleReaction={connection.toggleReaction} onReply={(target) => setReplyingToId(target.id)} canReact={Boolean(activeServer.address && connection.status === "connected")} />) : <p className="py-8 text-center text-sm text-slate-600">{t.chat.empty}</p>}
                   </div>
-                  <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} replyingTo={replyingTo} onCancelReply={() => setReplyingToId(null)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
+                  <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} replyingTo={replyingTo} onCancelReply={() => setReplyingToId(null)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} chatMutedUntil={selfChatMutedUntil} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
                 </div>
-                {mobile
-                  ? mobilePanel === "members" && (
-                      <div className="absolute inset-y-0 right-0 z-30 flex w-[240px]">
-                        <MemberList server={activeServer} profile={state.profile} access={currentAccess} />
-                      </div>
-                    )
-                  : state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} />}
+                {!mobile && state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} />}
               </div>
               <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => resetSearch()} onReset={resetSearchSession} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
               {draggingFiles && (
@@ -1435,21 +1559,27 @@ export function ClientApp(): React.ReactElement {
             </section>
           ) : (
             <NoTextChannelView
+              mobile={mobile}
+              onOpenChannels={() => setMobilePanel("channels")}
               server={activeServer}
               profile={state.profile}
               access={currentAccess}
               connectionStatus={activeServer.address ? connection.status : "demo"}
               showMembers={!mobile && state.preferences.showMemberList}
               onCreate={() => setModal("channel")}
-              onToggleMembers={() =>
+              onToggleMembers={() => {
+                if (mobile) {
+                  setMobilePanel(mobilePanel === "members" ? null : "members");
+                  return;
+                }
                 commit((current) => ({
                   ...current,
                   preferences: {
                     ...current.preferences,
                     showMemberList: !current.preferences.showMemberList,
                   },
-                }))
-              }
+                }));
+              }}
             />
           )}
         </>
@@ -1465,7 +1595,23 @@ export function ClientApp(): React.ReactElement {
       {activeServer && updatePreset && <DeploymentDialog key={`update-${activeServer.id}`} open={modal === "update"} updateOnly preset={updatePreset} onOpenChange={(open) => setModal(open ? "update" : null)} onDeployed={updatedDeployedServer} />}
       <ServerDialog open={modal === "connect"} onOpenChange={(open) => setModal(open ? "connect" : null)} onAdd={addServer} />
       <ProfileDialog key={modal === "profile" ? "profile-open" : "profile-closed"} profile={state.profile} open={modal === "profile"} onOpenChange={(open) => setModal(open ? "profile" : null)} onSave={saveProfile} />
-      {modal === "settings" && (
+      {modal === "settings" && (mobile ? (
+        // На телефоне настройки — набор полноэкранных экранов с переходами,
+        // а не диалог: разделов много, и в одну прокручиваемую ленту они не ложатся.
+        <MobileSettingsScreen
+          preferences={state.preferences}
+          confirmReset={confirmReset}
+          onClose={() => {
+            setModal(null);
+            setConfirmReset(false);
+          }}
+          onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))}
+          onRequestReset={() => setConfirmReset(true)}
+          onCancelReset={() => setConfirmReset(false)}
+          onReset={() => void reset()}
+          onIdentityReset={applyResetIdentity}
+        />
+      ) : (
         <SettingsDialog
           preferences={state.preferences}
           open
@@ -1478,21 +1624,9 @@ export function ClientApp(): React.ReactElement {
           onRequestReset={() => setConfirmReset(true)}
           onCancelReset={() => setConfirmReset(false)}
           onReset={() => void reset()}
-          onIdentityReset={(identity) =>
-            commit((current) =>
-              current.profile && current.profile.discriminator !== identity.discriminator
-                ? {
-                    ...current,
-                    profile: {
-                      ...current.profile,
-                      discriminator: identity.discriminator,
-                    },
-                  }
-                : current,
-            )
-          }
+          onIdentityReset={applyResetIdentity}
         />
-      )}
+      ))}
       {activeServer && <ServerPreviewDialog server={activeServer} canOpenSettings={currentAccess?.role === "owner" || currentAccess?.role === "administrator"} canUpdate={Boolean(updatePreset) && (Boolean(activeServer.deployment) || currentAccess?.role === "owner" || connection.status === "server-outdated")} canDeleteForAll={currentAccess?.permissions.includes("DELETE_SERVER") === true} canRemoveLocal={Boolean(activeServer.address) && connection.status !== "connected"} open={modal === "leave"} onOpenChange={(open) => setModal(open ? "leave" : null)} onSettings={() => { setModal(null); setServerSettingsOpen(true); }} onUpdate={() => setModal("update")} onLeave={() => leaveServer(activeServer.id)} onRemoveLocal={() => removeServerLocally(activeServer.id)} onDeleteForAll={deleteServerForEveryone} />}
       {activeServer && <ServerAvatarDialog key={`${activeServer.id}-${activeServer.avatar ?? "none"}`} server={activeServer} open={modal === "server-avatar"} onOpenChange={(open) => setModal(open ? "server-avatar" : null)} onSave={updateServerAvatar} />}
       {activeServer && <ServerBannerDialog key={`${activeServer.id}-${activeServer.banner ?? "none"}`} server={activeServer} open={modal === "server-banner"} onOpenChange={(open) => setModal(open ? "server-banner" : null)} onSave={updateServerBanner} />}
@@ -1534,13 +1668,18 @@ export function ClientApp(): React.ReactElement {
   );
 }
 
-function ServerRail({ servers, activeId, onHome, onSelect, onCreate, onConnect, showCreate = true, onManage, onDisconnect, canManageServer }: { servers: MockServer[]; activeId?: string; onHome: () => void; onSelect: (server: MockServer) => void; onCreate: () => void; onConnect: () => void; showCreate?: boolean; onManage: (server: MockServer) => void; onDisconnect: (server: MockServer) => void; canManageServer: (server: MockServer) => boolean }): React.ReactElement {
+function ServerRail({ mobile = false, servers, activeId, onHome, onSelect, onCreate, onConnect, showCreate = true, onManage, onDisconnect, canManageServer }: { mobile?: boolean; servers: MockServer[]; activeId?: string; onHome: () => void; onSelect: (server: MockServer) => void; onCreate: () => void; onConnect: () => void; showCreate?: boolean; onManage: (server: MockServer) => void; onDisconnect: (server: MockServer) => void; canManageServer: (server: MockServer) => boolean }): React.ReactElement {
   const { t } = useI18n();
   const [menu, setMenu] = useState<{
     server: MockServer;
     x: number;
     y: number;
   } | null>(null);
+  const longPressRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (longPressRef.current !== null) window.clearTimeout(longPressRef.current);
+  }, []);
 
   useEffect(() => {
     if (!menu) return;
@@ -1562,22 +1701,44 @@ function ServerRail({ servers, activeId, onHome, onSelect, onCreate, onConnect, 
 
   function openMenu(event: React.MouseEvent, server: MockServer): void {
     event.preventDefault();
+    openMenuAt(server, event.clientX, event.clientY);
+  }
+
+  function openMenuAt(server: MockServer, clientX: number, clientY: number): void {
     setMenu({
       server,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 232)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 140)),
+      x: Math.max(8, Math.min(clientX, window.innerWidth - 232)),
+      y: Math.max(8, Math.min(clientY, window.innerHeight - 140)),
     });
   }
 
+  // На сенсорном экране правой кнопки нет: меню сервера открывается долгим нажатием.
+  function longPressHandlers(server: MockServer): { onTouchStart: (event: React.TouchEvent) => void; onTouchEnd: () => void; onTouchMove: () => void } {
+    const cancel = (): void => {
+      if (longPressRef.current !== null) window.clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    };
+    return {
+      onTouchStart: (event) => {
+        const touch = event.touches[0];
+        if (!touch) return;
+        cancel();
+        longPressRef.current = window.setTimeout(() => openMenuAt(server, touch.clientX, touch.clientY), 480);
+      },
+      onTouchEnd: cancel,
+      onTouchMove: cancel,
+    };
+  }
+
   return (
-    <nav aria-label={t.nav.servers} className="flex w-[76px] shrink-0 flex-col items-center gap-2 border-r border-white/[.055] bg-[#191b1e] py-3">
+    <nav aria-label={t.nav.servers} className={cn("flex shrink-0 flex-col items-center gap-2 border-r border-white/[.055] bg-[#191b1e] py-3", mobile ? "w-16" : "w-[76px]")}>
       <button aria-label={t.nav.friends} title={t.nav.friends} onClick={onHome} className={cn("mb-1 grid size-12 place-items-center rounded-xl bg-primary text-lg font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)] transition-colors", activeId ? "hover:bg-violet-400" : "ring-2 ring-white/70 ring-offset-2 ring-offset-rail")}>
         O
       </button>
       <div className="h-px w-8 bg-white/10" />
       <div className="scrollbar-none flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto py-1">
         {servers.map((server) => (
-          <button key={server.id} title={server.name} onClick={() => onSelect(server)} onDoubleClick={(event) => openMenu(event, server)} onContextMenu={(event) => openMenu(event, server)} className={cn("group relative grid size-12 shrink-0 place-items-center rounded-xl bg-panel text-xs font-bold text-slate-300 transition-colors hover:bg-primary hover:text-white", activeId === server.id && "bg-primary text-white")}>
+          <button key={server.id} title={server.name} onClick={() => onSelect(server)} onDoubleClick={(event) => openMenu(event, server)} onContextMenu={(event) => openMenu(event, server)} {...(mobile ? longPressHandlers(server) : {})} className={cn("group relative grid size-12 shrink-0 place-items-center rounded-xl bg-panel text-xs font-bold text-slate-300 transition-colors hover:bg-primary hover:text-white", activeId === server.id && "bg-primary text-white")}>
             <span className={cn("absolute -left-3 z-10 w-1 rounded-r-full bg-white transition-all", activeId === server.id ? "h-8" : "h-0 group-hover:h-5")} />
             {server.avatar ? <Image src={server.avatar} alt="" width={48} height={48} unoptimized className="size-12 rounded-xl object-cover" /> : initials(server.name)}
           </button>
@@ -1637,7 +1798,7 @@ function HomeScreen({ serverCount, profile, onCreate, onConnect, onProfile, onSe
         <p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-violet-300/80">{t.appName}</p>
         <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{t.home.title}</h1>
         <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-500">{t.home.description(serverCount)}</p>
-        <div className={cn("mx-auto mt-8 grid max-w-lg gap-3", showCreate ? "grid-cols-2" : "grid-cols-1")}>
+        <div className={cn("mx-auto mt-8 grid max-w-lg gap-3", showCreate ? "grid-cols-2 max-md:grid-cols-1" : "grid-cols-1")}>
           <Button onClick={onConnect} className="h-12">
             <LogIn className="size-4" />
             {t.home.connect}
@@ -1649,7 +1810,7 @@ function HomeScreen({ serverCount, profile, onCreate, onConnect, onProfile, onSe
             </Button>
           )}
         </div>
-        <div className="mx-auto mt-10 flex max-w-lg flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/[.04] p-3 text-left">
+        <div className="mx-auto mt-10 flex max-w-lg flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/[.04] p-3 text-left max-md:mt-6">
           <Avatar name={profile.username} image={profile.avatar} size="lg" status={visibleProfileStatus(profile.status)} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-slate-100">{profile.username}</p>
@@ -1725,7 +1886,7 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-4">
         <ChannelGroup title={t.channel.text} canCreate={canManageChannels} onCreate={onCreateChannel}>
           {textChannels.map((channel) => (
-            <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}>
+            <button key={channel.id} onClick={() => onSelectChannel(channel.id)} onContextMenu={(event) => openContextMenu(event, channel)} className={cn("mb-0.5 flex w-full items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:bg-white/[.045] hover:text-slate-200", mobile ? "h-11" : "h-9", activeChannelId === channel.id && "bg-white/[.065] text-slate-100")}>
               <Hash className="size-4 shrink-0" />
               <span className="min-w-0 flex-1 truncate text-left">{channel.name}</span>
               {channel.slowmodeSeconds > 0 && (
@@ -1743,7 +1904,7 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
                   else onVoiceNotice?.();
                 }}
                 onContextMenu={(event) => openContextMenu(event, channel)}
-                className={cn("flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}
+                className={cn("flex w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition hover:bg-white/[.035]", mobile ? "h-11" : "h-9", voiceChannelId === channel.id ? "bg-violet-400/10 text-violet-200" : "text-slate-500 hover:text-slate-300")}
               >
                 <Volume2 className="size-4" />
                 <span className="truncate">{channel.name}</span>
@@ -1775,8 +1936,8 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
               : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
           </span>
         </button>
-        <button title={t.settings.title} onClick={onSettings} className="rounded-lg p-2 text-slate-500 hover:bg-white/6 hover:text-slate-200">
-          <Settings className="size-4" />
+        <button aria-label={t.settings.title} title={t.settings.title} onClick={onSettings} className={cn("grid shrink-0 place-items-center rounded-lg text-slate-500 hover:bg-white/6 hover:text-slate-200", mobile ? "size-11" : "size-9")}>
+          <Settings className={mobile ? "size-5" : "size-4"} />
         </button>
       </div>
       {contextMenu && (
@@ -1914,9 +2075,10 @@ interface VoiceChannelViewProps {
   onViewScreenShare: (participantIdentity: string) => void;
   onExitScreenShare: () => void;
   onLeaveVoice: () => void;
+  onOpenChannels?: () => void;
 }
 
-export function VoiceChannelView({ mobile = false, channel, server, profile, participants, currentUserId, currentUserRole, canModerateVoice, connectedChannelId, status, muted, serverMuted, deafened, locallyMutedParticipantIds, participantVolumes, activeSpeakerIds, screenShares, viewingScreenShareId, isScreenSharing, onMuted, onDeafened, onParticipantMuted, onParticipantVolume, onServerMuted, onDisconnectParticipant, onStartScreenShare, onStopScreenShare, onViewScreenShare, onExitScreenShare, onLeaveVoice }: VoiceChannelViewProps): React.ReactElement {
+export function VoiceChannelView({ mobile = false, onOpenChannels, channel, server, profile, participants, currentUserId, currentUserRole, canModerateVoice, connectedChannelId, status, muted, serverMuted, deafened, locallyMutedParticipantIds, participantVolumes, activeSpeakerIds, screenShares, viewingScreenShareId, isScreenSharing, onMuted, onDeafened, onParticipantMuted, onParticipantVolume, onServerMuted, onDisconnectParticipant, onStartScreenShare, onStopScreenShare, onViewScreenShare, onExitScreenShare, onLeaveVoice }: VoiceChannelViewProps): React.ReactElement {
   const { t } = useI18n();
   const channelParticipants = participants.filter((participant) => participant.channelId === channel.id);
   const connectedHere = connectedChannelId === channel.id;
@@ -1966,8 +2128,13 @@ export function VoiceChannelView({ mobile = false, channel, server, profile, par
 
   return (
     <section aria-label={t.voice.channelAria(channel.name)} className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#212327]">
-      <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-white/[.06] px-4">
-        <Volume2 className="size-4 shrink-0 text-violet-300" />
+      <header className={cn("flex shrink-0 items-center gap-2.5 border-b border-white/[.06]", mobile ? "h-14 px-1.5" : "h-12 px-4")}>
+        {mobile && onOpenChannels && (
+          <button type="button" aria-label={t.chat.openChannels} title={t.chat.openChannels} onClick={onOpenChannels} className="grid size-11 shrink-0 place-items-center rounded-xl text-slate-300 transition hover:bg-white/6 hover:text-slate-100">
+            <Menu className="size-5" />
+          </button>
+        )}
+        {!mobile && <Volume2 className="size-4 shrink-0 text-violet-300" />}
         <div className="min-w-0">
           <h1 className="truncate text-sm font-bold text-slate-100">{channel.name}</h1>
           <p className="truncate text-[11px] text-slate-500">{channel.description || t.voice.channelName}</p>
@@ -2707,13 +2874,18 @@ function ChannelGroup({ title, canCreate, onCreate, children }: { title: string;
   );
 }
 
-function NoTextChannelView({ server, profile, access, connectionStatus, showMembers, onCreate, onToggleMembers }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; connectionStatus: ConnectionStatus; showMembers: boolean; onCreate: () => void; onToggleMembers: () => void }): React.ReactElement {
+function NoTextChannelView({ mobile = false, server, profile, access, connectionStatus, showMembers, onCreate, onToggleMembers, onOpenChannels }: { mobile?: boolean; server: MockServer; profile: LocalProfile; access?: CurrentAccess; connectionStatus: ConnectionStatus; showMembers: boolean; onCreate: () => void; onToggleMembers: () => void; onOpenChannels?: () => void }): React.ReactElement {
   const { t } = useI18n();
   const canManageChannels = access?.permissions.includes("MANAGE_CHANNELS") === true;
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-[#212327]">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[.055] px-4 shadow-sm">
-        <Hash className="size-5 text-slate-600" />
+      <header className={cn("flex h-14 shrink-0 items-center gap-3 border-b border-white/[.055] shadow-sm", mobile ? "px-1.5" : "px-4")}>
+        {mobile && onOpenChannels && (
+          <button type="button" aria-label={t.chat.openChannels} title={t.chat.openChannels} onClick={onOpenChannels} className="grid size-11 shrink-0 place-items-center rounded-xl text-slate-300 transition hover:bg-white/6 hover:text-slate-100">
+            <Menu className="size-5" />
+          </button>
+        )}
+        {!mobile && <Hash className="size-5 text-slate-600" />}
         <h2 className="font-semibold text-slate-300">{t.channel.noneSelected}</h2>
         <span className={cn("mr-auto rounded-full px-2 py-1 text-[10px] font-semibold", connectionStatus === "connected" ? "bg-emerald-400/10 text-emerald-300" : connectionStatus === "error" || isProtocolIncompatible(connectionStatus) ? "bg-red-400/10 text-red-300" : "bg-white/5 text-slate-500")}>{connectionLabel(connectionStatus, t)}</span>
         <button aria-label={t.chat.members} onClick={onToggleMembers} className={cn("text-slate-500 hover:text-slate-200", showMembers && "text-violet-300")}>
@@ -2746,36 +2918,56 @@ function NoTextChannelView({ server, profile, access, connectionStatus, showMemb
 function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, onMenu, onSearch, onToggleMembers }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; onMenu?: () => void; onSearch: () => void; onToggleMembers: () => void }): React.ReactElement {
   const { t } = useI18n();
   const statusLabel = connectionLabel(connectionStatus, t);
+  const statusTone = connectionStatus === "connected"
+    ? "bg-emerald-400/10 text-emerald-300"
+    : connectionStatus === "error" || isProtocolIncompatible(connectionStatus)
+      ? "bg-red-400/10 text-red-300"
+      : "bg-white/5 text-slate-500";
+  // На телефоне шапка — единственная навигация: кнопки крупные (44px), а вместо
+  // отдельной строки описания под именем канала идёт статус подключения.
+  const iconButton = mobile
+    ? "grid size-11 shrink-0 place-items-center rounded-xl transition"
+    : "grid size-9 shrink-0 place-items-center rounded-lg transition";
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-white/[.055] px-3 shadow-sm sm:gap-3 sm:px-4">
+    <header className={cn("flex shrink-0 items-center gap-1 border-b border-white/[.055] shadow-sm", mobile ? "h-14 px-1.5" : "h-14 gap-3 px-4")}>
       {mobile && onMenu && (
-        <button type="button" aria-label={t.chat.openChannels} aria-pressed={channelsOpen} title={t.chat.openChannels} onClick={onMenu} className={cn("grid size-9 shrink-0 place-items-center rounded-lg transition", channelsOpen ? "bg-white/10 text-violet-200" : "text-slate-400 hover:bg-white/6 hover:text-slate-100")}>
+        <button type="button" aria-label={t.chat.openChannels} aria-pressed={channelsOpen} title={t.chat.openChannels} onClick={onMenu} className={cn(iconButton, channelsOpen ? "bg-white/10 text-violet-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")}>
           <Menu className="size-5" />
         </button>
       )}
-      <Hash className={cn("size-5 text-slate-500", mobile && "hidden")} />
-      <h2 className="min-w-0 truncate font-semibold text-slate-100">{channelName}</h2>
-      {!mobile && (
-        <>
-          <span className="h-5 w-px bg-white/8" />
-          <p className="min-w-0 truncate text-xs text-slate-500">{description}</p>
-        </>
-      )}
-      <span title={statusLabel} className={cn("ml-auto inline-flex shrink-0 items-center rounded-full px-1.5 py-1 text-[10px] font-semibold sm:px-2", connectionStatus === "connected" ? "bg-emerald-400/10 text-emerald-300" : connectionStatus === "error" || isProtocolIncompatible(connectionStatus) ? "bg-red-400/10 text-red-300" : "bg-white/5 text-slate-500")}>
-        <span aria-hidden="true" className="size-1.5 rounded-full bg-current sm:hidden" />
-        <span className="max-sm:sr-only">{statusLabel}</span>
+      {!mobile && <Hash className="size-5 text-slate-500" />}
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 className={cn("min-w-0 truncate font-semibold text-slate-100", mobile && "text-[15px] leading-5")}>
+            {mobile ? `#${channelName}` : channelName}
+          </h2>
+          {mobile && <p className="min-w-0 truncate text-[11px] leading-4 text-slate-500">{description || statusLabel}</p>}
+        </div>
+        {!mobile && (
+          <>
+            <span className="h-5 w-px bg-white/8" />
+            <p className="min-w-0 flex-1 truncate text-xs text-slate-500">{description}</p>
+          </>
+        )}
+      </div>
+      <span title={statusLabel} className={cn("inline-flex shrink-0 items-center rounded-full text-[10px] font-semibold", statusTone, mobile ? "size-2 p-0" : "px-2 py-1")}>
+        {mobile ? <span aria-hidden="true" className="size-full rounded-full bg-current" /> : statusLabel}
       </span>
       {!mobile && (
         <button className="text-slate-500 hover:text-slate-200">
           <Bell className="size-4" />
         </button>
       )}
-      <button aria-label={t.chat.members} onClick={onToggleMembers} className={cn("shrink-0 text-slate-500 hover:text-slate-200", memberList && "text-violet-300")}>
-        <Users className="size-5" />
-      </button>
-      <button type="button" aria-label={t.search.open} onClick={onSearch} className={cn("h-8 shrink-0 items-center gap-2 rounded-lg bg-black/20 text-left text-xs text-slate-600 hover:bg-black/30 hover:text-slate-300", mobile ? "grid size-8 place-items-center p-0" : "flex w-44 px-2.5", searchOpen && "text-violet-300")}>
-        <Search className="size-3.5" />
+      <button type="button" aria-label={t.search.open} aria-pressed={searchOpen} onClick={onSearch} className={mobile
+        ? cn(iconButton, searchOpen ? "bg-white/10 text-violet-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")
+        : cn("flex h-8 w-44 shrink-0 items-center gap-2 rounded-lg bg-black/20 px-2.5 text-left text-xs text-slate-600 hover:bg-black/30 hover:text-slate-300", searchOpen && "text-violet-300")}>
+        <Search className={mobile ? "size-5" : "size-3.5"} />
         {!mobile && t.search.title}
+      </button>
+      <button type="button" aria-label={t.chat.members} aria-pressed={memberList} onClick={onToggleMembers} className={mobile
+        ? cn(iconButton, memberList ? "bg-white/10 text-violet-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")
+        : cn("shrink-0 text-slate-500 hover:text-slate-200", memberList && "text-violet-300")}>
+        <Users className="size-5" />
       </button>
       {!mobile && <HelpCircle className="size-4 text-slate-600" />}
     </header>
@@ -2908,11 +3100,17 @@ export function Message({ message, replyToMessage, member, members, profile, com
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  // Без мыши панель действий не может появляться по наведению: её открывает
+  // долгое нажатие по сообщению (аналог правого клика на десктопе).
+  const [touchActionsOpen, setTouchActionsOpen] = useState(false);
+  const longPressRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(message.content);
   const [editAttachments, setEditAttachments] = useState<Attachment[]>(message.attachments ?? []);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const articleRef = useRef<HTMLElement>(null);
   const own = currentUserId === message.authorId;
   const canDelete = own || canManageMessages;
   const hasReactions = Boolean(message.reactions?.length);
@@ -2931,6 +3129,34 @@ export function Message({ message, replyToMessage, member, members, profile, com
     bio: member?.bio ?? (own ? profile?.bio : undefined),
     isCurrentUser: own,
   };
+  useEffect(() => {
+    if (!touchActionsOpen) return;
+    const close = (event: PointerEvent): void => {
+      const target = event.target as Node;
+      if (articleRef.current?.contains(target)) return;
+      setTouchActionsOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [touchActionsOpen]);
+
+  useEffect(() => () => {
+    if (longPressRef.current !== null) window.clearTimeout(longPressRef.current);
+  }, []);
+
+  const cancelLongPress = (): void => {
+    if (longPressRef.current !== null) window.clearTimeout(longPressRef.current);
+    longPressRef.current = null;
+  };
+
+  // Поле редактирования растёт под текст, но не выше max-h-60 — дальше скролл.
+  useEffect(() => {
+    const node = editTextareaRef.current;
+    if (!editing || !node) return;
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  }, [editing, editDraft]);
+
   useEffect(() => {
     if (!menuOpen) return;
     const closeOutside = (event: PointerEvent): void => {
@@ -2986,13 +3212,22 @@ export function Message({ message, replyToMessage, member, members, profile, com
   };
   return (
     <article
+      ref={articleRef}
       id={`message-${message.id}`}
       onContextMenu={(event) => {
         if (editing || !canDelete) return;
         event.preventDefault();
         setMenuOpen(true);
       }}
-      className={cn("group relative flex min-w-0 gap-3 rounded-lg px-2 py-2 transition hover:bg-white/[.025]", compact && "py-1", grouped && !compact && "pt-0", message.replyToMessageId && "pt-7", message.kind && message.kind !== "chat" && "bg-amber-400/[.045] hover:bg-amber-400/[.075]", privateStackPosition === "first" && "rounded-b-none pb-1", privateStackPosition === "middle" && "rounded-none py-1", privateStackPosition === "last" && "rounded-t-none pt-1")}
+      onTouchStart={() => {
+        if (editing) return;
+        cancelLongPress();
+        longPressRef.current = window.setTimeout(() => setTouchActionsOpen(true), 450);
+      }}
+      onTouchMove={cancelLongPress}
+      onTouchEnd={cancelLongPress}
+      onTouchCancel={cancelLongPress}
+      className={cn("group relative flex min-w-0 gap-3 rounded-lg px-2 py-1 transition hover:bg-white/[.025]", !grouped && !compact && "mt-2.5", message.replyToMessageId && "mt-2.5 pt-6", message.kind && message.kind !== "chat" && "bg-amber-400/[.045] hover:bg-amber-400/[.075]", privateStackPosition === "first" && "rounded-b-none pb-1", privateStackPosition === "middle" && "rounded-none py-1", privateStackPosition === "last" && "rounded-t-none pt-1")}
     >
       {message.replyToMessageId && (
         <button type="button" onClick={() => focusMessage(message.replyToMessageId!)} className="absolute left-14 right-2 top-1 flex min-w-0 items-center gap-1.5 rounded-md text-left text-[11px] leading-4 text-slate-500 transition hover:text-slate-300">
@@ -3003,45 +3238,48 @@ export function Message({ message, replyToMessage, member, members, profile, com
       )}
       {!grouped || compact ? (
         <ProfilePreview profile={previewProfile} wrapperClassName="shrink-0 self-start" triggerClassName="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
-          <Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className={compact ? "mt-0.5" : "mt-1"} />
+          <Avatar name={message.authorName} image={message.authorAvatar ?? ownAvatar} color={message.authorColor} size={compact ? "sm" : "md"} className="mt-0.5" />
         </ProfilePreview>
       ) : (
-        <span className="w-9 shrink-0 self-start whitespace-nowrap text-right text-[9px] leading-6 text-transparent group-hover:text-slate-600">{time}</span>
+        <span className="w-9 shrink-0 self-start whitespace-nowrap pt-px text-right text-[10px] leading-6 tabular-nums text-transparent transition-colors group-hover:text-slate-600">{time}</span>
       )}
       <div className="min-w-0 flex-1">
         {(!grouped || compact) && (
-          <div className="flex min-w-0 items-baseline gap-2">
+          <div className="flex min-w-0 items-baseline gap-2 leading-5">
             <ProfilePreview profile={previewProfile} wrapperClassName="min-w-0 max-w-full" triggerClassName="block min-w-0 max-w-full truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
               {message.authorName}
             </ProfilePreview>
-            <time className="shrink-0 whitespace-nowrap text-[10px] text-slate-600">{time}</time>
-            {message.editedAt && <span className="shrink-0 text-[10px] text-slate-600">{t.chat.edited}</span>}
+            <time className="shrink-0 whitespace-nowrap text-[10px] leading-5 tabular-nums text-slate-600">{time}</time>
+            {message.editedAt && <span className="shrink-0 text-[10px] leading-5 text-slate-600">{t.chat.edited}</span>}
           </div>
         )}
         {editing ? (
-          <div className="mt-1 rounded-xl border border-violet-400/40 bg-[#212327] p-2 focus-within:border-violet-400">
-            {editAttachments.length ? (
-              <div className="mb-2 flex flex-wrap gap-2">
-                {editAttachments.map((attachment) => (
-                  <span key={attachment.id} className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-white/8 bg-[#26282c] px-2.5 py-1.5 text-xs text-slate-300 sm:max-w-64">
-                    <Paperclip className="size-3.5 shrink-0 text-violet-300" />
-                    <span className="min-w-0 flex-1 truncate">{attachment.fileName}</span>
-                    <button type="button" aria-label={t.chat.detach(attachment.fileName)} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300">
-                      <X className="size-3.5" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            <div className="flex items-start gap-2">
-              <button type="button" title={t.chat.attachWithLimit(effectiveAttachmentLimitLabel)} aria-label={t.chat.attachToEdit} onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#212327] hover:bg-slate-300 disabled:opacity-40">
-                {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
-              </button>
+          <div className="mt-1.5 overflow-hidden rounded-xl border border-violet-400/40 bg-[#212327] shadow-[0_10px_28px_rgba(0,0,0,.3)] transition focus-within:border-violet-400">
+            <div className="flex items-center gap-1.5 border-b border-white/[.06] px-3 py-1.5">
+              <Pencil className="size-3 shrink-0 text-violet-300/80" />
+              <span className="text-[10px] font-semibold uppercase tracking-[.12em] text-violet-200/80">{t.chat.editingTitle}</span>
+            </div>
+            <div className="px-3 pt-2.5">
+              {editAttachments.length ? (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {editAttachments.map((attachment) => (
+                    <span key={attachment.id} className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-white/8 bg-[#26282c] px-2.5 py-1.5 text-xs text-slate-300 sm:max-w-64">
+                      <Paperclip className="size-3.5 shrink-0 text-violet-300" />
+                      <span className="min-w-0 flex-1 truncate">{attachment.fileName}</span>
+                      <button type="button" aria-label={t.chat.detach(attachment.fileName)} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 transition hover:bg-white/5 hover:text-red-300">
+                        <X className="size-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <textarea
+                ref={editTextareaRef}
                 autoFocus
                 aria-label={t.chat.editMessage}
                 value={editDraft}
                 maxLength={4000}
+                rows={1}
                 onChange={(event) => setEditDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Escape") cancelEdit();
@@ -3050,10 +3288,24 @@ export function Message({ message, replyToMessage, member, members, profile, com
                     saveEdit();
                   }
                 }}
-                className="min-h-20 w-full resize-y bg-transparent px-1 py-1 text-sm text-slate-200 outline-none"
+                className="block max-h-60 min-h-14 w-full resize-none overflow-y-auto bg-transparent text-sm leading-6 text-slate-200 outline-none"
               />
             </div>
-            <div className="mt-1 pl-9 text-[10px] text-slate-500">{t.chat.editHint}</div>
+            <div className="flex flex-wrap items-center gap-2 border-t border-white/[.06] bg-white/[.015] px-2.5 py-2">
+              <button type="button" title={t.chat.attachWithLimit(effectiveAttachmentLimitLabel)} aria-label={t.chat.attachToEdit} onClick={() => void attachToEdit()} disabled={!canAttach || uploading || editAttachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.07] hover:text-violet-200 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400 max-md:size-9">
+                {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
+              </button>
+              {editDraft.length > 3600 && <span className="shrink-0 text-[10px] tabular-nums text-slate-500">{4000 - editDraft.length}</span>}
+              <span className="ml-auto hidden text-[10px] text-slate-500 lg:inline">{t.chat.editHint}</span>
+              <div className="ml-auto flex shrink-0 items-center gap-1.5 lg:ml-3">
+                <button type="button" onClick={cancelEdit} className="rounded-md px-2.5 py-1.5 text-xs font-medium text-slate-400 transition hover:bg-white/[.06] hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:py-2">
+                  {t.chat.cancelEdit}
+                </button>
+                <button type="button" onClick={saveEdit} disabled={!editDraft.trim() && editAttachments.length === 0} className="rounded-md bg-violet-500/85 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-violet-500/85 max-md:py-2">
+                  {t.chat.saveEdit}
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <>
@@ -3078,7 +3330,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
                   const reactionNames = reaction.userIds.map((userId) => members.find((member) => member.id === userId)?.username ?? (userId === currentUserId ? (profile?.username ?? (own ? message.authorName : undefined)) : undefined) ?? t.chat.unknownUser);
                   const reactionLabel = reactionNames.join(", ");
                   return (
-                    <button key={reaction.emoji} type="button" title={reactionLabel} aria-label={t.chat.reactionsAria(reaction.emoji, reaction.userIds.length, reactionLabel)} aria-pressed={selected} disabled={!canReact} onClick={() => onToggleReaction(message.id, reaction.emoji)} className={cn("inline-flex h-6 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:cursor-not-allowed disabled:opacity-50", selected ? "border-violet-400/45 bg-violet-400/12 text-violet-200" : "border-white/8 bg-white/[.04] text-slate-300", canReact && (selected ? "hover:border-violet-400/60 hover:bg-violet-400/15" : "hover:border-white/15 hover:bg-white/[.07]"))}>
+                    <button key={reaction.emoji} type="button" title={reactionLabel} aria-label={t.chat.reactionsAria(reaction.emoji, reaction.userIds.length, reactionLabel)} aria-pressed={selected} disabled={!canReact} onClick={() => onToggleReaction(message.id, reaction.emoji)} className={cn("inline-flex h-6 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs max-md:h-8 max-md:px-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:cursor-not-allowed disabled:opacity-50", selected ? "border-violet-400/45 bg-violet-400/12 text-violet-200" : "border-white/8 bg-white/[.04] text-slate-300", canReact && (selected ? "hover:border-violet-400/60 hover:bg-violet-400/15" : "hover:border-white/15 hover:bg-white/[.07]"))}>
                       <span className="inline-grid size-4 shrink-0 place-items-center text-sm leading-none">{reaction.emoji}</span>
                       <span className={cn("min-w-2 text-center font-semibold leading-none tabular-nums", selected ? "text-violet-200" : "text-slate-400")}>{reaction.userIds.length}</span>
                     </button>
@@ -3090,27 +3342,27 @@ export function Message({ message, replyToMessage, member, members, profile, com
         )}
       </div>
       {!editing && (canReact || canDelete || onReply) && (
-        <div role="toolbar" aria-label={t.chat.messageActions(message.authorName)} data-open={menuOpen || reactionPickerOpen} className="message-action-bar absolute -top-2 right-2 z-20 flex h-9 items-center rounded-lg border border-white/[.08] bg-[#2b2d32] px-1 shadow-[0_6px_18px_rgba(0,0,0,.28)] transition duration-150">
+        <div role="toolbar" aria-label={t.chat.messageActions(message.authorName)} data-open={menuOpen || reactionPickerOpen || touchActionsOpen} className="message-action-bar absolute -top-2 right-2 z-20 flex h-9 items-center rounded-lg border border-white/[.08] bg-[#2b2d32] px-1 shadow-[0_6px_18px_rgba(0,0,0,.28)] transition duration-150 max-md:h-12 max-md:gap-0.5 max-md:px-1.5">
           {canReact &&
             QUICK_REACTION_EMOJIS.map((emoji) => (
-              <button key={emoji} type="button" title={t.chat.reactionPick(emoji)} aria-label={t.chat.reactionPick(emoji)} onClick={() => onToggleReaction(message.id, emoji)} className="grid size-7 place-items-center rounded-md text-[17px] leading-none transition hover:bg-white/[.075] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
+              <button key={emoji} type="button" title={t.chat.reactionPick(emoji)} aria-label={t.chat.reactionPick(emoji)} onClick={() => onToggleReaction(message.id, emoji)} className="grid size-7 place-items-center rounded-md text-[17px] leading-none transition hover:bg-white/[.075] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:size-10 max-md:text-[20px]">
                 {emoji}
               </button>
             ))}
           {canReact && <MessageReactionTrigger messageId={message.id} label={t.chat.addReaction} pickerLabel={t.chat.reactionPicker} pickLabel={t.chat.reactionPick} onToggleReaction={onToggleReaction} open={reactionPickerOpen} onOpenChange={setReactionPickerOpen} />}
           {canReact && (onReply || canDelete) && <span aria-hidden="true" className="mx-1 h-5 w-px bg-white/10" />}
           {onReply && (
-            <button type="button" title={t.chat.reply} aria-label={t.chat.reply} onClick={() => onReply(message)} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
+            <button type="button" title={t.chat.reply} aria-label={t.chat.reply} onClick={() => onReply(message)} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:size-10">
               <Reply className="size-4" />
             </button>
           )}
           {own && (
-            <button type="button" title={t.chat.edit} aria-label={t.chat.edit} onClick={startEditing} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
+            <button type="button" title={t.chat.edit} aria-label={t.chat.edit} onClick={startEditing} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:size-10">
               <Pencil className="size-4" />
             </button>
           )}
           {canDelete && (
-            <button ref={menuTriggerRef} type="button" title={t.chat.messageActions(message.authorName)} aria-label={t.chat.messageActions(message.authorName)} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => { setDeleteConfirmOpen(false); setMenuOpen((open) => !open); }} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
+            <button ref={menuTriggerRef} type="button" title={t.chat.messageActions(message.authorName)} aria-label={t.chat.messageActions(message.authorName)} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => { setDeleteConfirmOpen(false); setMenuOpen((open) => !open); }} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:size-10">
               <MoreHorizontal className="size-4" />
             </button>
           )}
@@ -3216,7 +3468,22 @@ function memberToMentionCandidate(member: MockMember): MentionCandidate {
   };
 }
 
-export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, replyingTo, onCancelReply, onAttach, onRemoveAttachment, onDraft, onSubmit, members, chatMuted = false, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; replyingTo?: MockMessage | null; onCancelReply?: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; canModerateChat?: boolean }): React.ReactElement {
+/**
+ * Отсчёт оставшегося мута. Вынесен отдельным компонентом ради момента старта часов:
+ * `useState` инициализируется при монтировании, то есть когда мут пришёл, а не когда
+ * открылся чат — иначе первый кадр показал бы лишние секунды.
+ */
+function MuteCountdown({ endsAt }: { endsAt: number }): React.ReactElement {
+  const { t } = useI18n();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <>{t.chat.mutedFor(formatMuteRemaining(endsAt - now))}</>;
+}
+
+export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, replyingTo, onCancelReply, onAttach, onRemoveAttachment, onDraft, onSubmit, members, chatMuted = false, chatMutedUntil = null, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; replyingTo?: MockMessage | null; onCancelReply?: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; chatMutedUntil?: string | null; canModerateChat?: boolean }): React.ReactElement {
   const { t } = useI18n();
   const effectiveAttachmentLimitLabel = attachmentLimitLabel ?? t.attachments.mb("10");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -3235,7 +3502,18 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
   // подавляем повторное открытие списка, пока пользователь не начнёт печатать дальше.
   const insertedMentionRef = useRef<string | null>(null);
   const suggestions = mentionQuery ? matchMentionCandidates(members, mentionQuery.query, mentionQuery.discriminator) : [];
-  const composerDisabled = disabled || chatMuted;
+  // Срок мута сторожим здесь: по его истечении поле разблокируется само, без нового
+  // снапшота с сервера. Сам отсчёт рисует MuteCountdown — его часы стартуют в момент
+  // появления мута, поэтому первый кадр не показывает устаревший остаток.
+  const [now, setNow] = useState(() => Date.now());
+  const muteEndsAt = chatMuted && chatMutedUntil ? new Date(chatMutedUntil).getTime() : null;
+  const muted = chatMuted && (muteEndsAt === null || muteEndsAt > now);
+  useEffect(() => {
+    if (!muted || muteEndsAt === null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [muted, muteEndsAt]);
+  const composerDisabled = disabled || muted;
   const [commandQuery, setCommandQuery] = useState<{
     query: string;
     tokenStart: number;
@@ -3450,7 +3728,7 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
     });
   }
   return (
-    <form onSubmit={onSubmit} className="relative shrink-0 px-3 pb-3 sm:px-5 sm:pb-5">
+    <form onSubmit={onSubmit} className="relative shrink-0 px-3 pb-3 md:px-5 md:pb-5">
       {muteDurationOpen && (
         <MuteDurationSuggestions
           presets={muteDurationPresets}
@@ -3509,14 +3787,20 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
           ))}
         </div>
       ) : null}
-      <div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-panel px-3 shadow-[0_1px_3px_rgba(0,0,0,.3)] focus-within:border-violet-400/40", composerDisabled && "opacity-55")}>
-        <button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#26282c] hover:bg-slate-300 disabled:opacity-40">
+      {muted && (
+        <div role="status" aria-live="polite" className="mb-2 flex items-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200">
+          <MessageCircleOff className="size-3.5 shrink-0" />
+          <span>{muteEndsAt === null ? t.chat.mutedIndefinitely : <MuteCountdown key={chatMutedUntil} endsAt={muteEndsAt} />}</span>
+        </div>
+      )}
+      <div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-panel px-3 shadow-[0_1px_3px_rgba(0,0,0,.3)] focus-within:border-violet-400/40 max-md:min-h-13 max-md:gap-1.5 max-md:px-2", composerDisabled && "opacity-55", muted && "pointer-events-none border-white/[.04] opacity-40 grayscale")}>
+        <button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#26282c] hover:bg-slate-300 disabled:opacity-40 max-md:size-10">
           {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
         </button>
-        <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={chatMuted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
+        <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
         <EmojiPicker disabled={composerDisabled} onSelect={insertEmoji} />
-        <button type="submit" disabled={composerDisabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label={t.chat.send} className="shrink-0 rounded-lg p-2 text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30">
-          <Send className="size-4" />
+        <button type="submit" disabled={composerDisabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label={t.chat.send} className="grid size-9 shrink-0 place-items-center rounded-lg text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30 max-md:size-10 max-md:bg-violet-500/15">
+          <Send className="size-4 max-md:size-5" />
         </button>
       </div>
     </form>
@@ -3650,7 +3934,7 @@ export function AttachmentView({ attachment, previewAvailable = true, onDownload
           <AttachmentFooter attachment={attachment} onDownload={onDownload} />
         </div>
         <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
-          <DialogContent className="max-h-[94vh] max-w-[96vw] bg-[#191b1e]">
+          <DialogContent className="max-h-[94%] max-w-[96%] bg-[#191b1e]">
             <DialogTitle className="sr-only">{attachment.fileName}</DialogTitle>
             <DialogDescription className="sr-only">{t.attachments.fullscreenView}</DialogDescription>
             <div ref={imageFullscreenRef} className="relative h-[76vh] w-full overflow-hidden rounded-2xl bg-black fullscreen:h-screen fullscreen:w-screen fullscreen:rounded-none">
@@ -3770,7 +4054,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
       .filter((group) => group.items.length > 0);
   }, [members, t]);
   return (
-    <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#1d1f23] px-3 py-5">
+    <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#1d1f23] px-3 py-5 max-md:w-full">
       <h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">
         {t.chat.members} — {members.length}
       </h3>
@@ -3788,7 +4072,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                   <ProfilePreview
                     side="left"
                     wrapperClassName="min-w-0 flex-1"
-                    triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2"
+                    triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 max-md:py-2.5"
                     profile={{
                       username: member.username ?? (isCurrentUser ? profile.username : "unknown"),
                       discriminator: member.discriminator ?? (isCurrentUser ? profile.discriminator : undefined),

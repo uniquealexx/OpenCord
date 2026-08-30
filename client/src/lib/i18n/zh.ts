@@ -21,6 +21,10 @@ export const zh = {
     privacy: "真正的密码学身份将在下一阶段推出。目前这是一个明确标注的界面原型。",
   },
 
+  mobile: {
+    exitHint: "再次按返回键退出 OpenCord",
+  },
+
   nav: {
     friends: "个人空间",
     addServer: "添加服务器",
@@ -111,6 +115,9 @@ export const zh = {
     send: "发送",
     edited: "（已编辑）",
     editHint: "Enter — 保存 · Shift+Enter — 换行 · Esc — 取消",
+    editingTitle: "编辑中",
+    saveEdit: "保存",
+    cancelEdit: "取消",
     edit: "编辑",
     delete: "删除",
     deleteConfirm: "删除这条消息？",
@@ -148,6 +155,8 @@ export const zh = {
     apmLabel: "私聊消息 · 匿名",
     rollResult: (value: number) => `🎲 掷出：${value}（0–100）`,
     mutedComposer: "你已被管理员禁言",
+    mutedFor: (time: string) => `禁言：${time}`,
+    mutedIndefinitely: "禁言：无限期",
     muteDuration: "禁言时长",
     muteForever: "永久",
     mutePresets: [
@@ -502,6 +511,7 @@ export const zh = {
   },
 
   common: {
+    back: "返回",
     close: "关闭",
     cancel: "取消",
     online: "在线",

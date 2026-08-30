@@ -38,6 +38,10 @@ repositories {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    // WindowCompat/WindowInsetsCompat: MainActivity раздаёт системные отступы в CSS.
+    implementation "androidx.core:core:$androidxCoreVersion"
+    // OnBackPressedDispatcher: системная кнопка «Назад» закрывает слои интерфейса.
+    implementation "androidx.activity:activity:$androidxActivityVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')

@@ -13,7 +13,7 @@ export function ServerPreviewDialog({ server, canOpenSettings, canUpdate, canDel
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="overflow-hidden border-white/10 bg-[#26282c] p-0 sm:max-w-lg">
-        <div className="relative -ml-5 -mr-6 -mt-5 mb-12 max-sm:-mx-4 max-sm:-mt-4">
+        <div className="relative -ml-5 -mr-6 -mt-5 mb-12 max-md:-mx-4 max-md:-mt-4">
           <div className="relative h-36 overflow-hidden rounded-t-xl border-b border-white/10 bg-primary/15">
             {server.banner && <Image src={server.banner} alt="" fill unoptimized sizes="512px" className="object-cover" />}
           </div>

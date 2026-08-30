@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
@@ -380,6 +380,59 @@ describe("ClientApp", () => {
     expect(headers).toEqual(["Владелец сервера — 1", "Администраторы — 1", "Участники — 1"]);
     const order = within(memberList!).getAllByRole("button", { name: /Открыть профиль/u }).map((button) => button.getAttribute("aria-label"));
     expect(order).toEqual(["Открыть профиль lina", "Открыть профиль Админ", "Открыть профиль Обычный"]);
+  });
+
+  it("formats the remaining mute time", () => {
+    expect(formatMuteRemaining(5 * 60_000)).toBe("5:00");
+    expect(formatMuteRemaining(90_000)).toBe("1:30");
+    // Округление вверх: последняя секунда показывается как 0:01, а не 0:00.
+    expect(formatMuteRemaining(200)).toBe("0:01");
+    expect(formatMuteRemaining(0)).toBe("0:00");
+    expect(formatMuteRemaining(-5_000)).toBe("0:00");
+    expect(formatMuteRemaining(3_723_000)).toBe("1:02:03");
+  });
+
+  it("greys out the composer and counts the mute down in real time", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} chatMuted chatMutedUntil={until} />);
+
+      expect(screen.getByRole("status")).toHaveTextContent("Мут: 5:00");
+      expect(screen.getByRole("textbox", { name: /общий/u })).toBeDisabled();
+
+      act(() => { vi.advanceTimersByTime(61_000); });
+      expect(screen.getByRole("status")).toHaveTextContent("Мут: 3:59");
+
+      // По истечении срока поле разблокируется само, без нового снапшота с сервера.
+      act(() => { vi.advanceTimersByTime(4 * 60_000); });
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: /общий/u })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts from the moment the mute arrives, not from when the composer mounted", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const composer = (muted: boolean, until: string | null): React.ReactElement => (
+        <Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} chatMuted={muted} chatMutedUntil={until} />
+      );
+      const { rerender } = render(composer(false, null));
+      // Поле висит незамученным полминуты, и только потом приходит мут на 5 минут.
+      act(() => { vi.advanceTimersByTime(30_000); });
+      rerender(composer(true, new Date(Date.now() + 5 * 60_000).toISOString()));
+      expect(screen.getByRole("status")).toHaveTextContent("Мут: 5:00");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows an indefinite mute without a countdown", () => {
+    render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} chatMuted chatMutedUntil={null} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Мут: бессрочно");
+    expect(screen.getByRole("textbox", { name: /общий/u })).toBeDisabled();
   });
 
   it("shows uploaded attachments in the composer and allows removing them", async () => {

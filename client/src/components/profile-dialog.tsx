@@ -123,7 +123,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             </div>
             <p className="px-4 py-3 text-xs leading-5 text-slate-500">{t.profile.bannerHint}</p>
           </div>
-          <div className="flex items-center gap-4 rounded-2xl border border-white/7 bg-white/[.025] p-4 max-sm:flex-col max-sm:items-start">
+          <div className="flex items-center gap-4 rounded-2xl border border-white/7 bg-white/[.025] p-4 max-md:flex-col max-md:items-start">
             <Avatar name={username || profile.username} image={avatar} size="xl" />
             <div><input ref={inputRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseAvatar(event)} /><div className="flex flex-wrap gap-2"><Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => inputRef.current?.click()}>{compressing ? <LoaderCircle className="size-4 animate-spin" /> : <Camera className="size-4" />}{compressing ? t.profile.compressing : t.profile.upload}</Button>{avatar && <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => cropExisting("avatar")}><Crop className="size-4" />{t.profile.crop}</Button>}{avatar && <Button type="button" variant="danger" size="sm" disabled={compressing} onClick={() => setAvatar(null)}><Trash2 className="size-4" />{t.profile.remove}</Button>}</div><p className="mt-2 max-w-72 text-xs leading-5 text-slate-500">{t.profile.avatarHint}</p>{error && <p className="mt-2 text-xs text-red-300">{error}</p>}</div>
           </div>
@@ -165,7 +165,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             <div className="flex items-center gap-2 rounded-xl border border-white/[.07] bg-white/[.025] px-2">
               <EmojiPicker
                 trigger={customStatusEmoji ? <span className="text-lg leading-none" style={{ fontFamily: emojiFont }}>{customStatusEmoji}</span> : undefined}
-                panelClassName="bottom-auto top-11 left-0 right-auto max-sm:bottom-auto max-sm:top-11"
+                panelClassName="bottom-auto top-11 left-0 right-auto max-md:bottom-auto max-md:top-11"
                 onSelect={setCustomStatusEmoji}
               />
               <Input id="custom-status" value={customStatus} onChange={(event) => setCustomStatus(event.target.value)} maxLength={CUSTOM_STATUS_MAX_LENGTH} placeholder={t.profile.customStatusPlaceholder} className="border-0 bg-transparent px-1 focus-visible:ring-0" />

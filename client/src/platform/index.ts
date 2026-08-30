@@ -9,6 +9,7 @@
 import { Capacitor } from "@capacitor/core";
 import type { OpenCordBridge } from "@/shared/bridge";
 import { createMobileBridge } from "./mobile-bridge";
+import { installNativeShell } from "./native-shell";
 
 export function isMobilePlatform(): boolean {
   try {
@@ -22,6 +23,8 @@ export function installPlatformBridge(): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
   if (window.openCord) return; // desktop preload уже установил мост
   if (!isMobilePlatform()) return;
+  // Отступы, клавиатура и кнопка «Назад» приходят из MainActivity через этот объект.
+  installNativeShell();
   // Мобильный мост намеренно не реализует desktop-only поверхности (window, deployment,
   // screenShare, updates): renderer читает их через window.openCord?.<field> и получает undefined.
   window.openCord = createMobileBridge() as OpenCordBridge;

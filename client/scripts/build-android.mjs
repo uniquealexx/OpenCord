@@ -46,7 +46,9 @@ if (!javaHome || !existsSync(javaHome)) {
 console.info(`JAVA_HOME=${javaHome}`);
 console.info(`ANDROID_HOME=${sdk}`);
 
-const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+// Путь к обёртке абсолютный: cmd.exe не ищет исполняемые файлы в рабочем каталоге
+// дочернего процесса (и запрет может быть включён политикой NoDefaultCurrentDirectoryInExePath).
+const gradlew = process.platform === "win32" ? path.join(androidDir, "gradlew.bat") : "./gradlew";
 const gradleArgs = [variant, "--console=plain", `-PopencordVersion=${opencordVersion}`];
 const result = process.platform === "win32"
   ? spawnSync("cmd", ["/c", gradlew, ...gradleArgs], { cwd: androidDir, env, stdio: "inherit" })

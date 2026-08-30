@@ -21,6 +21,10 @@ export const ru = {
     privacy: "Настоящая криптографическая идентичность появится на следующем этапе. Сейчас это безопасно обозначенный UI-прототип.",
   },
 
+  mobile: {
+    exitHint: "Нажмите «Назад» ещё раз, чтобы закрыть OpenCord",
+  },
+
   nav: {
     friends: "Личное пространство",
     addServer: "Добавить сервер",
@@ -111,6 +115,9 @@ export const ru = {
     send: "Отправить",
     edited: "(изменено)",
     editHint: "Enter — сохранить · Shift+Enter — новая строка · Esc — отменить",
+    editingTitle: "Редактирование",
+    saveEdit: "Сохранить",
+    cancelEdit: "Отмена",
     edit: "Редактировать",
     delete: "Удалить",
     deleteConfirm: "Удалить это сообщение?",
@@ -148,6 +155,8 @@ export const ru = {
     apmLabel: "Личное сообщение · анонимно",
     rollResult: (value: number) => `🎲 Выпало: ${value} (0–100)`,
     mutedComposer: "Вы отключены от чата администратором",
+    mutedFor: (time: string) => `Мут: ${time}`,
+    mutedIndefinitely: "Мут: бессрочно",
     muteDuration: "Срок мута",
     muteForever: "Навсегда",
     mutePresets: [
@@ -502,6 +511,7 @@ export const ru = {
   },
 
   common: {
+    back: "Назад",
     close: "Закрыть",
     cancel: "Отмена",
     online: "В сети",

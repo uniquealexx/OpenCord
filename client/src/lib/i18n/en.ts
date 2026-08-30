@@ -20,6 +20,10 @@ export const en = {
     privacy: "A real cryptographic identity arrives at the next stage. Right now this is a clearly labelled UI prototype.",
   },
 
+  mobile: {
+    exitHint: "Press back again to close OpenCord",
+  },
+
   nav: {
     friends: "Personal space",
     addServer: "Add server",
@@ -110,6 +114,9 @@ export const en = {
     send: "Send",
     edited: "(edited)",
     editHint: "Enter — save · Shift+Enter — new line · Esc — cancel",
+    editingTitle: "Editing",
+    saveEdit: "Save",
+    cancelEdit: "Cancel",
     edit: "Edit",
     delete: "Delete",
     deleteConfirm: "Delete this message?",
@@ -147,6 +154,8 @@ export const en = {
     apmLabel: "Private message · anonymous",
     rollResult: (value: number) => `🎲 Rolled: ${value} (0–100)`,
     mutedComposer: "You have been muted by an administrator",
+    mutedFor: (time: string) => `Muted: ${time}`,
+    mutedIndefinitely: "Muted: indefinitely",
     muteDuration: "Mute duration",
     muteForever: "Forever",
     mutePresets: [
@@ -501,6 +510,7 @@ export const en = {
   },
 
   common: {
+    back: "Back",
     close: "Close",
     cancel: "Cancel",
     online: "Online",
