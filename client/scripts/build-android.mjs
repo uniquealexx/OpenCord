@@ -53,6 +53,12 @@ const gradleArgs = [variant, "--console=plain", `-PopencordVersion=${opencordVer
 const result = process.platform === "win32"
   ? spawnSync("cmd", ["/c", gradlew, ...gradleArgs], { cwd: androidDir, env, stdio: "inherit" })
   : spawnSync(gradlew, gradleArgs, { cwd: androidDir, env, stdio: "inherit" });
+// spawnSync не бросает исключение: без этой проверки не запустившаяся обёртка
+// (нет файла, снят бит исполнения) давала пустой вывод и голый код 1.
+if (result.error) {
+  console.error(`Не удалось запустить ${gradlew}: ${result.error.message}`);
+  process.exit(1);
+}
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 const apkName = flavor === "release" ? "app-release.apk" : "app-debug.apk";
