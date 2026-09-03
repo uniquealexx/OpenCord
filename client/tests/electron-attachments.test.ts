@@ -126,8 +126,13 @@ describe("Electron attachment previews", () => {
       const nameHeader = request.headers["x-opencord-file-name"];
       receivedMime = Array.isArray(mimeHeader) ? mimeHeader[0] : mimeHeader;
       receivedName = Array.isArray(nameHeader) ? nameHeader[0] : nameHeader;
-      response.writeHead(201, { "content-type": "application/json", connection: "close" });
-      response.end(JSON.stringify({ id: randomUUID(), fileName: "voice-message.opus", mimeType: receivedMime, sizeBytes: contents.length, sha256: createHash("sha256").update(contents).digest("hex") }));
+      // Сервер обязан дочитать тело загрузки до ответа, иначе клиент
+      // получает Premature close (стабильно воспроизводится на Linux CI).
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(201, { "content-type": "application/json", connection: "close" });
+        response.end(JSON.stringify({ id: randomUUID(), fileName: "voice-message.opus", mimeType: receivedMime, sizeBytes: contents.length, sha256: createHash("sha256").update(contents).digest("hex") }));
+      });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -153,8 +158,12 @@ describe("Electron attachment previews", () => {
     const server = createServer((request, response) => {
       const mimeHeader = request.headers["x-opencord-mime-type"];
       receivedMime = Array.isArray(mimeHeader) ? mimeHeader[0] : mimeHeader;
-      response.writeHead(201, { "content-type": "application/json", connection: "close" });
-      response.end(JSON.stringify({ id: randomUUID(), fileName: "voice-message.webm", mimeType: receivedMime, sizeBytes: contents.length, sha256: createHash("sha256").update(contents).digest("hex") }));
+      // Тело загрузки дочитывается до ответа — иначе Premature close на Linux CI.
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(201, { "content-type": "application/json", connection: "close" });
+        response.end(JSON.stringify({ id: randomUUID(), fileName: "voice-message.webm", mimeType: receivedMime, sizeBytes: contents.length, sha256: createHash("sha256").update(contents).digest("hex") }));
+      });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
