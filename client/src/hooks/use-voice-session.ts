@@ -5,6 +5,7 @@ import { ConnectionQuality, LocalVideoTrack, Room, RoomEvent, Track, VideoQualit
 import type { ClientPreferences, VoiceParticipantSettings } from "@/shared/state";
 import { MicrophoneTrackProcessor } from "@/shared/rnnoise-processor";
 import { currentDictionary } from "@/lib/i18n";
+import { setVoiceSoundOutputDevice } from "@/lib/voice-sounds";
 
 export type VoiceSessionStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface VoiceAuthorization { channelId: string; endpoint: string; token: string; expiresAt: string }
@@ -226,10 +227,21 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   const localGateProcessorRef = useRef<MicrophoneTrackProcessor | null>(null);
   const localMicRawTrackRef = useRef<MediaStreamTrack | null>(null);
   const audioElementsRef = useRef<HTMLMediaElement[]>([]);
+  /**
+   * Кому принадлежит звуковой элемент. Раньше заглушки и громкость применялись по одному лишь
+   * атрибуту `data-opencord-livekit`, а имя участника читалось из `dataset`: состояние
+   * голосового соединения бралось из DOM, то есть под управление сессии попадал бы любой
+   * элемент с подходящей разметкой и с любым назначенным ему именем. Разметка теперь только
+   * сужает поиск, а принадлежность и участника решает эта таблица, которую заполняет сама
+   * сессия при подписке на дорожку.
+   */
+  const audioOwnersRef = useRef<WeakMap<HTMLMediaElement, string>>(new WeakMap());
   const preferencesRef = useRef(preferences);
   const onParticipantAudioSettingsChangeRef = useRef(onParticipantAudioSettingsChange);
   const muteBeforeDeafenRef = useRef(false);
   const deafenedRef = useRef(false);
+  // stopScreenShare объявлен ниже эффекта подключения, поэтому обработчик берёт его через ref.
+  const stopScreenShareRef = useRef<(() => Promise<void>) | null>(null);
   const participantAudioSettingsRef = useRef<VoiceParticipantSettings>(preferences.voiceParticipantSettings);
   const appliedParticipantAudioSettingsRef = useRef("");
   const locallyMutedParticipantIdsRef = useRef<Set<string>>(new Set(Object.entries(preferences.voiceParticipantSettings).filter(([, setting]) => setting.muted).map(([identity]) => identity)));
@@ -258,6 +270,14 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         .map(([identity, setting]) => [identity, setting.volume]),
     ),
   );
+
+  const ownedAudioElements = useCallback((): { element: HTMLMediaElement; participantIdentity: string }[] => {
+    const owners = audioOwnersRef.current;
+    return [...document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")].flatMap((element) => {
+      const participantIdentity = owners.get(element);
+      return participantIdentity === undefined ? [] : [{ element, participantIdentity }];
+    });
+  }, []);
 
   const publishActiveSpeakers = useCallback((): void => {
     const ids = mergeResponsiveSpeakerIds(liveKitSpeakerIdsRef.current, responsiveDetectorsRef.current.values());
@@ -335,12 +355,12 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       const entries = Object.entries(volumes);
       return Object.keys(current).length === entries.length && entries.every(([identity, volume]) => current[identity] === volume) ? current : volumes;
     });
-    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
-      const setting = settings[element.dataset.opencordParticipantId ?? ""];
+    for (const { element, participantIdentity } of ownedAudioElements()) {
+      const setting = settings[participantIdentity];
       element.muted = deafenedRef.current || Boolean(setting?.muted);
       element.volume = setting?.volume ?? 1;
     }
-  }, [preferences.voiceParticipantSettings]);
+  }, [ownedAudioElements, preferences.voiceParticipantSettings]);
 
   useEffect(() => {
     const room = roomRef.current;
@@ -404,7 +424,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     for (const detector of responsiveDetectorsRef.current.values()) detector.stop();
     responsiveDetectorsRef.current.clear();
     liveKitSpeakerIdsRef.current.clear();
-    for (const element of audioElementsRef.current) { element.pause(); element.remove(); }
+    for (const element of audioElementsRef.current) { element.pause(); element.remove(); audioOwnersRef.current.delete(element); }
     audioElementsRef.current = [];
     if (room) room.disconnect();
     setChannelId(null);
@@ -446,15 +466,20 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
           return;
         }
         if (track.kind !== Track.Kind.Audio) return;
+        // Присоединившийся к «оглохшему» клиенту участник подписывается автоматически:
+        // отказываемся от дорожки сразу, иначе заглушка ушей перестала бы экономить трафик
+        // ровно на тех, кто пришёл после её включения.
+        if (deafenedRef.current) { publication.setSubscribed(false); return; }
         if (publication.source === Track.Source.Microphone) startResponsiveDetector(track as RemoteAudioTrack, participant.identity);
         const element = track.attach() as HTMLMediaElement;
         element.autoplay = true;
         element.hidden = true;
+        // Пометка сужает поиск по документу; принадлежность решает audioOwnersRef.
         element.dataset.opencordLivekit = "true";
-        element.dataset.opencordParticipantId = participant.identity;
         element.muted = deafenedRef.current || locallyMutedParticipantIdsRef.current.has(participant.identity);
         element.volume = participantVolumesRef.current.get(participant.identity) ?? 1;
         document.body.appendChild(element);
+        audioOwnersRef.current.set(element, participant.identity);
         audioElementsRef.current.push(element);
       });
       room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, publication, participant) => {
@@ -466,12 +491,22 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
         if (track.kind === Track.Kind.Audio) stopResponsiveDetector(track as RemoteAudioTrack);
         for (const element of track.detach() as HTMLMediaElement[]) {
           audioElementsRef.current = audioElementsRef.current.filter((item) => item !== element);
+          audioOwnersRef.current.delete(element);
           element.remove();
         }
       });
       room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
         liveKitSpeakerIdsRef.current = new Set(speakers.map((speaker) => speaker.identity));
         publishActiveSpeakers();
+      });
+      // Сервер вправе заглушить демонстрацию, кадр которой превышает предел, заданный
+      // владельцем: разрешение выбирает клиент, и в токене LiveKit ограничить его нечем.
+      // Молча оставленная «идущей» демонстрация выглядела бы работающей, ничего не передавая,
+      // поэтому она останавливается здесь и пользователь получает объяснение.
+      room.on(RoomEvent.TrackMuted, (publication, participant) => {
+        if (participant.identity !== room.localParticipant.identity || publication.source !== Track.Source.ScreenShare) return;
+        void stopScreenShareRef.current?.();
+        onError(currentDictionary().voiceErrors.screenShareBlocked);
       });
       room.on(RoomEvent.LocalTrackUnpublished, (publication) => {
         if (publication.source === Track.Source.ScreenShare) setScreenShares((current) => {
@@ -517,11 +552,30 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     return () => { cancelled = true; };
   }, [authorization, configureLocalMicrophone, disposeRoom, onError, publishActiveSpeakers, refreshDevices, startResponsiveDetector, stopResponsiveDetector]);
 
-  const setIncomingAudioMuted = useCallback((value: boolean): void => {
-    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
-      element.muted = value || locallyMutedParticipantIdsRef.current.has(element.dataset.opencordParticipantId ?? "");
+  /**
+   * Заглушка ушей обязана прекращать ПРИЁМ звука, а не только выключать <audio>: выключенный
+   * элемент лишь не воспроизводит уже полученный поток, дорожки остаются подписанными и голос
+   * комнаты продолжает идти по сети. Помимо напрасного трафика это значит, что «оглохший»
+   * клиент по-прежнему получает разговор — достаточно снять `muted` в отладчике, чтобы слушать
+   * молча. Поэтому подписка снимается на самом деле, а `muted` остаётся мгновенной заглушкой
+   * на те миллисекунды, пока отказ от дорожки доходит до сервера.
+   */
+  const setIncomingAudioSubscribed = useCallback((subscribed: boolean): void => {
+    const room = roomRef.current;
+    if (!room) return;
+    for (const participant of room.remoteParticipants.values()) {
+      for (const publication of participant.trackPublications.values()) {
+        if (publication.kind !== Track.Kind.Audio) continue;
+        try { publication.setSubscribed(subscribed); } catch { /* Дорожка могла исчезнуть вместе с участником. */ }
+      }
     }
   }, []);
+
+  const setIncomingAudioMuted = useCallback((value: boolean): void => {
+    for (const { element, participantIdentity } of ownedAudioElements()) {
+      element.muted = value || locallyMutedParticipantIdsRef.current.has(participantIdentity);
+    }
+  }, [ownedAudioElements]);
 
   const setParticipantMuted = useCallback((participantIdentity: string, value: boolean): void => {
     const next = new Set(locallyMutedParticipantIdsRef.current);
@@ -534,10 +588,10 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     if (!value && currentSetting.volume === 1) delete nextSettings[participantIdentity];
     participantAudioSettingsRef.current = nextSettings;
     onParticipantAudioSettingsChangeRef.current?.(nextSettings);
-    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
-      if (element.dataset.opencordParticipantId === participantIdentity) element.muted = deafenedRef.current || value;
+    for (const item of ownedAudioElements()) {
+      if (item.participantIdentity === participantIdentity) item.element.muted = deafenedRef.current || value;
     }
-  }, []);
+  }, [ownedAudioElements]);
 
   const setParticipantVolume = useCallback((participantIdentity: string, value: number): void => {
     const normalized = Math.min(1, Math.max(0, value));
@@ -551,14 +605,15 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     if (!currentSetting.muted && normalized === 1) delete nextSettings[participantIdentity];
     participantAudioSettingsRef.current = nextSettings;
     onParticipantAudioSettingsChangeRef.current?.(nextSettings);
-    for (const element of document.querySelectorAll<HTMLMediaElement>("audio[data-opencord-livekit='true']")) {
-      if (element.dataset.opencordParticipantId === participantIdentity) element.volume = normalized;
+    for (const item of ownedAudioElements()) {
+      if (item.participantIdentity === participantIdentity) item.element.volume = normalized;
     }
-  }, []);
+  }, [ownedAudioElements]);
 
   const setMuted = useCallback(async (value: boolean): Promise<void> => {
     if (!value && deafened) {
       setIncomingAudioMuted(false);
+      setIncomingAudioSubscribed(true);
       muteBeforeDeafenRef.current = false;
       deafenedRef.current = false;
       setDeafenedState(false);
@@ -577,7 +632,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       }
     }
     setMutedState(value);
-  }, [configureLocalMicrophone, deafened, publishActiveSpeakers, setIncomingAudioMuted, startResponsiveDetector]);
+  }, [configureLocalMicrophone, deafened, publishActiveSpeakers, setIncomingAudioMuted, setIncomingAudioSubscribed, startResponsiveDetector]);
 
   useEffect(() => {
     if (preferences.voiceInputMode !== "push-to-talk" || status !== "connected") return;
@@ -599,6 +654,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
   const setDeafened = useCallback(async (value: boolean): Promise<void> => {
     deafenedRef.current = value;
     setIncomingAudioMuted(value);
+    setIncomingAudioSubscribed(!value);
     if (value) {
       muteBeforeDeafenRef.current = muted;
       await setMuted(true);
@@ -606,7 +662,7 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       await setMuted(false);
     }
     setDeafenedState(value);
-  }, [muted, setIncomingAudioMuted, setMuted]);
+  }, [muted, setIncomingAudioMuted, setIncomingAudioSubscribed, setMuted]);
   const setInputDevice = useCallback(async (deviceId: string | null): Promise<void> => {
     const room = roomRef.current;
     if (!room || !deviceId) return;
@@ -618,6 +674,9 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     }
   }, [configureLocalMicrophone, startResponsiveDetector]);
   const setOutputDevice = useCallback(async (deviceId: string | null): Promise<void> => {
+    // Служебные звуки идут мимо LiveKit, через собственный AudioContext, — им
+    // устройство надо передать отдельно, иначе они играют в наушники по умолчанию.
+    setVoiceSoundOutputDevice(deviceId);
     const room = roomRef.current;
     if (!room || !deviceId) return;
     await room.switchActiveDevice("audiooutput", deviceId);
@@ -630,6 +689,8 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
       return current.filter((item) => !item.local);
     });
   }, []);
+  useEffect(() => { stopScreenShareRef.current = stopScreenShare; }, [stopScreenShare]);
+
   const startScreenShare = useCallback(async (settings: ScreenShareSettings): Promise<void> => {
     const room = roomRef.current;
     if (!room || status !== "connected") throw new Error(currentDictionary().voiceErrors.connectFirst);

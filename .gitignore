@@ -18,3 +18,5 @@ playwright-report/
 .DS_Store
 Thumbs.db
 .tmp-*
+client/.scratch-bot.mjs
+client/sounds/elevenlabs/

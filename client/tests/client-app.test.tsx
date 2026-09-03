@@ -781,6 +781,27 @@ describe("ClientApp", () => {
     expect(onExitScreenShare).toHaveBeenCalledOnce();
   });
 
+  it("keeps the participant card controls above the profile overlay", () => {
+    const state = readyState();
+    const profile = state.profile!;
+    const voiceChannel = state.servers[0]!.channels[2]!;
+    const server = { ...state.servers[0]!, members: [{ id: "voice-member", username: "Марина", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#22d3ee", avatar: null, banner: null }] };
+    const participant = { userId: "voice-member", channelId: voiceChannel.id, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+    render(<VoiceChannelView channel={voiceChannel} server={server} profile={profile} participants={[participant]} currentUserId="local-user" currentUserRole="owner" canModerateVoice connectedChannelId={voiceChannel.id} status="connected" muted={false} serverMuted={false} deafened={false} locallyMutedParticipantIds={[]} participantVolumes={{}} activeSpeakerIds={[]} screenShares={[]} viewingScreenShareId={null} isScreenSharing={false} onMuted={vi.fn()} onDeafened={vi.fn()} onParticipantMuted={vi.fn()} onParticipantVolume={vi.fn()} onServerMuted={vi.fn()} onDisconnectParticipant={vi.fn()} onStartScreenShare={vi.fn()} onStopScreenShare={vi.fn()} onViewScreenShare={vi.fn()} onExitScreenShare={vi.fn()} onLeaveVoice={vi.fn()} />);
+
+    // Обёртка ProfilePreview — позиционированный элемент во всю ширину карточки, и в порядке
+    // дерева она идёт после угловых кнопок. Без подъёма слоя она перекрывает их целиком:
+    // в Chromium клик по заглушке, серверному муту и отключению не доходил до кнопки вовсе.
+    // jsdom раскладку не считает и такой перехват не воспроизводит, поэтому проверяется
+    // само условие, которое ставит кнопки выше обёртки.
+    const overlay = screen.getByRole("button", { name: "Открыть профиль Марина" }).parentElement!;
+    expect(overlay.className).toEqual(expect.stringContaining("relative"));
+    expect(overlay.className).toEqual(expect.not.stringContaining("z-"));
+    for (const name of ["Заглушить у себя: Марина", "Заглушить для всех: Марина", "Отключить от голосового канала: Марина"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("absolute", "z-10");
+    }
+  });
+
   it("offers finite and unlimited capacity for a voice channel", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();

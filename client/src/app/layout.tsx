@@ -15,16 +15,22 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, view
  *
  * Реальные потребности приложения: превью и аватары приходят как `data:`, кэш видео —
  * как `file:`, rnnoise компилирует WebAssembly и подключает AudioWorklet через `blob:`
- * (см. `shared/rnnoise-processor.ts`), а статический экспорт Next.js встраивает
- * flight-данные inline-скриптами. `connect-src` открыт для ws/wss/http/https: сервер
- * задаёт пользователь, поэтому список хостов заранее неизвестен.
+ * (см. `shared/rnnoise-processor.ts`). `connect-src` открыт для ws/wss/http/https:
+ * сервер задаёт пользователь, поэтому список хостов заранее неизвестен.
  *
  * Заголовок передаётся через meta: renderer грузится с `file://`, где HTTP-заголовков
  * и `onHeadersReceived` нет.
+ *
+ * `script-src` намеренно не содержит `'unsafe-inline'`: он сводил бы всю политику на
+ * нет, поскольку от инъекции в renderer она и защищает. Статический экспорт Next.js
+ * встраивает flight-данные inline-скриптами, поэтому `scripts/harden-csp.mjs` после
+ * `next build` дописывает сюда их sha256-хеши. Nonce не подходит — политика лежит в
+ * статическом файле. Если этот шаг не отработает, inline-скрипты будут заблокированы
+ * (интерфейс не поднимется), а не тихо разрешены.
  */
 const contentSecurityPolicy = [
   "default-src 'none'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:",
+  "script-src 'self' 'wasm-unsafe-eval' blob:",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: file:",
   "media-src 'self' data: blob: file:",

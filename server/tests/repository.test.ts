@@ -436,6 +436,22 @@ describe("ChatRepository", () => {
     expect(await repository.setChatMuted("missing", true)).toBe(false);
   });
 
+  it("persists a voice mute independently of the chat mute and of voice presence", async () => {
+    await repository.upsertUser("member", "member-key", { username: "member", discriminator: "2222", avatar: null });
+    await repository.ensureMembership("member", "member-key");
+
+    expect(await repository.isVoiceMuted("member")).toBe(false);
+    expect(await repository.setVoiceMuted("member", true)).toBe(true);
+    expect(await repository.isVoiceMuted("member")).toBe(true);
+    // Голосовой мут — отдельное состояние: он не должен затрагивать текстовый чат.
+    expect(await repository.isChatMuted("member")).toBe(false);
+
+    expect(await repository.setVoiceMuted("member", false)).toBe(true);
+    expect(await repository.isVoiceMuted("member")).toBe(false);
+    expect(await repository.setVoiceMuted("missing", true)).toBe(false);
+    expect(await repository.isVoiceMuted("missing")).toBe(false);
+  });
+
   it("applies a mute duration, exposes the expiry and lazily clears an expired mute", async () => {
     await repository.upsertUser("owner", "owner-key", { username: "owner", discriminator: "1111", avatar: null });
     await repository.upsertUser("member", "member-key", { username: "member", discriminator: "2222", avatar: null });

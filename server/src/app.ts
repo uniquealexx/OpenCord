@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
+import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
@@ -12,7 +12,7 @@ import { ChatRepository, messageForViewer, permissionsForRole } from "./database
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, type AttachmentStorage } from "./attachments/storage";
 import { createFloodLimiter } from "./rate-limit";
-import { DisabledVoiceService, VoiceRoomFullError, VoiceUnavailableError, type VoiceService } from "./voice";
+import { DisabledVoiceService, VOICE_MUTE_VERIFY_DELAY_MS, VoiceRoomFullError, VoiceUnavailableError, type VoiceLookups, type VoiceService } from "./voice";
 import type { ServerBuildInfo } from "./build-info";
 
 interface ConnectionState {
@@ -36,6 +36,8 @@ export interface BuildAppOptions {
   attachmentsDir?: string;
   attachmentStorage?: AttachmentStorage;
   voiceService?: VoiceService;
+  /** Пауза перед освобождением голоса после потери соединения; переопределяется в тестах. */
+  voiceOrphanGraceMs?: number;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -48,9 +50,34 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   if (options.serverName && options.deploymentId) await repository.configureServer(options.serverName, options.deploymentId);
   const connections = new Set<ConnectionState>();
   const sessions = new Map<string, { userId: string; expiresAt: number }>();
+  // Пауза после отключения модератором: без неё отключённый возвращался мгновенно.
+  // Хранится в памяти намеренно — она живёт секунды, и перезапуск сервера её обнуляет
+  // вместе со всей голосовой сессией.
+  const voiceRejoinCooldowns = new Map<string, number>();
+  // Отложенные проверки заявленного мута, по одной на участника.
+  const voiceMuteVerifications = new Map<string, NodeJS.Timeout>();
+  // Отложенное освобождение голоса после потери управляющего соединения.
+  const voiceOrphanTimers = new Map<string, NodeJS.Timeout>();
+  // Настройки, которые голосовой сервис читает в момент события: держать их копию
+  // внутри сервиса значило бы дублировать источник истины и разъезжаться с ним.
+  const voiceLookups: VoiceLookups = {
+    serverMuted: (userId: string) => repository.isVoiceMuted(userId),
+    server: async () => {
+      const server = await repository.getServer();
+      return { id: server.id, screenShareMaxHeight: server.screenShareMaxResolution };
+    },
+    mayBeInVoice: async (userId: string) => {
+      if (await repository.findActiveBan(userId)) return false;
+      // getMemberRole бросает для того, кто на сервере не состоит: исключённый — не участник.
+      try { return permissionsForRole(await repository.getMemberRole(userId)).includes("VOICE_CONNECT"); } catch { return false; }
+    },
+  };
   // Предел на идентичность, а не на канал: медленный режим настраивают модераторы,
   // а это — нижняя граница, которую модифицированный клиент не обходит.
   const floodLimiter = createFloodLimiter({ capacity: MESSAGE_FLOOD_BURST, refillIntervalMs: MESSAGE_FLOOD_WINDOW_MS / MESSAGE_FLOOD_SUSTAINED });
+  // Отдельный ограничитель: вход в голосовой канал стоит дороже сообщения (обращения
+  // к LiveKit и рассылка всем), но и случается несопоставимо реже.
+  const voiceJoinLimiter = createFloodLimiter({ capacity: VOICE_JOIN_BURST, refillIntervalMs: VOICE_JOIN_REFILL_MS });
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 2_100_000 });
   const voiceReconcileTimer = setInterval(() => { void reconcileVoicePresence(); }, 30_000);
   voiceReconcileTimer.unref();
@@ -80,7 +107,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.post("/internal/livekit/webhook", async (request, reply) => {
     if (typeof request.body !== "string") return reply.code(400).send({ error: "INVALID_WEBHOOK" });
     try {
-      const change = await voice.receiveWebhook(request.body, request.headers.authorization);
+      const change = await voice.receiveWebhook(request.body, request.headers.authorization, voiceLookups);
       if (change?.joined) broadcast({ type: "voice.participant.joined", participant: change.joined });
       if (change?.left) broadcast({ type: "voice.participant.left", participant: change.left });
       return reply.code(204).send();
@@ -142,13 +169,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     socket.on("close", () => {
       connections.delete(state);
       if (state.sessionToken) sessions.delete(state.sessionToken);
-      if (state.userId) void broadcastMember(state.userId, publicUserStatuses().get(state.userId) ?? "offline");
+      if (!state.userId) return;
+      void broadcastMember(state.userId, publicUserStatuses().get(state.userId) ?? "offline");
+      // Соединение с LiveKit живёт отдельно от этого WebSocket, поэтому голос надо
+      // освободить самим — иначе участник остаётся в канале и слышен, числясь офлайн.
+      scheduleVoiceOrphanRelease(state.userId);
     });
   });
 
   app.addHook("onClose", async () => {
     clearInterval(voiceReconcileTimer);
     clearInterval(retentionCleanupTimer);
+    for (const timer of voiceMuteVerifications.values()) clearTimeout(timer);
+    voiceMuteVerifications.clear();
+    for (const timer of voiceOrphanTimers.values()) clearTimeout(timer);
+    voiceOrphanTimers.clear();
     for (const connection of connections) connection.socket.close(1001, "Server shutdown");
     connections.clear();
     sessions.clear();
@@ -393,12 +428,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "voice.join") {
+      // Проверяется раньше прав и обращений к базе: смысл ограничителя в том, чтобы
+      // до дорогой части не доходило вообще ничего.
+      const flood = voiceJoinLimiter.consume(`voice.join:${connection.userId}`);
+      if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком частые подключения к голосовым каналам, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
       if (!(await hasPermission(connection.userId, "VOICE_CONNECT")) || !(await hasPermission(connection.userId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для подключения к голосовому каналу");
       const channel = await repository.getChannel(event.channelId);
       if (!channel || channel.kind !== "voice") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Голосовой канал не найден");
+      const cooldownRemaining = voiceRejoinCooldownRemaining(connection.userId);
+      if (cooldownRemaining > 0) return sendError(connection.socket, event.requestId, "FORBIDDEN", `Модератор отключил вас от голосового канала. Вернуться можно через ${formatDelay(cooldownRemaining)}`, cooldownRemaining);
       try {
         const server = await repository.getServer();
-        const authorization = await voice.issueJoin({ serverId: server.id, channelId: channel.id, userId: connection.userId, participantLimit: channel.participantLimit ?? 25 });
+        const serverMuted = await repository.isVoiceMuted(connection.userId);
+        const authorization = await voice.issueJoin({ serverId: server.id, channelId: channel.id, userId: connection.userId, participantLimit: channel.participantLimit ?? 25, serverMuted });
         if (authorization.replaced) broadcast({ type: "voice.participant.disconnected", userId: authorization.replaced.userId, channelId: authorization.replaced.channelId, reason: "replaced" });
         send(connection.socket, { type: "voice.join.authorized", requestId: event.requestId, channelId: channel.id, endpoint: authorization.endpoint, token: authorization.token, expiresAt: authorization.expiresAt });
       } catch (error) {
@@ -415,9 +457,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "voice.state.update") {
+      const previousMuted = voice.presence().find((participant) => participant.userId === connection.userId)?.muted;
       const presence = voice.updateState(connection.userId, { muted: event.muted, deafened: event.deafened, viewingScreenShareUserId: event.viewingScreenShareUserId });
       if (!presence) return sendError(connection.socket, event.requestId, "CONFLICT", "Сначала подключитесь к голосовому каналу");
       broadcast({ type: "voice.participant.updated", participant: presence });
+      // Заявление о муте — это только заявление: звук идёт мимо OpenCord, через LiveKit.
+      // Показывать чужой микрофон выключенным, пока он передаёт, нельзя, поэтому
+      // объявленная заглушка проверяется по настоящему состоянию дорожки.
+      if (presence.muted && presence.muted !== previousMuted) scheduleVoiceMuteVerification(connection.userId);
       return;
     }
     if (event.type === "voice.member.disconnect") {
@@ -428,7 +475,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const actorRole = await repository.getMemberRole(connection.userId);
       if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя отключить этого участника");
       const presence = await voice.disconnect(event.userId, "moderated");
-      if (presence) broadcast({ type: "voice.participant.disconnected", userId: presence.userId, channelId: presence.channelId, reason: "moderated" });
+      // Пауза ставится только по факту отключения: иначе модератор мог бы закрыть
+      // голос участнику, который в канал и не заходил.
+      if (presence) {
+        startVoiceRejoinCooldown(event.userId);
+        broadcast({ type: "voice.participant.disconnected", userId: presence.userId, channelId: presence.channelId, reason: "moderated" });
+      }
       return;
     }
     if (event.type === "voice.member.mute") {
@@ -441,6 +493,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       try {
         const presence = await voice.setModeratorMuted(event.userId, event.muted);
         if (!presence) return sendError(connection.socket, event.requestId, "CONFLICT", "Участник не подключён к голосовому каналу");
+        // Мут переживает выход из канала: без записи он держался бы только в presence,
+        // и повторный вход выдал бы токен с правом публиковать микрофон.
+        await repository.setVoiceMuted(event.userId, event.muted);
         broadcast({ type: "voice.participant.updated", participant: presence });
       } catch (error) {
         app.log.error(error);
@@ -531,11 +586,77 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (result.expiredBanUserIds.length) await broadcastSnapshots();
   }
 
+  /**
+   * Ставит паузу и заодно подчищает истёкшие: отключения модератором редки, поэтому
+   * отдельный таймер ради этой карты не нужен, а без уборки ключи копились бы вечно —
+   * отключённый может просто не вернуться.
+   */
+  function startVoiceRejoinCooldown(userId: string): void {
+    const now = Date.now();
+    for (const [key, expiresAt] of voiceRejoinCooldowns) if (expiresAt <= now) voiceRejoinCooldowns.delete(key);
+    voiceRejoinCooldowns.set(userId, now + VOICE_MODERATED_REJOIN_COOLDOWN_MS);
+  }
+
+  /**
+   * Одна отложенная проверка на участника: частые переключения микрофона не должны
+   * плодить таймеры, поэтому предыдущая проверка заменяется новой.
+   */
+  function scheduleVoiceMuteVerification(userId: string): void {
+    const existing = voiceMuteVerifications.get(userId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      voiceMuteVerifications.delete(userId);
+      void voice.verifySelfMute(userId)
+        .then((corrected) => { if (corrected) broadcast({ type: "voice.participant.updated", participant: corrected }); })
+        .catch((error: unknown) => app.log.warn(error, "Voice mute verification failed"));
+    }, VOICE_MUTE_VERIFY_DELAY_MS);
+    timer.unref();
+    voiceMuteVerifications.set(userId, timer);
+  }
+
+  /**
+   * Ставит отложенное освобождение голоса, если у участника не осталось ни одного
+   * подтверждённого соединения. Пауза нужна, чтобы обычное переподключение клиента
+   * не выбрасывало его из разговора: разрыв WebSocket сам по себе ещё ничего не значит.
+   *
+   * Отдельная отмена таймера при возвращении не нужна: решение принимается по состоянию
+   * соединений в момент срабатывания, и это надёжнее — участник мог вернуться любым путём.
+   */
+  function scheduleVoiceOrphanRelease(userId: string): void {
+    if (hasAuthenticatedConnection(userId)) return;
+    const existing = voiceOrphanTimers.get(userId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      voiceOrphanTimers.delete(userId);
+      if (hasAuthenticatedConnection(userId)) return;
+      void voice.leave(userId)
+        .then((presence) => { if (presence) broadcast({ type: "voice.participant.left", participant: presence }); })
+        .catch((error: unknown) => app.log.warn(error, "Releasing an orphaned voice presence failed"));
+    }, options.voiceOrphanGraceMs ?? VOICE_ORPHAN_GRACE_MS);
+    timer.unref();
+    voiceOrphanTimers.set(userId, timer);
+  }
+
+  function hasAuthenticatedConnection(userId: string): boolean {
+    for (const connection of connections) if (connection.userId === userId) return true;
+    return false;
+  }
+
+  /** Сколько осталось до конца паузы, 0 — паузы нет. */
+  function voiceRejoinCooldownRemaining(userId: string): number {
+    const expiresAt = voiceRejoinCooldowns.get(userId);
+    if (expiresAt === undefined) return 0;
+    const remaining = expiresAt - Date.now();
+    if (remaining > 0) return remaining;
+    voiceRejoinCooldowns.delete(userId);
+    return 0;
+  }
+
   async function reconcileVoicePresence(): Promise<void> {
     try {
       const server = await repository.getServer();
       const before = JSON.stringify({ presence: voice.presence(), capability: await voice.capability() });
-      await voice.reconcile(server.channels.filter((channel) => channel.kind === "voice").map((channel) => channel.id));
+      await voice.reconcile(server.channels.filter((channel) => channel.kind === "voice").map((channel) => channel.id), voiceLookups);
       const after = JSON.stringify({ presence: voice.presence(), capability: await voice.capability() });
       if (before !== after) await broadcastSnapshots();
     } catch (error) { app.log.warn(error, "Voice presence reconciliation failed"); }

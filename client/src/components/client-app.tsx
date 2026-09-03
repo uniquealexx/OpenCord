@@ -25,13 +25,14 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { useMobileLayout } from "@/hooks/use-mobile-layout";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
-import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization } from "@/hooks/use-voice-session";
+import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization, type VoiceSessionStatus } from "@/hooks/use-voice-session";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
+import { playVoiceSound, primeVoiceSounds } from "@/lib/voice-sounds";
 import { createDefaultState, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
 import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 
@@ -128,6 +129,7 @@ export function ClientApp(): React.ReactElement {
   const searchRequestRef = useRef<string | null>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const serverMuteStateRef = useRef(false);
+  const voiceSoundStatusRef = useRef<VoiceSessionStatus>("idle");
   const mutedBeforeServerMuteRef = useRef(false);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
   const connection = useServerConnection(
@@ -375,6 +377,19 @@ export function ClientApp(): React.ReactElement {
     if (voice.status !== "connected" || !hasConnectedVoicePresence) return;
     updateVoiceState(voice.muted, voice.deafened, viewingScreenShareId);
   }, [hasConnectedVoicePresence, updateVoiceState, viewingScreenShareId, voice.deafened, voice.muted, voice.status]);
+
+  // Звук входа и выхода вешается на статус сессии, а не на кнопки: до "connected"
+  // ещё идут выдача гранта и подключение к LiveKit, а уйти из комнаты можно и не
+  // нажимая «Отключиться» (разрыв связи, переключение сервера, кик).
+  useEffect(() => {
+    const previous = voiceSoundStatusRef.current;
+    voiceSoundStatusRef.current = voice.status;
+    // Пока идёт подключение, mp3 успевают декодироваться — иначе первый звук
+    // отстал бы от события на время разбора файла.
+    if (voice.status === "connecting") primeVoiceSounds();
+    if (voice.status === "connected" && previous !== "connected" && previous !== "reconnecting") playVoiceSound("voiceJoin");
+    else if (voice.status !== "connected" && voice.status !== "reconnecting" && (previous === "connected" || previous === "reconnecting")) playVoiceSound("voiceLeave");
+  }, [voice.status]);
 
   useEffect(() => {
     const bridge = window.openCord?.storage;
@@ -733,6 +748,7 @@ export function ClientApp(): React.ReactElement {
 
   async function startScreenShare(settings: ScreenShareSettings): Promise<void> {
     await voice.startScreenShare(settings);
+    playVoiceSound("screenShareStart");
     setViewingScreenShareId(currentAccess?.id ?? null);
     if (voice.channelId) selectChannel(voice.channelId);
     setNotice(t.notices.screenShareStarted);
@@ -740,12 +756,20 @@ export function ClientApp(): React.ReactElement {
 
   async function stopScreenShare(): Promise<void> {
     await voice.stopScreenShare();
+    playVoiceSound("screenShareStop");
     setNotice(t.notices.screenShareStopped);
   }
 
   function viewScreenShare(participantIdentity: string): void {
+    // Своя же демонстрация открывается автоматически при запуске — там звучит screenShareStart.
+    if (participantIdentity !== viewingScreenShareId && participantIdentity !== currentAccess?.id) playVoiceSound("screenShareViewStart");
     setViewingScreenShareId(participantIdentity);
     if (voice.channelId) selectChannel(voice.channelId);
+  }
+
+  function exitScreenShare(): void {
+    if (viewingScreenShareId && viewingScreenShareId !== currentAccess?.id) playVoiceSound("screenShareViewStop");
+    setViewingScreenShareId(null);
   }
 
   function addServer(server: MockServer): boolean {
@@ -1478,7 +1502,7 @@ export function ClientApp(): React.ReactElement {
               onStartScreenShare={() => setModal("screen-share")}
               onStopScreenShare={() => void stopScreenShare()}
               onViewScreenShare={viewScreenShare}
-              onExitScreenShare={() => setViewingScreenShareId(null)}
+              onExitScreenShare={() => exitScreenShare()}
               onLeaveVoice={leaveVoiceChannel}
             />
           ) : activeChannel ? (
@@ -2265,17 +2289,17 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                     return (
                       <div key={participant.userId} className={cn("relative flex min-h-0 flex-col rounded-xl border bg-[#26282c] p-3 transition", speaking ? "border-emerald-400/45" : "border-white/[.065]", (locallyMuted || participant.serverMuted) && "border-red-400/20")}>
                         {participant.userId !== currentUserId && (
-                          <button type="button" aria-label={`${locallyMuted ? t.voice.unmuteLocallyOf(participantData.name) : t.voice.muteLocallyOf(participantData.name)}`} aria-pressed={locallyMuted} onClick={() => onParticipantMuted(participant.userId, !locallyMuted)} className={cn("absolute left-3 top-3 grid size-11 place-items-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70", locallyMuted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-black/20 text-slate-500 hover:bg-white/[.06] hover:text-slate-200")}>
+                          <button type="button" aria-label={`${locallyMuted ? t.voice.unmuteLocallyOf(participantData.name) : t.voice.muteLocallyOf(participantData.name)}`} aria-pressed={locallyMuted} onClick={() => onParticipantMuted(participant.userId, !locallyMuted)} className={cn("absolute left-3 top-3 z-10 grid size-11 place-items-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70", locallyMuted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-black/20 text-slate-500 hover:bg-white/[.06] hover:text-slate-200")}>
                             <VolumeX className="pointer-events-none size-4" />
                           </button>
                         )}
                         {canDisconnect && (
-                          <button type="button" aria-label={participant.serverMuted ? t.voice.removeServerMuteOf(participantData.name) : t.voice.muteForAllOf(participantData.name)} title={participant.serverMuted ? t.voice.removeServerMute : t.voice.muteForAll} aria-pressed={participant.serverMuted} onClick={() => onServerMuted(participant.userId, !participant.serverMuted)} className={cn("absolute right-12 top-3 grid size-8 place-items-center rounded-lg border transition", participant.serverMuted ? "border-red-400/30 bg-red-400/15 text-red-200 hover:bg-red-400/20" : "border-amber-300/20 bg-amber-300/[.07] text-amber-200 hover:bg-amber-300/15")}>
+                          <button type="button" aria-label={participant.serverMuted ? t.voice.removeServerMuteOf(participantData.name) : t.voice.muteForAllOf(participantData.name)} title={participant.serverMuted ? t.voice.removeServerMute : t.voice.muteForAll} aria-pressed={participant.serverMuted} onClick={() => onServerMuted(participant.userId, !participant.serverMuted)} className={cn("absolute right-12 top-3 z-10 grid size-8 place-items-center rounded-lg border transition", participant.serverMuted ? "border-red-400/30 bg-red-400/15 text-red-200 hover:bg-red-400/20" : "border-amber-300/20 bg-amber-300/[.07] text-amber-200 hover:bg-amber-300/15")}>
                             <MicOff className="size-4" />
                           </button>
                         )}
                         {canDisconnect && (
-                          <button type="button" aria-label={t.voice.disconnectOf(participantData.name)} title={t.voice.disconnect} onClick={() => onDisconnectParticipant(participant.userId)} className="absolute right-3 top-3 grid size-8 place-items-center rounded-lg border border-red-400/20 bg-red-400/[.07] text-red-300 transition hover:bg-red-400/15">
+                          <button type="button" aria-label={t.voice.disconnectOf(participantData.name)} title={t.voice.disconnect} onClick={() => onDisconnectParticipant(participant.userId)} className="absolute right-3 top-3 z-10 grid size-8 place-items-center rounded-lg border border-red-400/20 bg-red-400/[.07] text-red-300 transition hover:bg-red-400/15">
                             <UserMinus className="size-4" />
                           </button>
                         )}

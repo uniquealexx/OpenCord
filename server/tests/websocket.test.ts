@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { MESSAGE_FLOOD_BURST, PROTOCOL_VERSION, serverEventSchema, type ServerEvent } from "@opencord/shared";
+import { MESSAGE_FLOOD_BURST, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_MODERATED_REJOIN_COOLDOWN_MS, serverEventSchema, type ServerEvent } from "@opencord/shared";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
@@ -635,6 +635,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
         moderationCalls.push({ userId, muted });
         return { userId, channelId: voiceChannelId, muted, deafened: false, serverMuted: muted, viewingScreenShareUserId: null };
       },
+      verifySelfMute: async () => null,
       removeChannel: async () => [],
       presence: () => [],
       receiveWebhook: async () => null,
@@ -671,6 +672,404 @@ it("forbids the sender from reacting to their own anonymous private message", as
     expect((await serverUnmuted).participant).toMatchObject({ userId: target.userId, muted: false, serverMuted: false });
     expect(moderationCalls).toEqual([{ userId: target.userId, muted: true }, { userId: target.userId, muted: false }]);
   }, 15_000);
+
+  it("broadcasts a correction when a claimed self-mute does not match the real microphone state", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    let presence: { userId: string; channelId: string; muted: boolean; deafened: boolean; serverMuted: boolean; viewingScreenShareUserId: string | null } | null = null;
+    let verifications = 0;
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async (request) => {
+        presence = { userId: request.userId, channelId: request.channelId, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+        return { endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null };
+      },
+      leave: async () => { const left = presence; presence = null; return left; },
+      updateState: (userId, state) => {
+        if (!presence || presence.userId !== userId) return null;
+        presence = { ...presence, ...state };
+        return presence;
+      },
+      disconnect: async () => null,
+      setModeratorMuted: async () => null,
+      // Микрофон на самом деле продолжает передавать: заявленная заглушка — ложь.
+      verifySelfMute: async (userId) => {
+        verifications += 1;
+        if (!presence || presence.userId !== userId || !presence.muted) return null;
+        presence = { ...presence, muted: false };
+        return presence;
+      },
+      removeChannel: async () => [],
+      presence: () => (presence ? [presence] : []),
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const liar = await connectAndAuthenticate(url, "Liar");
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+
+    const joined = waitForEvent(liar.socket, "voice.join.authorized");
+    liar.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await joined;
+
+    // Клиент объявляет себя заглушённым — остальные сразу видят это заявление.
+    const claimed = waitForEvent(owner.socket, "voice.participant.updated");
+    liar.socket.send(JSON.stringify({ type: "voice.state.update", requestId: randomUUID(), muted: true, deafened: false, viewingScreenShareUserId: null }));
+    expect((await claimed).participant).toMatchObject({ userId: liar.userId, muted: true });
+
+    // ...но проверка по настоящему состоянию дорожки возвращает правду всем.
+    const corrected = await waitForEvent(owner.socket, "voice.participant.updated");
+    expect(corrected.participant).toMatchObject({ userId: liar.userId, muted: false });
+    expect(verifications).toBe(1);
+
+    owner.socket.close();
+    liar.socket.close();
+  }, 20_000);
+
+  it("releases a voice presence whose control connection went away, but not before the grace period", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    let presence: { userId: string; channelId: string; muted: boolean; deafened: boolean; serverMuted: boolean; viewingScreenShareUserId: string | null } | null = null;
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async (request) => {
+        presence = { userId: request.userId, channelId: request.channelId, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+        return { endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null };
+      },
+      leave: async () => { const left = presence; presence = null; return left; },
+      updateState: () => null,
+      disconnect: async () => null,
+      setModeratorMuted: async () => null,
+      verifySelfMute: async () => null,
+      removeChannel: async () => [],
+      presence: () => (presence ? [presence] : []),
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService, voiceOrphanGraceMs: 400 });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const speakerKeys = generateKeyPairSync("ed25519");
+    const speaker = await connectAndAuthenticate(url, "Speaker", speakerKeys);
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+
+    const joined = waitForEvent(speaker.socket, "voice.join.authorized");
+    speaker.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await joined;
+    expect(presence).not.toBeNull();
+
+    // Обрыв управляющего соединения: соединение с LiveKit при этом никуда не девается.
+    const released = waitForEvent(owner.socket, "voice.participant.left");
+    speaker.socket.close();
+    const left = await released;
+    expect(left.participant).toMatchObject({ userId: speaker.userId, channelId: voiceChannel!.id });
+    expect(presence).toBeNull();
+
+    owner.socket.close();
+  }, 20_000);
+
+  it("keeps a reconnecting participant in the voice channel", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    let presence: { userId: string; channelId: string; muted: boolean; deafened: boolean; serverMuted: boolean; viewingScreenShareUserId: string | null } | null = null;
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async (request) => {
+        presence = { userId: request.userId, channelId: request.channelId, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+        return { endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null };
+      },
+      leave: async () => { const left = presence; presence = null; return left; },
+      updateState: () => null,
+      disconnect: async () => null,
+      setModeratorMuted: async () => null,
+      verifySelfMute: async () => null,
+      removeChannel: async () => [],
+      presence: () => (presence ? [presence] : []),
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService, voiceOrphanGraceMs: 800 });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const speakerKeys = generateKeyPairSync("ed25519");
+    const speaker = await connectAndAuthenticate(url, "Speaker", speakerKeys);
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+
+    const joined = waitForEvent(speaker.socket, "voice.join.authorized");
+    speaker.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await joined;
+
+    // Короткий обрыв сети: клиент возвращается с той же идентичностью до конца паузы.
+    speaker.socket.close();
+    const reconnected = await connectAndAuthenticate(url, "Speaker", speakerKeys);
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    // Разговор не должен прерваться из-за переподключения.
+    expect(presence).toMatchObject({ userId: speaker.userId, channelId: voiceChannel!.id });
+
+    owner.socket.close();
+    reconnected.socket.close();
+  }, 20_000);
+
+  it("throttles a voice join loop before it reaches the voice server, and still lets the participant leave", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    let issueJoinCalls = 0;
+    let leaveCalls = 0;
+    let presence: { userId: string; channelId: string; muted: boolean; deafened: boolean; serverMuted: boolean; viewingScreenShareUserId: string | null } | null = null;
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async (request) => {
+        issueJoinCalls += 1;
+        presence = { userId: request.userId, channelId: request.channelId, muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+        return { endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null };
+      },
+      leave: async () => { leaveCalls += 1; const left = presence; presence = null; return left; },
+      updateState: () => null,
+      disconnect: async () => null,
+      setModeratorMuted: async () => null,
+      verifySelfMute: async () => null,
+      removeChannel: async () => [],
+      presence: () => (presence ? [presence] : []),
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const flooder = await connectAndAuthenticate(url, "Flooder");
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+
+    // Цикл входов заметно длиннее допустимого запаса.
+    const refused = waitForEvent(flooder.socket, "error");
+    for (let attempt = 0; attempt < VOICE_JOIN_BURST + 4; attempt += 1) {
+      flooder.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    }
+    const refusal = await refused;
+    expect(refusal.code).toBe("RATE_LIMITED");
+    expect(refusal.retryAfterMs).toBeGreaterThan(0);
+    // До голосового сервера доходит не больше запаса, а не весь цикл.
+    expect(issueJoinCalls).toBeLessThanOrEqual(VOICE_JOIN_BURST);
+
+    // Выход обязан работать даже после исчерпания запаса: иначе участник застрял бы в канале.
+    const left = waitForEvent(owner.socket, "voice.participant.left");
+    flooder.socket.send(JSON.stringify({ type: "voice.leave", requestId: randomUUID() }));
+    await left;
+    expect(leaveCalls).toBeGreaterThan(0);
+
+    owner.socket.close();
+    flooder.socket.close();
+  }, 20_000);
+
+  it("holds a moderated participant out of voice for the rejoin cooldown", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    let presence: { userId: string; channelId: string; muted: boolean; deafened: boolean; serverMuted: boolean; viewingScreenShareUserId: string | null } | null = null;
+    let joinCount = 0;
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async (request) => {
+        joinCount += 1;
+        presence = { userId: request.userId, channelId: request.channelId, muted: false, deafened: false, serverMuted: request.serverMuted, viewingScreenShareUserId: null };
+        return { endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null };
+      },
+      leave: async () => { const left = presence; presence = null; return left; },
+      updateState: () => null,
+      disconnect: async () => { const left = presence; presence = null; return left; },
+      setModeratorMuted: async () => null,
+      verifySelfMute: async () => null,
+      removeChannel: async () => [],
+      presence: () => (presence ? [presence] : []),
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const target = await connectAndAuthenticate(url, "Target member");
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+    expect(voiceChannel).toBeDefined();
+
+    const joined = waitForEvent(target.socket, "voice.join.authorized");
+    target.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await joined;
+    expect(joinCount).toBe(1);
+
+    const disconnected = waitForEvent(target.socket, "voice.participant.disconnected");
+    owner.socket.send(JSON.stringify({ type: "voice.member.disconnect", requestId: randomUUID(), userId: target.userId }));
+    expect((await disconnected).reason).toBe("moderated");
+
+    // Обход: сразу нажать на тот же канал ещё раз.
+    const refused = waitForEvent(target.socket, "error");
+    target.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    const refusal = await refused;
+    expect(refusal.code).toBe("FORBIDDEN");
+    expect(refusal.retryAfterMs).toBeGreaterThan(0);
+    expect(refusal.retryAfterMs).toBeLessThanOrEqual(VOICE_MODERATED_REJOIN_COOLDOWN_MS);
+    // Отказ должен случиться до обращения к голосовому серверу.
+    expect(joinCount).toBe(1);
+
+    owner.socket.close();
+    target.socket.close();
+  }, 20_000);
+
+  it("does not start a rejoin cooldown for a member who was not in a voice channel", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async () => ({ endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null }),
+      leave: async () => null,
+      updateState: () => null,
+      // Участник не в канале: голосовой сервис отключать некого.
+      disconnect: async () => null,
+      setModeratorMuted: async () => null,
+      verifySelfMute: async () => null,
+      removeChannel: async () => [],
+      presence: () => [],
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const target = await connectAndAuthenticate(url, "Target member");
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+
+    owner.socket.send(JSON.stringify({ type: "voice.member.disconnect", requestId: randomUUID(), userId: target.userId }));
+    // Ответа на это отключение нет, поэтому синхронизируемся отдельным запросом.
+    const pong = waitForEvent(owner.socket, "pong");
+    owner.socket.send(JSON.stringify({ type: "ping", requestId: randomUUID() }));
+    await pong;
+
+    const joined = waitForEvent(target.socket, "voice.join.authorized");
+    target.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    expect((await joined).channelId).toBe(voiceChannel!.id);
+
+    owner.socket.close();
+    target.socket.close();
+  }, 20_000);
+
+  it("keeps a server mute across leaving and rejoining a voice channel", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    // Единственное состояние, которое голосовой сервис держит сам, — presence: она
+    // стирается выходом из канала. Тест проверяет, что мут её переживает.
+    const joinRequests: Array<{ userId: string; serverMuted: boolean }> = [];
+    let presence: { userId: string; channelId: string; muted: boolean; deafened: boolean; serverMuted: boolean; viewingScreenShareUserId: string | null } | null = null;
+    const voiceService: VoiceService = {
+      capability: async () => ({ status: "available", secureTransport: true, maxParticipants: 25, warning: null }),
+      issueJoin: async (request) => {
+        joinRequests.push({ userId: request.userId, serverMuted: request.serverMuted });
+        presence = { userId: request.userId, channelId: request.channelId, muted: request.serverMuted, deafened: false, serverMuted: request.serverMuted, viewingScreenShareUserId: null };
+        return { endpoint: "wss://voice.example.test", token: "x".repeat(20), expiresAt: new Date(Date.now() + 60_000).toISOString(), replaced: null };
+      },
+      leave: async () => { const left = presence; presence = null; return left; },
+      updateState: () => null,
+      disconnect: async () => { const left = presence; presence = null; return left; },
+      setModeratorMuted: async (userId, muted) => {
+        if (!presence || presence.userId !== userId) return null;
+        presence = { ...presence, serverMuted: muted, muted };
+        return presence;
+      },
+      verifySelfMute: async () => null,
+      removeChannel: async () => [],
+      presence: () => (presence ? [presence] : []),
+      receiveWebhook: async () => null,
+      reconcile: async () => [],
+    };
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey, voiceService });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Owner", ownerKeys);
+    const target = await connectAndAuthenticate(url, "Target member");
+
+    const channelCreated = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    const voiceChannel = (await channelCreated).server.channels.find((channel) => channel.kind === "voice");
+    expect(voiceChannel).toBeDefined();
+
+    const firstJoin = waitForEvent(target.socket, "voice.join.authorized");
+    target.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await firstJoin;
+    expect(joinRequests).toEqual([{ userId: target.userId, serverMuted: false }]);
+
+    const muted = waitForEvent(owner.socket, "voice.participant.updated");
+    owner.socket.send(JSON.stringify({ type: "voice.member.mute", requestId: randomUUID(), userId: target.userId, muted: true }));
+    expect((await muted).participant).toMatchObject({ userId: target.userId, serverMuted: true });
+
+    // Обход: выйти из канала и войти заново. Presence стирается, мут — нет.
+    const left = waitForEvent(owner.socket, "voice.participant.left");
+    target.socket.send(JSON.stringify({ type: "voice.leave", requestId: randomUUID() }));
+    await left;
+
+    const rejoin = waitForEvent(target.socket, "voice.join.authorized");
+    target.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await rejoin;
+    expect(joinRequests.at(-1)).toEqual({ userId: target.userId, serverMuted: true });
+
+    // Снятие мута тоже сохраняется: следующий вход выдаёт полные права.
+    const unmuted = waitForEvent(owner.socket, "voice.participant.updated");
+    owner.socket.send(JSON.stringify({ type: "voice.member.mute", requestId: randomUUID(), userId: target.userId, muted: false }));
+    expect((await unmuted).participant).toMatchObject({ userId: target.userId, serverMuted: false });
+
+    const leftAgain = waitForEvent(owner.socket, "voice.participant.left");
+    target.socket.send(JSON.stringify({ type: "voice.leave", requestId: randomUUID() }));
+    await leftAgain;
+    const finalJoin = waitForEvent(target.socket, "voice.join.authorized");
+    target.socket.send(JSON.stringify({ type: "voice.join", requestId: randomUUID(), channelId: voiceChannel!.id }));
+    await finalJoin;
+    expect(joinRequests.at(-1)).toEqual({ userId: target.userId, serverMuted: false });
+
+    owner.socket.close();
+    target.socket.close();
+  }, 20_000);
 
   it("refuses to hand out a taken username#discriminator tag and delivers mentions with membership validation", async () => {
     const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });

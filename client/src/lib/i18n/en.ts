@@ -854,6 +854,7 @@ export const en = {
     micFailed: "Could not enable the microphone — you are in the channel but muted",
     connectFirst: "Connect to the voice channel first",
     noVideoTrack: "LiveKit did not create a video track for the screen share",
+    screenShareBlocked: "The screen share was stopped: the frame is larger than this server allows",
   },
 };
 

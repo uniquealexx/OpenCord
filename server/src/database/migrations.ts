@@ -429,6 +429,15 @@ const migrations = [
         ON messages(channel_id, author_id, created_at DESC);
     `,
   },
+  {
+    // Серверный мут голоса переживает выход из канала. Раньше он жил только в памяти
+    // голосового сервиса и стирался при `voice.leave`, поэтому замученный снимал мут
+    // сам: выход и повторный вход выдавали токен с полными правами публикации.
+    id: "028_member_voice_muted",
+    sql: `
+      ALTER TABLE server_members ADD COLUMN IF NOT EXISTS voice_muted boolean NOT NULL DEFAULT false;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

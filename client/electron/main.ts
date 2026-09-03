@@ -17,6 +17,7 @@ import { ClientUpdateManager, runRequiredStartupUpdate, type ClientUpdateFlavor 
 import type { ClientUpdateState } from "../src/shared/updater";
 import { isAllowedScreenShareSource, screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 import { isAllowedRendererPermission } from "./permissions";
+import { isTrustedRendererUrl } from "./trusted-renderer";
 import { probeOpenCordServer } from "./server-probe";
 import { shouldHideWindowOnClose } from "./window-lifecycle";
 
@@ -42,19 +43,30 @@ const screenShareThumbnailCache = new Map<string, string>();
 const TRAY_ICON_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACuSURBVFhH7c5LCsMwEARRHzRHyd0dBFmYl9FIY0NwiBpqNZ+ubVt55/nY929i/xL4PYEo7mTYPyVQibdi/1DgTPxxWiCKO5W9hv1dAeM8wjhv2B8KGOcZxrn9QwFnM2T39t9PIDuu0Ptj/xJYAh8C2fEs2b399xeInmQY5/aHAjOPIozzhv1dgehhizuVvYb9qUDv+Sj+uCRQlfBW7J8SOBLFnQz7ywJXsX8J/G9ebgdsQL8M5kwAAAAASUVORK5CYII=";
 const EMPTY_SCREEN_SHARE_THUMBNAIL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-function isTrustedRenderer(url: string): boolean {
-  if (developmentUrl) {
-    try { return new URL(url).origin === new URL(developmentUrl).origin; } catch { return false; }
-  }
-  return url.startsWith("file://");
+// Каталог статического экспорта Next.js: единственные две страницы, которые
+// оболочка вообще имеет право показывать.
+const rendererRoot = path.join(__dirname, "..", "out");
+const mainRendererFile = path.join(rendererRoot, "index.html");
+const updateRendererFile = path.join(rendererRoot, "update.html");
+
+function isTrustedRenderer(url: string | null | undefined): boolean {
+  return isTrustedRendererUrl(url, { developmentUrl, allowedFiles: [mainRendererFile] });
+}
+
+// Окно обновления грузится с диска всегда, в том числе при запуске из исходников,
+// поэтому dev-origin к нему не применяется.
+function isTrustedUpdateRenderer(url: string | null | undefined): boolean {
+  return isTrustedRendererUrl(url, { developmentUrl: null, allowedFiles: [updateRendererFile] });
 }
 
 function configureMediaPermissions(): void {
   const appSession = session.defaultSession;
   appSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
-    const trustedRenderer = isTrustedRenderer(webContents?.getURL() || requestingOrigin);
+    // requestingOrigin для file:// — это всегда "file:///", по нему страницу не отличить,
+    // поэтому источником истины остаётся URL самого webContents.
+    void requestingOrigin;
     void details;
-    return trustedRenderer && isAllowedRendererPermission(permission);
+    return isTrustedRenderer(webContents?.getURL()) && isAllowedRendererPermission(permission);
   });
   appSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const trustedRenderer = isTrustedRenderer(webContents.getURL());
@@ -69,7 +81,9 @@ function configureMediaPermissions(): void {
     const selection = pendingScreenShare;
     pendingScreenShare = null;
     const requestFrame = request.frame;
-    const trustedFrame = isTrustedRenderer(requestFrame?.url || request.securityOrigin);
+    // Только URL фрейма: request.securityOrigin для file:// равен "file:///" у любой
+    // локальной страницы. Запрос без фрейма опознать нечем — он отклоняется.
+    const trustedFrame = isTrustedRenderer(requestFrame?.url);
     // The source picker awaits an IPC round trip before LiveKit calls
     // getDisplayMedia, so Chromium no longer reports an active user gesture.
     // The short-lived, single-use selection is the authorization boundary.
@@ -180,9 +194,19 @@ function createWindow(): void {
   mainWindow.webContents.on("console-message", (details) => {
     if (details.message.startsWith("[screen-share]")) console.info(details.message);
   });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    const allowed = developmentUrl ? url.startsWith(developmentUrl) : url.startsWith("file://");
-    if (!allowed) event.preventDefault();
+  // Навигация уводит страницу из-под CSP (политика задана meta внутри index.html),
+  // сохраняя preload с мостом, поэтому окно закреплено за своей единственной страницей.
+  const blockUntrustedNavigation = (event: Electron.Event, url: string): void => {
+    if (isTrustedRenderer(url)) return;
+    console.warn("Blocked renderer navigation", { url });
+    event.preventDefault();
+  };
+  mainWindow.webContents.on("will-navigate", blockUntrustedNavigation);
+  mainWindow.webContents.on("will-redirect", blockUntrustedNavigation);
+  mainWindow.webContents.on("will-frame-navigate", (event) => {
+    if (isTrustedRenderer(event.url)) return;
+    console.warn("Blocked frame navigation", { url: event.url });
+    event.preventDefault();
   });
   mainWindow.webContents.on("before-input-event", (event, input) => {
     // Chromium's built-in zoom accelerator only matches the unshifted "="
@@ -198,7 +222,7 @@ function createWindow(): void {
   if (developmentUrl) {
     void mainWindow.loadURL(developmentUrl);
   } else {
-    void mainWindow.loadFile(path.join(__dirname, "..", "out", "index.html"));
+    void mainWindow.loadFile(mainRendererFile);
   }
 }
 
@@ -254,9 +278,12 @@ function createUpdateWindow(): void {
   updateWindow.on("closed", () => { updateWindow = null; });
   updateWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   updateWindow.webContents.on("will-navigate", (event, url) => {
-    if (!url.startsWith("file://")) event.preventDefault();
+    if (!isTrustedUpdateRenderer(url)) event.preventDefault();
   });
-  void updateWindow.loadFile(path.join(__dirname, "..", "out", "update.html"));
+  updateWindow.webContents.on("will-redirect", (event, url) => {
+    if (!isTrustedUpdateRenderer(url)) event.preventDefault();
+  });
+  void updateWindow.loadFile(updateRendererFile);
 }
 
 function emitClientUpdateState(state: ClientUpdateState): void {

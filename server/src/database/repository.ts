@@ -374,6 +374,27 @@ export class ChatRepository {
     return rows.length > 0;
   }
 
+  /**
+   * Серверный мут голоса — состояние модерации, а не свойство подключения: голосовой
+   * сервис держит presence только пока участник в канале, поэтому источником истины
+   * должна быть база. Иначе `voice.leave` стирал бы мут вместе с presence.
+   */
+  async isVoiceMuted(userId: string): Promise<boolean> {
+    const [row] = await this.database.query<{ voice_muted: boolean }>(
+      "SELECT voice_muted FROM server_members WHERE server_id = $1 AND user_id = $2",
+      [DEFAULT_SERVER_ID, userId],
+    );
+    return row?.voice_muted === true;
+  }
+
+  async setVoiceMuted(userId: string, muted: boolean): Promise<boolean> {
+    const rows = await this.database.query<{ user_id: string }>(
+      "UPDATE server_members SET voice_muted = $3 WHERE server_id = $1 AND user_id = $2 RETURNING user_id",
+      [DEFAULT_SERVER_ID, userId, muted],
+    );
+    return rows.length > 0;
+  }
+
   async createAttachment(id: string, uploaderId: string, storageKey: string, fileName: string, mimeType: string, sizeBytes: number, sha256: string): Promise<Attachment> {
     const rows = await this.database.query<AttachmentRow>(
       `INSERT INTO attachments (id, server_id, uploader_id, storage_key, original_name, mime_type, size_bytes, sha256)

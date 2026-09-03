@@ -855,5 +855,6 @@ export const zh = {
     micFailed: "无法启用麦克风——你已在频道中，但当前处于静音状态",
     connectFirst: "请先连接到语音频道",
     noVideoTrack: "LiveKit 未创建屏幕共享的视频轨道",
+    screenShareBlocked: "屏幕共享已停止：画面尺寸超出本服务器的允许范围",
   },
 } satisfies Dictionary;

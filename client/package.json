@@ -1,6 +1,6 @@
 {
   "name": "@opencord/client",
-  "version": "0.1.0-beta.21",
+  "version": "0.1.0-beta.22",
   "private": true,
   "license": "MIT",
   "description": "OpenCord desktop client prototype",
@@ -14,7 +14,7 @@
   "scripts": {
     "dev": "pnpm build && electron .",
     "build:electron": "tsup",
-    "build:renderer": "next build --webpack",
+    "build:renderer": "next build --webpack && node scripts/harden-csp.mjs",
     "build": "pnpm build:renderer && pnpm build:electron",
     "android:sync": "cap sync android",
     "android:debug": "pnpm build:renderer && cap sync android && node scripts/build-android.mjs debug",
@@ -22,6 +22,7 @@
     "package:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "package:linux": "pnpm build && node scripts/package-linux.mjs",
     "package:mac": "pnpm build && electron-builder --mac dmg zip --universal --publish never",
+    "sounds": "node scripts/embed-voice-sounds.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
