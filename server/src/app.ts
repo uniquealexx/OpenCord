@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
+import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, VOICE_PARTICIPANT_LIMIT_MAX, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
@@ -316,7 +316,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "channel.create") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для создания каналов");
-      await repository.createChannel(randomUUID(), event.name, event.kind, event.description);
+      // Старые клиенты лимит не присылают: голосовым — дефолт 25, текстовым — null.
+      const participantLimit = event.participantLimit ?? (event.kind === "voice" ? VOICE_PARTICIPANT_LIMIT_MAX : null);
+      await repository.createChannel(randomUUID(), event.name, event.kind, event.description, participantLimit);
       await broadcastSnapshots();
       return;
     }

@@ -488,6 +488,14 @@ const migrations = [
       $$;
     `,
   },
+  {
+    // Фон плашки в списке участников: отдельное декоративное поле в формате шапки
+    // (WebP 5:2, до 256 КБ). NULL — фон не задан; при анонимизации очищается.
+    id: "032_user_profile_member_background",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS member_background text;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

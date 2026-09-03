@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelDialog, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
@@ -13,7 +13,7 @@ function readyState(): PersistedClientState {
   const state: PersistedClientState = {
     ...createDefaultState(),
     onboardingComplete: true,
-    profile: { id: "local-user", username: "lina", discriminator: "1234", bio: "", avatar: null, banner: null, createdAt: new Date().toISOString() },
+    profile: { id: "local-user", username: "lina", discriminator: "1234", bio: "", avatar: null, banner: null, memberBackground: null, createdAt: new Date().toISOString() },
   };
   state.servers = [{
     id: "test-server",
@@ -438,6 +438,25 @@ describe("ClientApp", () => {
     expect(order).toEqual(["Открыть профиль lina", "Открыть профиль Админ", "Открыть профиль Обычный"]);
   });
 
+  it("shows the member list background behind the member row", async () => {
+    const state = readyState();
+    state.profile!.memberBackground = "data:image/webp;base64,AA==";
+    state.servers[0]!.members = [
+      { id: "member-1", username: "Обычный", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", memberBackground: "data:image/webp;base64,AQ==" },
+      { id: "member-2", username: "БезФона", bio: "", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff" },
+    ];
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const memberList = screen.getByRole("heading", { name: /Участники — 3/u }).closest("aside");
+    expect(memberList).not.toBeNull();
+    const backgrounds = within(memberList!).getAllByTestId("member-background");
+    expect(backgrounds).toHaveLength(2);
+    expect(backgrounds[0]).toHaveAttribute("src", "data:image/webp;base64,AA==");
+    expect(backgrounds[1]).toHaveAttribute("src", "data:image/webp;base64,AQ==");
+  });
+
   it("formats the remaining mute time", () => {
     expect(formatMuteRemaining(5 * 60_000)).toBe("5:00");
     expect(formatMuteRemaining(90_000)).toBe("1:30");
@@ -528,6 +547,58 @@ describe("ClientApp", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
+  it("records a voice message and sends it through onVoiceFile", async () => {
+    class FakeMediaRecorder {
+      static isTypeSupported(): boolean { return true; }
+      ondataavailable: ((event: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      readonly mimeType: string;
+      constructor(public stream: unknown, options?: { mimeType?: string }) {
+        this.mimeType = options?.mimeType ?? "";
+      }
+      start(): void { /* recording */ }
+      stop(): void {
+        this.ondataavailable?.({ data: new Blob(["voice"], { type: this.mimeType }) });
+        this.onstop?.();
+      }
+    }
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    const hadMediaDevices = "mediaDevices" in navigator;
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [{ stop: vi.fn() }] }) } });
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:voice-message") as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+    try {
+      const user = userEvent.setup();
+      const onVoiceFile = vi.fn();
+      render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onVoiceFile={onVoiceFile} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} />);
+
+      await user.click(screen.getByRole("button", { name: "Записать голосовое сообщение" }));
+      expect(await screen.findByRole("status", { name: "Идёт запись…" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Остановить запись" }));
+      expect(await screen.findByRole("button", { name: "Отправить голосовое" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Отправить голосовое" }));
+      expect(onVoiceFile).toHaveBeenCalledOnce();
+      const file = onVoiceFile.mock.calls[0]?.[0] as File;
+      expect(file).toBeInstanceOf(File);
+      expect(file.name).toMatch(/^voice-message-\d{8}-\d{6}\.webm$/u);
+    } finally {
+      if (hadMediaDevices) Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+      else delete (navigator as { mediaDevices?: unknown }).mediaDevices;
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+    }
+  });
+
+  it("hides voice recording when MediaRecorder is unavailable", () => {
+    vi.stubGlobal("MediaRecorder", undefined);
+    render(<Composer draft="" channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={vi.fn()} onSubmit={vi.fn()} members={[]} />);
+    expect(screen.queryByRole("button", { name: "Записать голосовое сообщение" })).not.toBeInTheDocument();
+  });
+
   it("opens an image attachment in the media viewer", async () => {
     const user = userEvent.setup();
     let activeFullscreenElement: Element | null = null;
@@ -566,6 +637,31 @@ describe("ClientApp", () => {
     await user.click(screen.getByRole("button", { name: "На весь экран: ролик.mp4" }));
 
     expect(requestFullscreen).toHaveBeenCalledOnce();
+  });
+
+  it("renders a styled voice player instead of a file row", async () => {
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "voice-message-20260102-030405.ogg", mimeType: "audio/ogg", sizeBytes: 96 * 1024, sha256: "a".repeat(64) };
+    const onDownload = vi.fn();
+    render(<AttachmentView attachment={attachment} onDownload={onDownload} onPreview={vi.fn(async () => "file:///C:/Temp/opencord-media-previews/voice.ogg")} />);
+
+    expect(await screen.findByRole("button", { name: "Слушать голосовое: Голосовое сообщение: voice-message-20260102-030405.ogg" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Скачать voice-message-20260102-030405.ogg" })).not.toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Голосовое сообщение: voice-message-20260102-030405.ogg" })).toBeInTheDocument();
+    expect(screen.getByText("96.0 КБ")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Скачать: voice-message-20260102-030405.ogg" }));
+    expect(onDownload).toHaveBeenCalledOnce();
+  });
+
+  it("renders a plain mp3 file as a download row, not a voice message", () => {
+    const attachment = { id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", fileName: "song.mp3", mimeType: "audio/mpeg", sizeBytes: 4 * 1024 * 1024, sha256: "a".repeat(64) };
+    const onDownload = vi.fn();
+    render(<AttachmentView attachment={attachment} onDownload={onDownload} onPreview={vi.fn(async () => "file:///C:/Temp/song.mp3")} />);
+
+    expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+    expect(screen.getByText("song.mp3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "song.mp34.0 МБ" }));
+    expect(onDownload).toHaveBeenCalledOnce();
   });
 
   it("defers heavy media previews until their message is near the viewport", async () => {
@@ -662,7 +758,7 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null, slowmodeSeconds: 0 }],
-      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null, nameFont: "none" }],
+      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", memberBackground: "data:image/webp;base64,Ag==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null, nameFont: "none" }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
@@ -680,6 +776,7 @@ describe("ClientApp", () => {
       serverRole: "administrator",
       avatar: "data:image/webp;base64,AA==",
       banner: "data:image/webp;base64,AQ==",
+      memberBackground: "data:image/webp;base64,Ag==",
     });
   });
 
@@ -697,8 +794,8 @@ describe("ClientApp", () => {
       channels: state.servers[0]!.channels.map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
       // Тег 4242 уже занят другой идентичностью, поэтому сервер выдал локальному профилю свой.
       members: [
-        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, status: "online", role: "member", chatMuted: false, chatMutedUntil: null, nameFont: "none" },
-        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, status: "online", role: "owner", chatMuted: false, chatMutedUntil: null, nameFont: "none" },
+        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "member", chatMuted: false, chatMutedUntil: null, nameFont: "none" },
+        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "owner", chatMuted: false, chatMutedUntil: null, nameFont: "none" },
       ],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -767,6 +864,18 @@ describe("ClientApp", () => {
     rerender(<VoiceParticipantRow participant={{ ...participant, muted: true, deafened: true }} member={member} profile={profile} currentUserId="local-user" speaking={false} />);
     expect(screen.getByLabelText("Звук и микрофон выключены: Марина")).toBeInTheDocument();
     expect(screen.queryByLabelText("Микрофон выключен: Марина")).not.toBeInTheDocument();
+  });
+
+  it("renders the (you) suffix in the default font next to a customized nickname", () => {
+    const profile = { ...readyState().profile!, nameFont: "pixel" as const, nameGlow: "#34d399" };
+    const participant = { userId: "local-user", channelId: "12959e6f-7ea9-41d9-8be3-f412354d3e95", muted: false, deafened: false, serverMuted: false, viewingScreenShareUserId: null };
+    render(<VoiceParticipantRow participant={participant} member={undefined} profile={profile} currentUserId="local-user" speaking={false} />);
+
+    const trigger = screen.getByRole("button", { name: "Открыть профиль lina" });
+    expect(within(trigger).getByText("lina").getAttribute("style")).toContain("OpenCord Pixel");
+    const suffix = within(trigger).getByText("(вы)", { exact: false });
+    expect(suffix.tagName).toBe("SPAN");
+    expect(suffix.getAttribute("style")).toBeNull();
   });
 
   it("uses the full voice panel control cell as the microphone hitbox", async () => {
@@ -868,6 +977,32 @@ describe("ClientApp", () => {
     expect(screen.getAllByText("∞", { selector: "span" })).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить изменения" }));
     expect(onSave).toHaveBeenCalledWith("Гостиная", "Голосовой канал", 0, 0);
+  });
+
+  it("creates a voice channel with the chosen participant limit", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    render(<ChannelDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
+
+    // Текстовый канал по умолчанию: слайдера лимита нет.
+    expect(screen.queryByRole("slider", { name: "Лимит участников голосового канала" })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Название канала" }), "Гостиная");
+    await user.click(screen.getByRole("button", { name: "Голосовой" }));
+
+    const slider = screen.getByRole("slider", { name: "Лимит участников голосового канала" });
+    expect(slider).toHaveValue("25");
+    fireEvent.change(slider, { target: { value: "7" } });
+    await user.click(screen.getByRole("button", { name: "Создать канал" }));
+    expect(onCreate).toHaveBeenCalledWith("Гостиная", "voice", "", 7);
+  });
+
+  it("creates a text channel without a participant limit", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    render(<ChannelDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
+    await user.type(screen.getByRole("textbox", { name: "Название канала" }), "новости");
+    await user.click(screen.getByRole("button", { name: "Создать канал" }));
+    expect(onCreate).toHaveBeenCalledWith("новости", "text", "", null);
   });
 
   it("offers a slowmode picker for a text channel only", async () => {
@@ -1025,6 +1160,17 @@ describe("ClientApp", () => {
     const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-gone>!", createdAt: new Date().toISOString(), mentions: ["user-gone"] };
     render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
     expect(screen.getByText("@Неизвестный пользователь")).toBeInTheDocument();
+  });
+
+  it("keeps message text selectable while mention chips keep their theme hook", () => {
+    const member = { id: "user-mark", username: "mark", discriminator: "5678", fingerprint: "abcd-ef01-2345-6789", bio: "Про упоминания", role: "Участник", serverRole: "member" as const, status: "online" as const, avatarColor: "#7c5cff", avatar: null };
+    const message = { id: "mention-message", channelId: "welcome", authorId: "local-user", authorName: "Лина", authorColor: "#4d6bfe", content: "Привет <@user-mark>!", createdAt: new Date().toISOString(), mentions: ["user-mark"] };
+    const { container } = render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
+
+    // Текст сообщения выделяется (остальной UI — нет, см. user-select в globals.css).
+    expect(container.querySelector("p.whitespace-pre-wrap")).toHaveClass("select-text", "cursor-text");
+    // Чип упоминания несёт text-blue-200: в светлой теме CSS красит его в чёрный.
+    expect(screen.getByRole("button", { name: "Упоминание: mark" })).toHaveClass("text-blue-200");
   });
 
   it("suggests members after @ in the composer and inserts the chosen tag", async () => {

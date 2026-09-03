@@ -440,6 +440,13 @@
   color: #fff;
 }
 
+/* Упоминания в чате: в светлой теме текст чёрный. Синяя палитра используется
+   только упоминаниями (bg-чип оставляем — на светлом он читается), поэтому
+   правило безопасно. */
+:root[data-appearance="light"] :is(.text-blue-200, .text-blue-200\/80) {
+  color: #14171d;
+}
+
 /* Стекло, скроллбар и выделение на светлом: тёмные бордеры/трек, тёмный текст. */
 :root[data-appearance="light"] .glass {
   border-color: rgb(20 24 32 / .09);
@@ -474,6 +481,14 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  /* UI-текст не выделяется при обычных кликах: выделяются только текст сообщений
+     (утилита select-text на контейнере) и поля ввода (нативные, им правило не мешает). */
+  -webkit-user-select: none;
+  user-select: none;
+}
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* Шрифты ников: woff2 заинлайнены как data-URI (абсолютные /fonts/... ломаются на

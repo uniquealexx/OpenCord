@@ -12,13 +12,14 @@ import { attachmentSchema, type Attachment } from "@opencord/shared";
 const MAX_INLINE_PREVIEW_BYTES = 10 * 1024 * 1024;
 const IMAGE_PREVIEW_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const VIDEO_PREVIEW_EXTENSIONS = new Map<string, string>([["video/mp4", ".mp4"], ["video/webm", ".webm"], ["video/ogg", ".ogv"]]);
-const pendingVideoPreviews = new Map<string, Promise<void>>();
+const AUDIO_PREVIEW_EXTENSIONS = new Map<string, string>([["audio/mpeg", ".mp3"], ["audio/ogg", ".ogg"], ["audio/webm", ".webm"], ["audio/mp4", ".m4a"], ["audio/wav", ".wav"]]);
+const pendingMediaPreviews = new Map<string, Promise<void>>();
 export const HEAVY_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export const ATTACHMENT_RATE_BYTES_PER_SECOND = 8 * 1024 * 1024;
 export const VOICE_ATTACHMENT_RATE_BYTES_PER_SECOND = 2 * 1024 * 1024;
 let attachmentLatencySensitive = false;
 
-export interface AttachmentTransferOptions { latencySensitive?: boolean; /** Имя файла, отличное от basename пути (загрузка из буфера через временный файл). */ fileName?: string }
+export interface AttachmentTransferOptions { latencySensitive?: boolean; /** Имя файла, отличное от basename пути (загрузка из буфера через временный файл). */ fileName?: string; /** Явный MIME-тип (у пути из буфера нет надёжного расширения). */ mimeType?: string }
 
 export function attachmentTransferRate(sizeBytes: number, latencySensitive = false): number | null {
   if (sizeBytes < HEAVY_ATTACHMENT_BYTES) return null;
@@ -78,7 +79,7 @@ export async function uploadAttachment(filePath: string, serverAddress: string, 
       "content-type": "application/octet-stream",
       "content-length": String(info.size),
       "x-opencord-file-name": Buffer.from(options.fileName ?? path.basename(filePath), "utf8").toString("base64url"),
-      "x-opencord-mime-type": mimeTypeFor(options.fileName ?? filePath),
+      "x-opencord-mime-type": resolveMimeType(options.mimeType, options.fileName ?? filePath),
     });
     const responsePromise = response;
     if (bytesPerSecond === null) await pipeline(createReadStream(filePath), outgoing);
@@ -130,14 +131,14 @@ export async function downloadAttachment(serverAddress: string, sessionToken: st
 }
 
 export async function previewAttachment(serverAddress: string, sessionToken: string, attachment: Attachment, videoPreviewDirectory?: string, options: AttachmentTransferOptions = {}): Promise<string> {
-  const videoExtension = VIDEO_PREVIEW_EXTENSIONS.get(attachment.mimeType);
-  if (videoExtension) {
-    if (!videoPreviewDirectory) throw new Error("Каталог предпросмотра видео не настроен");
-    const target = path.join(videoPreviewDirectory, `${attachment.sha256}${videoExtension}`);
-    let pending = pendingVideoPreviews.get(target);
+  const mediaExtension = VIDEO_PREVIEW_EXTENSIONS.get(attachment.mimeType) ?? AUDIO_PREVIEW_EXTENSIONS.get(attachment.mimeType);
+  if (mediaExtension) {
+    if (!videoPreviewDirectory) throw new Error("Каталог предпросмотра медиа не настроен");
+    const target = path.join(videoPreviewDirectory, `${attachment.sha256}${mediaExtension}`);
+    let pending = pendingMediaPreviews.get(target);
     if (!pending) {
-      pending = ensureCachedVideo(serverAddress, sessionToken, attachment, target, options).finally(() => pendingVideoPreviews.delete(target));
-      pendingVideoPreviews.set(target, pending);
+      pending = ensureCachedMedia(serverAddress, sessionToken, attachment, target, options).finally(() => pendingMediaPreviews.delete(target));
+      pendingMediaPreviews.set(target, pending);
     }
     await pending;
     return pathToFileURL(target).toString();
@@ -164,7 +165,7 @@ export async function prepareAttachmentPreviewDirectory(parentDirectory: string)
   return directory;
 }
 
-async function ensureCachedVideo(serverAddress: string, sessionToken: string, attachment: Attachment, target: string, options: AttachmentTransferOptions): Promise<void> {
+async function ensureCachedMedia(serverAddress: string, sessionToken: string, attachment: Attachment, target: string, options: AttachmentTransferOptions): Promise<void> {
   try {
     const existing = await stat(target);
     if (existing.isFile() && existing.size === attachment.sizeBytes) return;
@@ -230,10 +231,19 @@ function serverError(statusCode: number | undefined, payload: string): string {
   return `Сервер отклонил операцию с файлом (${statusCode ?? 0})`;
 }
 
+function resolveMimeType(explicit: string | undefined, filePath: string): string {
+  // MediaRecorder отдаёт тип с параметрами ("audio/webm;codecs=opus") — сервер такую
+  // строку не примет, поэтому параметры отрезаем, а базу валидируем как обычно.
+  const base = typeof explicit === "string" ? explicit.split(";")[0]?.trim().toLowerCase() ?? "" : "";
+  if (/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(base) && base.length <= 100) return base;
+  return mimeTypeFor(filePath);
+}
+
 function mimeTypeFor(filePath: string): string {
   return ({
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
     ".pdf": "application/pdf", ".txt": "text/plain", ".json": "application/json", ".zip": "application/zip",
-    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".mp4": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg",
+    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".m4a": "audio/mp4", ".wav": "audio/wav",
+    ".mp4": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg",
   } as Record<string, string>)[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }

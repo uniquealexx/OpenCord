@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 39 as const;
+export const PROTOCOL_VERSION = 41 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -112,6 +112,9 @@ const USER_BANNER_MAX_DATA_URL_LENGTH = Math.ceil(USER_BANNER_MAX_BYTES / 3) * 4
 export const userBannerSchema = z.string().max(USER_BANNER_MAX_DATA_URL_LENGTH).regex(/^data:image\/webp;base64,[A-Za-z0-9+/]+=*$/u).nullable();
 // Обложка сервера: тот же формат, что и у шапки профиля — WebP 5:2, до 256 КБ.
 export const serverBannerSchema = userBannerSchema;
+// Фон плашки в списке участников: тот же формат, что и у шапки — WebP 5:2, до 256 КБ.
+// Отдельное поле, чтобы шапка карточки и фон строки настраивались независимо.
+export const userMemberBackgroundSchema = userBannerSchema;
 
 export const userStatusSchema = z.enum(["online", "idle", "dnd", "invisible"]);
 export const publicMemberStatusSchema = z.enum(["online", "idle", "dnd", "offline"]);
@@ -137,6 +140,7 @@ export const publicProfileSchema = z.object({
   bio: z.string().trim().max(160).default(""),
   avatar: userAvatarSchema.default(null),
   banner: userBannerSchema.default(null),
+  memberBackground: userMemberBackgroundSchema.default(null),
   status: userStatusSchema.default("online"),
   customStatus: z.string().trim().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: customStatusEmojiSchema.optional(),
@@ -180,6 +184,7 @@ export const memberSchema = z.object({
   bio: z.string().max(160),
   avatar: userAvatarSchema,
   banner: userBannerSchema,
+  memberBackground: userMemberBackgroundSchema.default(null),
   status: publicMemberStatusSchema,
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: customStatusEmojiSchema.optional(),
@@ -322,7 +327,9 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.react"), requestId: requestIdSchema, messageId: z.string().uuid(), emoji: reactionEmojiSchema }),
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
-  z.object({ type: z.literal("channel.create"), requestId: requestIdSchema, name: z.string().trim().min(1).max(48), kind: z.enum(["text", "voice"]), description: z.string().trim().max(120).default("") }),
+  // participantLimit опционален ради старых клиентов: отсутствует — сервер ставит
+  // лимит по умолчанию (25 для голосовых, null для текстовых).
+  z.object({ type: z.literal("channel.create"), requestId: requestIdSchema, name: z.string().trim().min(1).max(48), kind: z.enum(["text", "voice"]), description: z.string().trim().max(120).default(""), participantLimit: voiceParticipantLimitSchema.nullable().default(null) }),
   z.object({ type: z.literal("channel.update"), requestId: requestIdSchema, channelId: z.string().uuid(), name: z.string().trim().min(1).max(48), description: z.string().trim().max(120).default(""), participantLimit: voiceParticipantLimitSchema.nullable(), slowmodeSeconds: slowmodeSecondsSchema.default(0) }),
   z.object({ type: z.literal("channel.delete"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   // Массовая настройка: один медленный режим сразу на выбранные текстовые каналы.

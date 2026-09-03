@@ -4,7 +4,7 @@ import { DEFAULT_SERVER_ID } from "./migrations";
 
 interface ServerRow extends QueryRow { id: string; name: string; description: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null; slowmode_seconds?: number | null }
-interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; custom_status: string; custom_status_emoji: string | null; accent_color: string | null; name_glow: string | null; name_font: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
+interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; member_background: string | null; custom_status: string; custom_status_emoji: string | null; accent_color: string | null; name_glow: string | null; name_font: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null }
 interface BannedUserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; banned_at: Date | string; banned_by: string; expires_at: Date | string | null }
 interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null }
 interface MentionRow extends QueryRow { message_id: string; user_id: string }
@@ -68,12 +68,12 @@ export class ChatRepository {
     return row ? mapChannel(row) : null;
   }
 
-  async createChannel(id: string, name: string, kind: Channel["kind"], description: string): Promise<Channel> {
+  async createChannel(id: string, name: string, kind: Channel["kind"], description: string, participantLimit: number | null): Promise<Channel> {
     const rows = await this.database.query<ChannelRow>(
       `INSERT INTO channels (id, server_id, name, kind, description, participant_limit, position)
-       VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'voice' THEN 25 ELSE NULL END, COALESCE((SELECT MAX(position) + 1 FROM channels WHERE server_id = $2), 0))
+       VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'voice' THEN $6::integer ELSE NULL END, COALESCE((SELECT MAX(position) + 1 FROM channels WHERE server_id = $2), 0))
        RETURNING id, name, kind, description, participant_limit, slowmode_seconds`,
-      [id, DEFAULT_SERVER_ID, name, kind, description],
+      [id, DEFAULT_SERVER_ID, name, kind, description, participantLimit],
     );
     return mapChannel(required(rows[0], "Created channel is missing"));
   }
@@ -125,10 +125,10 @@ export class ChatRepository {
     // display_name — историческая колонка: никнеймов больше нет, поэтому она хранит зеркало username.
     await this.withAllocatedDiscriminator(userId, profile.username, profile.discriminator ?? null, async (discriminator) => {
       await this.database.query(
-        `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, username, discriminator, custom_status, custom_status_emoji, accent_color, name_glow, name_font) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_emoji = EXCLUDED.custom_status_emoji, accent_color = EXCLUDED.accent_color, name_glow = EXCLUDED.name_glow, name_font = EXCLUDED.name_font, updated_at = now()
+        `INSERT INTO users (id, public_key, display_name, bio, avatar, banner, member_background, username, discriminator, custom_status, custom_status_emoji, accent_color, name_glow, name_font) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, banner = EXCLUDED.banner, member_background = EXCLUDED.member_background, username = EXCLUDED.username, discriminator = EXCLUDED.discriminator, custom_status = EXCLUDED.custom_status, custom_status_emoji = EXCLUDED.custom_status_emoji, accent_color = EXCLUDED.accent_color, name_glow = EXCLUDED.name_glow, name_font = EXCLUDED.name_font, updated_at = now()
          WHERE users.public_key = EXCLUDED.public_key`,
-        [userId, publicKey, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? "", profile.accentColor ?? null, profile.nameGlow ?? null, profile.nameFont ?? "none"],
+        [userId, publicKey, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.memberBackground ?? null, profile.username, discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? "", profile.accentColor ?? null, profile.nameGlow ?? null, profile.nameFont ?? "none"],
       );
       return true;
     });
@@ -141,8 +141,8 @@ export class ChatRepository {
     // прислал, за пользователем остаётся уже закреплённый тег.
     const updated = await this.withAllocatedDiscriminator(userId, profile.username, null, async (discriminator) => {
       const rows = await this.database.query<{ id: string }>(
-        "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, username = $6, discriminator = $7, custom_status = $8, custom_status_emoji = $9, accent_color = $10, name_glow = $11, name_font = $12, updated_at = now() WHERE id = $1 RETURNING id",
-        [userId, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.username, discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? "", profile.accentColor ?? null, profile.nameGlow ?? null, profile.nameFont ?? "none"],
+        "UPDATE users SET display_name = $2, bio = $3, avatar = $4, banner = $5, member_background = $6, username = $7, discriminator = $8, custom_status = $9, custom_status_emoji = $10, accent_color = $11, name_glow = $12, name_font = $13, updated_at = now() WHERE id = $1 RETURNING id",
+        [userId, profile.username, profile.bio ?? "", profile.avatar, profile.banner ?? null, profile.memberBackground ?? null, profile.username, discriminator, profile.customStatus ?? "", profile.customStatusEmoji ?? "", profile.accentColor ?? null, profile.nameGlow ?? null, profile.nameFont ?? "none"],
       );
       return rows.length > 0;
     });
@@ -282,8 +282,8 @@ export class ChatRepository {
            AND NOT EXISTS (SELECT 1 FROM server_members sm WHERE sm.server_id = sd.server_id AND sm.user_id = sd.user_id)
          RETURNING sd.user_id
        )
-       UPDATE users SET display_name = 'unknown', bio = '', avatar = NULL, banner = NULL,
-         username = NULL, discriminator = NULL, custom_status = '', custom_status_emoji = '', accent_color = NULL, name_glow = NULL, name_font = 'none', updated_at = now()
+       UPDATE users SET display_name = 'unknown', bio = '', avatar = NULL, banner = NULL, member_background = NULL,
+        username = NULL, discriminator = NULL, custom_status = '', custom_status_emoji = '', accent_color = NULL, name_glow = NULL, name_font = 'none', updated_at = now()
        WHERE id IN (SELECT user_id FROM expired)
        RETURNING id`,
     );
@@ -330,7 +330,7 @@ export class ChatRepository {
 
   async listMembers(statuses: ReadonlyMap<string, PublicMemberStatus>): Promise<Member[]> {
     const users = await this.database.query<UserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_emoji, u.accent_color, u.name_glow, u.name_font, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner, u.member_background, u.custom_status, u.custom_status_emoji, u.accent_color, u.name_glow, u.name_font, sm.role, sm.chat_muted, sm.chat_muted_until FROM server_members sm
        JOIN users u ON u.id = sm.user_id WHERE sm.server_id = $1
        ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.username`,
       [DEFAULT_SERVER_ID],
@@ -340,7 +340,7 @@ export class ChatRepository {
 
   async getMember(userId: string, status: PublicMemberStatus): Promise<Member> {
     const [user] = await this.database.query<UserRow>(
-      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner, u.custom_status, u.custom_status_emoji, u.accent_color, u.name_glow, u.name_font, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
+      `SELECT u.id, u.username, u.discriminator, u.public_key, u.bio, u.avatar, u.banner, u.member_background, u.custom_status, u.custom_status_emoji, u.accent_color, u.name_glow, u.name_font, sm.role, sm.chat_muted, sm.chat_muted_until FROM users u
        JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2 WHERE u.id = $1`,
       [userId, DEFAULT_SERVER_ID],
     );
@@ -753,7 +753,7 @@ async function mapMember(user: UserRow, status: PublicMemberStatus): Promise<Mem
   // Значение из базы обязано входить в enum протокола: мусор от старых записей
   // не должен ломать snapshot, поэтому неизвестное сводится к дефолту.
   const nameFont: NameFont = (NAME_FONT_VALUES as readonly string[]).includes(user.name_font ?? "") ? (user.name_font as NameFont) : "none";
-  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, bio: user.bio, avatar: user.avatar, banner: user.banner, status, customStatus: user.custom_status, customStatusEmoji: user.custom_status_emoji ?? "", accentColor: user.accent_color, nameGlow: user.name_glow, nameFont, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
+  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, bio: user.bio, avatar: user.avatar, banner: user.banner, memberBackground: user.member_background ?? null, status, customStatus: user.custom_status, customStatusEmoji: user.custom_status_emoji ?? "", accentColor: user.accent_color, nameGlow: user.name_glow, nameFont, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null };
 }
 
 function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = [], reactions: MessageReaction[] = []): ChatMessage {

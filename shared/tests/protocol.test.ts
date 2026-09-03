@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMIT_MAX_BYTES, isReactionEmoji, stripBidiControls, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, messageReactionSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, usernameSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, isReactionEmoji, stripBidiControls, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, messageReactionSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, userMemberBackgroundSchema, usernameSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -23,7 +23,10 @@ describe("OpenCord protocol", () => {
   });
 
   it("validates role administration and channel management events", () => {
-    expect(clientEventSchema.parse({ type: "channel.create", requestId: crypto.randomUUID(), name: "новости", kind: "text", description: "Обновления" })).toMatchObject({ type: "channel.create" });
+    expect(clientEventSchema.parse({ type: "channel.create", requestId: crypto.randomUUID(), name: "новости", kind: "text", description: "Обновления" })).toMatchObject({ type: "channel.create", participantLimit: null });
+    expect(clientEventSchema.parse({ type: "channel.create", requestId: crypto.randomUUID(), name: "Гостиная", kind: "voice", description: "", participantLimit: 7 })).toMatchObject({ participantLimit: 7 });
+    expect(clientEventSchema.parse({ type: "channel.create", requestId: crypto.randomUUID(), name: "Гостиная", kind: "voice", description: "", participantLimit: 0 })).toMatchObject({ participantLimit: 0 });
+    expect(() => clientEventSchema.parse({ type: "channel.create", requestId: crypto.randomUUID(), name: "Гостиная", kind: "voice", description: "", participantLimit: 26 })).toThrow();
     const channelId = crypto.randomUUID();
     expect(clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "анонсы", description: "Важное", participantLimit: null })).toMatchObject({ type: "channel.update", channelId });
     expect(clientEventSchema.parse({ type: "channel.update", requestId: crypto.randomUUID(), channelId, name: "Гостиная", description: "", participantLimit: 25 })).toMatchObject({ participantLimit: 25 });
@@ -139,11 +142,21 @@ describe("OpenCord protocol", () => {
 
   it("validates user presence and defaults older profiles to online", () => {
     const base = { username: "lina", discriminator: "1234" } as const;
-    expect(publicProfileSchema.parse({ ...base, avatar: null })).toMatchObject({ status: "online", bio: "", banner: null });
+    expect(publicProfileSchema.parse({ ...base, avatar: null })).toMatchObject({ status: "online", bio: "", banner: null, memberBackground: null });
     expect(publicProfileSchema.parse({ ...base, bio: "  Пишу открытый код  ", avatar: null, status: "invisible" })).toMatchObject({ status: "invisible", bio: "Пишу открытый код" });
     expect(() => publicProfileSchema.parse({ ...base, avatar: null, status: "offline" })).toThrow();
     expect(() => publicProfileSchema.parse({ ...base, bio: "x".repeat(161), avatar: null })).toThrow();
-    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", bio: "Пишу открытый код", avatar: null, banner: "data:image/webp;base64,AA==", status: "dnd", role: "member" } })).toMatchObject({ member: { status: "dnd", bio: "Пишу открытый код", banner: "data:image/webp;base64,AA==" } });
+    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", bio: "Пишу открытый код", avatar: null, banner: "data:image/webp;base64,AA==", status: "dnd", role: "member" } })).toMatchObject({ member: { status: "dnd", bio: "Пишу открытый код", banner: "data:image/webp;base64,AA==", memberBackground: null } });
+  });
+
+  it("validates the member list background in the banner format and defaults it to null", () => {
+    expect(userMemberBackgroundSchema.parse("data:image/webp;base64,AA==")).toBe("data:image/webp;base64,AA==");
+    expect(userMemberBackgroundSchema.parse(null)).toBeNull();
+    expect(() => userMemberBackgroundSchema.parse("data:image/png;base64,AA==")).toThrow();
+    const base = { username: "lina", discriminator: "1234", avatar: null } as const;
+    expect(publicProfileSchema.parse({ ...base, memberBackground: "data:image/webp;base64,AA==" })).toMatchObject({ memberBackground: "data:image/webp;base64,AA==" });
+    expect(() => publicProfileSchema.parse({ ...base, memberBackground: "data:image/png;base64,AA==" })).toThrow();
+    expect(serverEventSchema.parse({ type: "member.updated", member: { id: "member", username: "lina", discriminator: "1234", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: "data:image/webp;base64,AA==", status: "online", role: "member" } })).toMatchObject({ member: { memberBackground: "data:image/webp;base64,AA==" } });
   });
 
   it("validates custom status text, emoji and server description", () => {

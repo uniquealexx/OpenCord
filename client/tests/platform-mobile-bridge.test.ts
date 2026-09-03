@@ -244,6 +244,16 @@ describe("mobile platform bridge", () => {
       await expect(bridge.attachments.selectAndUpload(uploadContext)).rejects.toThrow(/FILE_TOO_LARGE/u);
     });
 
+    it("sends recorder output as audio even with a video-like extension", async () => {
+      mocks.httpPost.mockResolvedValue({ status: 201, data: uploadResponse });
+      const bridge = createMobileBridge();
+      const voice = new File([new Uint8Array([1, 2, 3])], "voice-message-20260102-030405.webm", { type: "audio/webm;codecs=opus" });
+      await bridge.attachments.uploadFile(uploadContext, voice);
+
+      const request = mocks.httpPost.mock.calls[0]![0] as { headers: Record<string, string> };
+      expect(request.headers["x-opencord-mime-type"]).toBe("audio/webm");
+    });
+
     it("returns an image preview as a verified data URL", async () => {
       const content = new Uint8Array([1, 2, 3, 4]);
       const base64 = Buffer.from(content).toString("base64");
@@ -253,6 +263,17 @@ describe("mobile platform bridge", () => {
       const result = await bridge.attachments.preview({ serverAddress: TEST_SERVER, sessionToken: TEST_TOKEN, attachment: attachment(), latencySensitive: false });
       expect(result).toBe(`data:image/png;base64,${base64}`);
       expect((mocks.httpGet.mock.calls[0]![0] as { url: string }).url).toBe(`${TEST_SERVER}/api/attachments/${TEST_ATTACHMENT_ID}`);
+    });
+
+    it("returns an audio preview as a verified data URL", async () => {
+      const content = new Uint8Array([1, 2, 3, 4]);
+      const base64 = Buffer.from(content).toString("base64");
+      mocks.httpGet.mockResolvedValue({ status: 200, headers: {}, data: base64 });
+
+      const bridge = createMobileBridge();
+      const voice = attachment({ mimeType: "audio/ogg", fileName: "voice-message-20260102-030405.ogg", sizeBytes: content.length });
+      const result = await bridge.attachments.preview({ serverAddress: TEST_SERVER, sessionToken: TEST_TOKEN, attachment: voice, latencySensitive: false });
+      expect(result).toBe(`data:audio/ogg;base64,${base64}`);
     });
 
     it("rejects previews with a mismatched checksum", async () => {

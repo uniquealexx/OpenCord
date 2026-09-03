@@ -6,11 +6,12 @@ import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DE
 BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
 PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type
 UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Square, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { ReactionPalette } from "@/components/reaction-palette";
+import { VoicePlayer, formatVoiceSeconds, isVoiceMessage } from "@/components/voice-player";
 import { Onboarding } from "@/components/onboarding";
 import { ProfileDialog } from "@/components/profile-dialog";
 import { ProfilePreview } from "@/components/profile-preview";
@@ -29,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { useMobileLayout } from "@/hooks/use-mobile-layout";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
 import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization, type VoiceSessionStatus } from "@/hooks/use-voice-session";
+import { useVoiceRecorder, voiceFileName, type VoiceRecorderError } from "@/hooks/use-voice-recorder";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { nicknameStyle } from "@/lib/name-font";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
@@ -262,6 +264,7 @@ export function ClientApp(): React.ReactElement {
                       avatarColor: colorFromId(member.id),
                       avatar: member.avatar,
                       banner: member.banner,
+                      memberBackground: member.memberBackground ?? null,
                       chatMuted: member.chatMuted,
                       chatMutedUntil: member.chatMutedUntil,
                     },
@@ -924,6 +927,7 @@ export function ClientApp(): React.ReactElement {
         bio: profile.bio,
         avatar: profile.avatar,
         banner: profile.banner,
+        memberBackground: profile.memberBackground ?? null,
         status: profile.status ?? "online",
         customStatus: profile.customStatus ?? "",
         customStatusEmoji: profile.customStatusEmoji ?? "",
@@ -1233,8 +1237,8 @@ export function ClientApp(): React.ReactElement {
     });
   }
 
-  function createServerChannel(name: string, kind: "text" | "voice", description: string): void {
-    if (!connection.createChannel(name, kind, description)) {
+  function createServerChannel(name: string, kind: "text" | "voice", description: string, participantLimit: number | null): void {
+    if (!connection.createChannel(name, kind, description, participantLimit)) {
       setNotice(t.notices.channelCreateNotReady);
       return;
     }
@@ -1596,7 +1600,7 @@ export function ClientApp(): React.ReactElement {
                     <ChannelIntro name={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
                     {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} replyToMessage={message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : undefined} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} privateStackPosition={privateMessageStackPosition(messages, index)} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} onToggleReaction={connection.toggleReaction} onReply={(target) => setReplyingToId(target.id)} canReact={Boolean(activeServer.address && connection.status === "connected")} />) : <p className="py-8 text-center text-sm text-slate-600">{t.chat.empty}</p>}
                   </div>
-                  <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} replyingTo={replyingTo} onCancelReply={() => setReplyingToId(null)} onAttach={() => void attachFile()} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} chatMutedUntil={selfChatMutedUntil} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
+                  <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} maxAttachmentBytes={activeServer.maxAttachmentBytes ?? null} replyingTo={replyingTo} onCancelReply={() => setReplyingToId(null)} onAttach={() => void attachFile()} onVoiceFile={(file) => void uploadPastedFiles([file])} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} chatMutedUntil={selfChatMutedUntil} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
                 </div>
                 {!mobile && state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} />}
               </div>
@@ -2066,9 +2070,9 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
       }}
     >
       <Avatar name={memberName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-sidebar shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
-      <span className="min-w-0 flex-1 truncate" style={nicknameStyle(font, glow)}>
-        {memberName}
-        {isCurrentUser && ` ${t.voice.youSuffix}`}
+      <span className="min-w-0 flex-1 truncate">
+        <span style={nicknameStyle(font, glow)}>{memberName}</span>
+        {isCurrentUser && <span>{` ${t.voice.youSuffix}`}</span>}
       </span>
       {sharing && (
         <span
@@ -2363,9 +2367,9 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                           triggerClassName="flex max-w-full flex-col items-center rounded-lg px-2 py-1 outline-none transition hover:bg-white/[.035] focus-visible:ring-2 focus-visible:ring-violet-400/70"
                         >
                           <Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="lg" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-panel")} />
-                          <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100" style={nicknameStyle(participantData.nameFont, participantData.nameGlow)}>
-                            {participantData.name}
-                            {participant.userId === currentUserId && ` ${t.voice.youSuffix}`}
+                          <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100">
+                            <span style={nicknameStyle(participantData.nameFont, participantData.nameGlow)}>{participantData.name}</span>
+                            {participant.userId === currentUserId && <span>{` ${t.voice.youSuffix}`}</span>}
                           </span>
                           <span className={cn("mt-1 text-[10px] font-medium", speaking ? "text-emerald-300" : locallyMuted || participant.serverMuted ? "text-red-300" : "text-slate-600")}>{participant.serverMuted ? t.voice.mutedByAdmin : locallyMuted ? t.voice.mutedForYou : speaking ? t.voice.speaking : participant.deafened ? t.voice.soundOff : participant.muted ? t.voice.micMuted : t.voice.inVoice}</span>
                         </ProfilePreview>
@@ -2495,19 +2499,22 @@ function VoicePanel({ mobile = false, channel, status, muted, serverMuted, deafe
   );
 }
 
-function ChannelDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenChange: (open: boolean) => void; onCreate: (name: string, kind: "text" | "voice", description: string) => void }): React.ReactElement {
+export function ChannelDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenChange: (open: boolean) => void; onCreate: (name: string, kind: "text" | "voice", description: string, participantLimit: number | null) => void }): React.ReactElement {
   const { t } = useI18n();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [kind, setKind] = useState<"text" | "voice">("text");
+  const [participantLimitStep, setParticipantLimitStep] = useState(VOICE_PARTICIPANT_LIMIT_MAX);
   function submit(event: React.FormEvent): void {
     event.preventDefault();
     if (!name.trim()) return;
-    onCreate(name.trim(), kind, description.trim());
+    onCreate(name.trim(), kind, description.trim(), kind === "voice" ? (participantLimitStep > VOICE_PARTICIPANT_LIMIT_MAX ? 0 : participantLimitStep) : null);
     setName("");
     setDescription("");
     setKind("text");
+    setParticipantLimitStep(VOICE_PARTICIPANT_LIMIT_MAX);
   }
+  const participantLimitLabel = participantLimitStep > VOICE_PARTICIPANT_LIMIT_MAX ? "∞" : String(participantLimitStep);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -2533,6 +2540,23 @@ function ChannelDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpen
               {t.channel.voiceKind}
             </button>
           </div>
+          {kind === "voice" && (
+            <div className="rounded-xl border border-white/8 bg-black/15 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-300">{t.channel.participantLimit}</p>
+                  <p className="mt-1 text-xs text-slate-500">{t.channel.participantLimitHint}</p>
+                </div>
+                <span className="grid min-w-11 place-items-center rounded-lg bg-violet-400/10 px-3 py-2 text-base font-bold text-violet-200">{participantLimitLabel}</span>
+              </div>
+              <input aria-label={t.channel.participantLimitAria} type="range" min={1} max={VOICE_PARTICIPANT_LIMIT_MAX + 1} step={1} value={participantLimitStep} onChange={(event) => setParticipantLimitStep(Number(event.target.value))} className="voice-limit-slider h-2 w-full cursor-pointer appearance-none rounded-full bg-white/15" />
+              <div className="mt-2 flex justify-between text-[10px] text-slate-600">
+                <span>{t.channel.oneSeat}</span>
+                <span>25</span>
+                <span>∞</span>
+              </div>
+            </div>
+          )}
           <Button type="submit" className="w-full">
             <Plus className="size-4" />
             {t.channel.createSubmit}
@@ -3379,7 +3403,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
           <>
             {message.kind && message.kind !== "chat" && <p className="mb-0.5 text-[9px] font-bold uppercase tracking-[.14em] text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</p>}
             {message.content && (
-              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
+              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 select-text cursor-text">
                 {splitMessageContent(message.content).map((segment, index) => (segment.kind === "text" ? <span key={index}>{segment.text}</span> : <MessageMention key={index} userId={segment.userId} mentioned={Boolean(message.mentions?.includes(segment.userId))} members={members} />))}
                 {grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">{t.chat.edited}</span>}
               </p>
@@ -3556,9 +3580,28 @@ function MuteCountdown({ endsAt }: { endsAt: number }): React.ReactElement {
   return <>{t.chat.mutedFor(formatMuteRemaining(endsAt - now))}</>;
 }
 
-export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, replyingTo, onCancelReply, onAttach, onRemoveAttachment, onDraft, onSubmit, members, chatMuted = false, chatMutedUntil = null, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; replyingTo?: MockMessage | null; onCancelReply?: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; chatMutedUntil?: string | null; canModerateChat?: boolean }): React.ReactElement {
+function voiceErrorText(error: VoiceRecorderError, t: Dictionary): string {
+  if (error === "denied") return t.chat.micDenied;
+  if (error === "unavailable") return t.chat.micUnavailable;
+  if (error === "too-large") return t.chat.voiceTooLarge;
+  return t.notices.uploadFailed;
+}
+
+export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, maxAttachmentBytes = null, replyingTo, onCancelReply, onAttach, onVoiceFile, onRemoveAttachment, onDraft, onSubmit, members, chatMuted = false, chatMutedUntil = null, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; maxAttachmentBytes?: number | null; replyingTo?: MockMessage | null; onCancelReply?: () => void; onAttach: () => void; onVoiceFile?: (file: File) => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; chatMutedUntil?: string | null; canModerateChat?: boolean }): React.ReactElement {
   const { t } = useI18n();
   const effectiveAttachmentLimitLabel = attachmentLimitLabel ?? t.attachments.mb("10");
+  const voiceMaxSeconds = isMobilePlatform() ? 120 : 300;
+  const voice = useVoiceRecorder({ maxSeconds: voiceMaxSeconds, maxBytes: maxAttachmentBytes });
+  const voiceBlob = voice.status === "ready" ? voice.audio?.blob ?? null : null;
+  const voiceUrl = useMemo(() => (voiceBlob ? URL.createObjectURL(voiceBlob) : null), [voiceBlob]);
+  useEffect(() => () => {
+    if (voiceUrl) URL.revokeObjectURL(voiceUrl);
+  }, [voiceUrl]);
+  function sendVoiceMessage(): void {
+    if (!voice.audio || composerDisabled || uploading || !canAttach || attachments.length >= 5) return;
+    onVoiceFile?.(new File([voice.audio.blob], voiceFileName(voice.audio.mimeType), { type: voice.audio.mimeType }));
+    voice.reset();
+  }
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (replyingTo) inputRef.current?.focus();
@@ -3866,12 +3909,50 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
           <span>{muteEndsAt === null ? t.chat.mutedIndefinitely : <MuteCountdown key={chatMutedUntil} endsAt={muteEndsAt} />}</span>
         </div>
       )}
+      {voice.error && (
+        <p role="alert" className="mb-2 text-xs font-medium text-red-300">{voiceErrorText(voice.error, t)}</p>
+      )}
+      {voice.status === "ready" && voice.audio && voiceUrl && (
+        <div className="mb-2 flex min-w-0 items-center gap-2.5 rounded-2xl border border-white/8 bg-panel px-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium text-slate-200">{t.chat.voiceReady(formatVoiceSeconds(voice.audio.durationSeconds))}{voice.audio.truncated ? ` · ${t.chat.voiceTruncated(formatVoiceSeconds(voiceMaxSeconds))}` : null}</p>
+            <div className="mt-1">
+              <VoicePlayer key={voiceUrl} src={voiceUrl} label={t.chat.voiceReady(formatVoiceSeconds(voice.audio.durationSeconds))} durationHint={voice.audio.durationSeconds} />
+            </div>
+          </div>
+          <button type="button" title={t.chat.sendVoiceMessage} aria-label={t.chat.sendVoiceMessage} onClick={sendVoiceMessage} disabled={composerDisabled || uploading || !canAttach || attachments.length >= 5} className="grid size-9 shrink-0 place-items-center rounded-lg text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30 max-md:size-10 max-md:bg-violet-500/15">
+            <Send className="size-4 max-md:size-5" />
+          </button>
+          <button type="button" title={t.chat.cancelRecording} aria-label={t.chat.cancelRecording} onClick={() => voice.reset()} className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white/[.06] hover:text-red-300 max-md:size-10">
+            <Trash2 className="size-4 max-md:size-5" />
+          </button>
+        </div>
+      )}
       <div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-panel px-3 shadow-[0_1px_3px_rgba(0,0,0,.3)] focus-within:border-violet-400/40 max-md:min-h-13 max-md:gap-1.5 max-md:px-2", composerDisabled && "opacity-55", muted && "pointer-events-none border-white/[.04] opacity-40 grayscale")}>
         <button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-panel hover:bg-slate-300 disabled:opacity-40 max-md:size-10">
           {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
         </button>
-        <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
+        {voice.status === "recording" ? (
+          <div className="flex h-12 min-w-0 flex-1 items-center gap-2.5" role="status" aria-live="polite" aria-label={t.chat.recordingNow}>
+            <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-red-400" />
+            <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-200">{formatVoiceSeconds(voice.seconds)}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-slate-500">{t.chat.recordingNow}</span>
+            <button type="button" title={t.chat.stopRecording} aria-label={t.chat.stopRecording} onClick={() => voice.stop()} className="grid size-9 shrink-0 place-items-center rounded-lg bg-red-500/15 text-red-300 transition hover:bg-red-500/25 max-md:size-10">
+              <Square className="size-4 max-md:size-5" />
+            </button>
+            <button type="button" title={t.chat.cancelRecording} aria-label={t.chat.cancelRecording} onClick={() => voice.reset()} className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white/[.06] hover:text-red-300 max-md:size-10">
+              <Trash2 className="size-4 max-md:size-5" />
+            </button>
+          </div>
+        ) : (
+          <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
+        )}
         <EmojiPicker disabled={composerDisabled} onSelect={insertEmoji} />
+        {voice.supported && voice.status === "idle" && (
+          <button type="button" title={t.chat.recordVoice} aria-label={t.chat.recordVoice} onClick={() => void voice.start()} disabled={composerDisabled || uploading || !canAttach || attachments.length >= 5} className="grid size-9 shrink-0 place-items-center rounded-lg text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30 max-md:size-10 max-md:bg-violet-500/15">
+            <Mic className="size-4 max-md:size-5" />
+          </button>
+        )}
         <button type="submit" disabled={composerDisabled || uploading || (!draft.trim() && attachments.length === 0)} aria-label={t.chat.send} className="grid size-9 shrink-0 place-items-center rounded-lg text-violet-300 transition hover:bg-violet-400/10 disabled:opacity-30 max-md:size-10 max-md:bg-violet-500/15">
           <Send className="size-4 max-md:size-5" />
         </button>
@@ -3929,7 +4010,8 @@ export function AttachmentView({ attachment, previewAvailable = true, onDownload
   const { t } = useI18n();
   const isImage = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment.mimeType);
   const isVideo = ["video/mp4", "video/webm", "video/ogg"].includes(attachment.mimeType);
-  const previewable = isImage || isVideo;
+  const isAudio = ["audio/mpeg", "audio/ogg", "audio/webm", "audio/mp4", "audio/wav", "audio/x-wav"].includes(attachment.mimeType);
+  const previewable = isImage || isVideo || isAudio;
   const previewKey = `${attachment.id}:${attachment.sha256}`;
   const [previewState, setPreviewState] = useState<{
     key: string;
@@ -4044,6 +4126,29 @@ export function AttachmentView({ attachment, previewAvailable = true, onDownload
         <AttachmentFooter attachment={attachment} onDownload={onDownload} />
       </div>
     );
+  if (isVoiceMessage(attachment) && !previewFailed)
+    return (
+      <div ref={previewContainerRef} className="w-full max-w-72 overflow-hidden rounded-2xl border border-white/8 bg-panel">
+        <div className="px-3 pb-1.5 pt-3">
+          {preview ? (
+            <VoicePlayer key={preview} src={preview} label={t.attachments.audioOf(attachment.fileName)} onError={() => setPreviewState({ key: previewKey, value: null, failed: true })} />
+          ) : (
+            <div className="flex min-w-0 items-center gap-2.5" aria-label={t.attachments.audioOf(attachment.fileName)}>
+              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-violet-400/10 text-violet-300">
+                <LoaderCircle className="size-4 animate-spin" />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs text-slate-500">{formatBytes(attachment.sizeBytes, t)}</span>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-white/8 px-3 py-1.5">
+          <span className="min-w-0 truncate text-[10px] tabular-nums text-slate-600">{formatBytes(attachment.sizeBytes, t)}</span>
+          <button type="button" onClick={() => onDownload(attachment)} title={t.attachments.download} aria-label={`${t.attachments.download}: ${attachment.fileName}`} className="grid size-7 shrink-0 place-items-center rounded-md text-slate-500 transition hover:bg-white/[.06] hover:text-violet-200">
+            <Download className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    );
   return (
     <button type="button" onClick={() => onDownload(attachment)} className="flex min-w-0 max-w-72 items-center gap-2 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-left transition hover:border-violet-400/30 hover:bg-violet-400/5">
       <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-violet-400/10 text-violet-300">
@@ -4105,6 +4210,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
               status: visibleProfileStatus(profile.status),
               avatarColor: "#4d6bfe",
               avatar: profile.avatar,
+              memberBackground: profile.memberBackground ?? null,
             },
             ...server.members,
           ],
@@ -4142,11 +4248,15 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
               const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
               const memberGlow = member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
               const memberFont = member.nameFont ?? (isCurrentUser ? profile.nameFont : undefined);
-              return (                <div key={member.id} className="flex w-full items-center rounded-lg hover:bg-white/[.045]">
+              const rowBackground = member.memberBackground ?? (isCurrentUser ? (profile.memberBackground ?? null) : null);
+              return (                <div key={member.id} className="relative flex w-full items-center overflow-hidden rounded-lg hover:bg-white/[.045]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {rowBackground && <img src={rowBackground} alt="" aria-hidden="true" data-testid="member-background" className="absolute inset-0 size-full object-cover" />}
+                  {rowBackground && <div aria-hidden="true" className="absolute inset-0 bg-black/45" />}
                   <ProfilePreview
                     side="left"
-                    wrapperClassName="min-w-0 flex-1"
-                    triggerClassName="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 max-md:py-2.5"
+                    wrapperClassName="relative min-w-0 flex-1"
+                    triggerClassName={rowBackground ? "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-white/10 max-md:py-2.5" : "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 max-md:py-2.5"}
                     profile={{
                       username: member.username ?? (isCurrentUser ? profile.username : "unknown"),
                       discriminator: member.discriminator ?? (isCurrentUser ? profile.discriminator : undefined),
@@ -4273,6 +4383,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     avatarColor: colorFromId(member.id),
     avatar: member.avatar,
     banner: member.banner,
+    memberBackground: member.memberBackground ?? null,
     chatMuted: member.chatMuted,
     chatMutedUntil: member.chatMutedUntil,
   }));

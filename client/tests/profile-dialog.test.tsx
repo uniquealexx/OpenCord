@@ -11,6 +11,7 @@ const profile: LocalProfile = {
   bio: "",
   avatar: null,
   banner: null,
+  memberBackground: null,
   createdAt: "2026-08-07T00:00:00.000Z",
 };
 
@@ -95,7 +96,7 @@ describe("ProfileDialog status", () => {
     vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 800, height: 600, close: vi.fn() })));
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
     render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
-    const avatarInput = document.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    const avatarInput = document.querySelectorAll<HTMLInputElement>('input[type="file"]')[2];
     expect(avatarInput).toBeDefined();
 
     fireEvent.change(avatarInput!, { target: { files: [new File(["source"], "avatar.png", { type: "image/png" })] } });
@@ -180,11 +181,55 @@ describe("ProfileDialog customization", () => {
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ accentColor: null }));
   });
 
-  it("keeps future customization options as disabled placeholders", () => {
+  it("no longer shows the avatar decoration placeholder", () => {
     render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
 
-    expect(screen.getByText("Декорация аватара")).toBeInTheDocument();
-    expect(screen.getAllByText("Скоро")).toHaveLength(1);
+    expect(screen.queryByText("Декорация аватара")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Добавить фон в списке участников" })).toBeInTheDocument();
+  });
+
+  it("opens a wide crop editor for the member list background and saves it", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 1_200, height: 800, close: vi.fn() })));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => callback(new Blob(["background"], { type: "image/webp" })));
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+    const backgroundInput = document.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    expect(backgroundInput).toBeDefined();
+
+    fireEvent.change(backgroundInput!, { target: { files: [new File(["source"], "background.png", { type: "image/png" })] } });
+    expect(screen.getByRole("heading", { name: "Кадрирование фона списка участников" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Применить" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Кадрирование фона списка участников" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Заменить" })).toBeInTheDocument();
+
+    fireEvent.submit(screen.getByRole("button", { name: "Сохранить профиль" }).closest("form")!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ memberBackground: expect.stringMatching(/^data:image\/webp;base64,/u) }));
+  });
+
+  it("removes the member list background", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={{ ...profile, memberBackground: "data:image/webp;base64,AA==" }} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ memberBackground: null }));
+  });
+
+  it("reopens the crop editor for an installed member list background", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 600, height: 240, close: vi.fn() })));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    render(<ProfileDialog profile={{ ...profile, memberBackground: "data:image/webp;base64,AA==" }} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Кадрировать" }));
+
+    expect(screen.getByRole("heading", { name: "Кадрирование фона списка участников" })).toBeInTheDocument();
   });
 
   it("saves the nickname font selected in the combobox", async () => {

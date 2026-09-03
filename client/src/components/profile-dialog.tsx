@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CUSTOM_STATUS_MAX_LENGTH, userAvatarSchema, userBannerSchema, type NameFont, type UserStatus } from "@opencord/shared";
-import { AtSign, Camera, Check, Copy, Crop, Fingerprint, Frame, ImagePlus, LoaderCircle, Trash2, Type, X } from "lucide-react";
+import { AtSign, Camera, Check, Copy, Crop, Fingerprint, ImagePlus, LoaderCircle, Trash2, Type, X } from "lucide-react";
 import { AccentColorPicker, ColorSwatchPicker } from "@/components/accent-color-picker";
 import { Avatar } from "@/components/avatar";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -22,13 +22,7 @@ import type { LocalProfile } from "@/shared/state";
 
 const emojiFont = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
 
-/**
- * Заготовки будущей кастомизации профиля (аналог подписочных возможностей Discord):
- * UI-плейсхолдеры без передачи данных — в протокол они попадут только при реализации.
- */
-const CUSTOMIZATION_PLACEHOLDERS = [
-  { icon: Frame, labelKey: "avatarDecoration" },
-] as const;
+type ProfileCropKind = "avatar" | "banner" | "memberBackground";
 
 export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile: LocalProfile; open: boolean; onOpenChange: (open: boolean) => void; onSave: (profile: LocalProfile) => void }): React.ReactElement {
   const { t } = useI18n();
@@ -36,6 +30,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
   const [bio, setBio] = useState(profile.bio);
   const [avatar, setAvatar] = useState(profile.avatar);
   const [banner, setBanner] = useState(profile.banner);
+  const [memberBackground, setMemberBackground] = useState(profile.memberBackground ?? null);
   const [status, setStatus] = useState<UserStatus>(profile.status ?? "online");
   const [customStatus, setCustomStatus] = useState(profile.customStatus ?? "");
   const [customStatusEmoji, setCustomStatusEmoji] = useState(profile.customStatusEmoji ?? "");
@@ -49,9 +44,10 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState("");
   const [compressing, setCompressing] = useState(false);
-  const [cropSource, setCropSource] = useState<{ file: File; kind: "avatar" | "banner" } | null>(null);
+  const [cropSource, setCropSource] = useState<{ file: File; kind: ProfileCropKind } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
+  const memberBackgroundInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -80,11 +76,19 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     event.target.value = "";
   }
 
-  function cropExisting(kind: "avatar" | "banner"): void {
-    const image = kind === "avatar" ? avatar : banner;
+  function chooseMemberBackground(event: React.ChangeEvent<HTMLInputElement>): void {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError("");
+    setCropSource({ file, kind: "memberBackground" });
+    event.target.value = "";
+  }
+
+  function cropExisting(kind: ProfileCropKind): void {
+    const image = kind === "avatar" ? avatar : kind === "banner" ? banner : memberBackground;
     if (!image) return;
     setError("");
-    try { setCropSource({ file: imageDataUrlToFile(image, kind === "avatar" ? "current-avatar.webp" : "current-banner.webp"), kind }); }
+    try { setCropSource({ file: imageDataUrlToFile(image, kind === "avatar" ? "current-avatar.webp" : kind === "banner" ? "current-banner.webp" : "current-member-background.webp"), kind }); }
     catch (nextError) { setError(nextError instanceof Error ? nextError.message : t.profile.openFailed); }
   }
 
@@ -93,7 +97,8 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     setCompressing(true); setError("");
     try {
       if (cropSource.kind === "avatar") setAvatar(await compressUserAvatar(cropSource.file, crop));
-      else setBanner(await compressUserBanner(cropSource.file, crop));
+      else if (cropSource.kind === "banner") setBanner(await compressUserBanner(cropSource.file, crop));
+      else setMemberBackground(await compressUserBanner(cropSource.file, crop));
       setCropSource(null);
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : t.profile.processFailed;
@@ -120,7 +125,8 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     try {
       const nextAvatar = avatar && !userAvatarSchema.safeParse(avatar).success ? await compressUserAvatar(await (await fetch(avatar)).blob()) : avatar;
       const nextBanner = banner && !userBannerSchema.safeParse(banner).success ? await compressUserBanner(await (await fetch(banner)).blob()) : banner;
-      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "", accentColor, nameGlow: nameGlowEnabled ? nameGlowColor : null, nameFont });
+      const nextMemberBackground = memberBackground && !userBannerSchema.safeParse(memberBackground).success ? await compressUserBanner(await (await fetch(memberBackground)).blob()) : memberBackground;
+      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, memberBackground: nextMemberBackground, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "", accentColor, nameGlow: nameGlowEnabled ? nameGlowColor : null, nameFont });
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t.profile.avatarFailed);
@@ -144,6 +150,27 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
               </div>
             </div>
             <p className="px-4 py-3 text-xs leading-5 text-slate-500">{t.profile.bannerHint}</p>
+          </div>
+          <div className="overflow-hidden rounded-2xl border border-white/7 bg-white/[.025]">
+            <div className="relative overflow-hidden bg-primary/15">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {memberBackground && <img src={memberBackground} alt="" className="absolute inset-0 size-full object-cover" />}
+              <div className="absolute inset-0 bg-black/45" />
+              <div className="relative flex items-center gap-2.5 px-3 py-2.5">
+                <Avatar name={username || profile.username} image={avatar} size="sm" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-semibold text-white" style={nicknameStyle(nameFont, nameGlowEnabled ? nameGlowColor : undefined)}>{previewName}</span>
+                  <span className="block truncate text-[10px] text-white/70">{t.statuses[status]}</span>
+                </span>
+              </div>
+              <div className="relative flex flex-wrap justify-end gap-2 bg-black/45 p-3">
+                <input ref={memberBackgroundInputRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseMemberBackground(event)} />
+                <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => memberBackgroundInputRef.current?.click()}><ImagePlus className="size-4" />{memberBackground ? t.profile.replace : t.profile.addMemberBackground}</Button>
+                {memberBackground && <Button type="button" variant="secondary" size="sm" disabled={compressing} onClick={() => cropExisting("memberBackground")}><Crop className="size-4" />{t.profile.crop}</Button>}
+                {memberBackground && <Button type="button" variant="danger" size="sm" disabled={compressing} onClick={() => setMemberBackground(null)}><Trash2 className="size-4" />{t.profile.remove}</Button>}
+              </div>
+            </div>
+            <p className="px-4 py-3 text-xs leading-5 text-slate-500">{t.profile.memberBackgroundHint}</p>
           </div>
           <div className="flex items-center gap-4 rounded-2xl border border-white/7 bg-white/[.025] p-4 max-md:flex-col max-md:items-start">
             <Avatar name={username || profile.username} image={avatar} size="xl" />
@@ -227,20 +254,11 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
                 <span className="block truncate text-[10px] text-[color:var(--pv-soft)]">@{previewName}#{profile.discriminator}</span>
               </span>
             </div>
-            <div className="grid gap-1.5 border-t border-white/[.06] pt-3">
-              {CUSTOMIZATION_PLACEHOLDERS.map(({ icon: Icon, labelKey }) => (
-                <div key={labelKey} className="flex items-center gap-2 rounded-lg px-1 py-1 opacity-60" aria-disabled="true">
-                  <Icon className="size-3.5 shrink-0 text-violet-300/70" />
-                  <span className="text-xs text-slate-400">{t.profile[labelKey]}</span>
-                  <span className="ml-auto rounded-full border border-white/10 bg-white/[.04] px-2 py-0.5 text-[10px] font-semibold text-slate-500">{t.profile.comingSoon}</span>
-                </div>
-              ))}
-            </div>
           </fieldset>
           <Button type="submit" className="w-full" disabled={compressing || !usernameValid}>{t.profile.save}</Button>
         </form>
       </DialogContent>
     </Dialog>
-    <ImageCropDialog source={cropSource?.file ?? null} title={cropSource?.kind === "banner" ? t.profile.cropBannerTitle : t.profile.cropAvatarTitle} description={cropSource?.kind === "banner" ? t.profile.cropBannerDescription : t.profile.cropAvatarDescription} aspectRatio={cropSource?.kind === "banner" ? 5 / 2 : 1} rounded={cropSource?.kind !== "banner"} onCancel={() => setCropSource(null)} onApply={applyCrop} />
+    <ImageCropDialog source={cropSource?.file ?? null} title={cropSource?.kind === "banner" ? t.profile.cropBannerTitle : cropSource?.kind === "memberBackground" ? t.profile.cropMemberBackgroundTitle : t.profile.cropAvatarTitle} description={cropSource?.kind === "banner" ? t.profile.cropBannerDescription : cropSource?.kind === "memberBackground" ? t.profile.cropMemberBackgroundDescription : t.profile.cropAvatarDescription} aspectRatio={cropSource?.kind === "avatar" ? 1 : 5 / 2} rounded={cropSource?.kind === "avatar"} onCancel={() => setCropSource(null)} onApply={applyCrop} />
   </>;
 }

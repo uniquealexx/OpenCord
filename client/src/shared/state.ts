@@ -13,6 +13,7 @@ export const localProfileSchema = z.object({
   bio: z.string().max(160),
   avatar: z.string().max(2_000_000).nullable(),
   banner: z.string().max(500_000).nullable().default(null),
+  memberBackground: z.string().max(500_000).nullable().default(null),
   status: userStatusSchema.optional(),
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
@@ -64,6 +65,7 @@ export const mockMemberSchema = z.object({
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   avatar: z.string().max(2_000_000).nullable().optional(),
   banner: z.string().max(500_000).nullable().optional(),
+  memberBackground: z.string().max(500_000).nullable().optional(),
   chatMuted: z.boolean().optional(),
   chatMutedUntil: z.string().datetime().nullable().optional(),
 });

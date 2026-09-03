@@ -408,7 +408,7 @@ function registerIpc(): void {
     const temporaryPath = path.join(app.getPath("temp"), `opencord-clipboard-${randomUUID()}${extension}`);
     try {
       await writeFile(temporaryPath, request.contents, { mode: 0o600 });
-      return await uploadAttachment(temporaryPath, request.context.serverAddress, request.context.sessionToken, request.context.maxAttachmentBytes, { latencySensitive: request.context.latencySensitive, fileName: request.fileName });
+      return await uploadAttachment(temporaryPath, request.context.serverAddress, request.context.sessionToken, request.context.maxAttachmentBytes, { latencySensitive: request.context.latencySensitive, fileName: request.fileName, mimeType: request.mimeType });
     } finally {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
     }

@@ -426,14 +426,15 @@ it("forbids the sender from reacting to their own anonymous private message", as
     expect(await memberJoined).toMatchObject({ member: { id: member.userId, username: usernameFromDisplayName("Участник"), discriminator: "1234", avatar: null } });
     const avatar = "data:image/webp;base64,AA==";
     const banner = "data:image/webp;base64,AQ==";
+    const memberBackground = "data:image/webp;base64,Ag==";
 
     const profileUpdated = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd", accentColor: "#7c3aed", nameGlow: "#34d399", nameFont: "pixel" } }));
-    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd", accentColor: "#7c3aed", nameGlow: "#34d399", nameFont: "pixel" } });
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, memberBackground, status: "dnd", accentColor: "#7c3aed", nameGlow: "#34d399", nameFont: "pixel" } }));
+    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, memberBackground, status: "dnd", accentColor: "#7c3aed", nameGlow: "#34d399", nameFont: "pixel" } });
 
     const becameInvisible = waitForEvent(observer.socket, "member.updated");
     member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "invisible" } }));
-    expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, status: "offline", accentColor: null, nameGlow: null, nameFont: "none" } });
+    expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, memberBackground: null, status: "offline", accentColor: null, nameGlow: null, nameFont: "none" } });
 
     const memberRemoved = waitForEvent(observer.socket, "member.removed");
     const memberClosed = once(member.socket, "close");
@@ -571,6 +572,29 @@ it("forbids the sender from reacting to their own anonymous private message", as
 
     const offlineClientDeletion = await connectToDeletedServer(url);
     expect(offlineClientDeletion.serverId).toBe(owner.snapshot.server.id);
+  }, 15_000);
+
+  it("creates a voice channel with the requested participant limit", async () => {
+    const ownerKeys = generateKeyPairSync("ed25519");
+    const ownerPublicKey = exportPublicKey(ownerKeys.publicKey);
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, bootstrapOwnerPublicKey: ownerPublicKey });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+    const owner = await connectAndAuthenticate(url, "Владелец", ownerKeys);
+
+    const limitedSnapshot = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Тихая", kind: "voice", description: "", participantLimit: 7 }));
+    expect((await limitedSnapshot).server.channels.find((channel) => channel.name === "Тихая")).toMatchObject({ kind: "voice", participantLimit: 7 });
+
+    // Старый клиент без поля получает лимит по умолчанию.
+    const defaultSnapshot = waitForEvent(owner.socket, "server.snapshot");
+    owner.socket.send(JSON.stringify({ type: "channel.create", requestId: randomUUID(), name: "Голос", kind: "voice" }));
+    expect((await defaultSnapshot).server.channels.find((channel) => channel.name === "Голос")).toMatchObject({ kind: "voice", participantLimit: 25 });
+
+    owner.socket.close();
   }, 15_000);
 
   it("blocks a banned identity until an administrator removes the ban", async () => {

@@ -28,7 +28,7 @@ export function Onboarding({ language, onLanguageChange, onComplete }: { languag
       try { nextDiscriminator = (await window.openCord?.identity?.getOrCreate())?.discriminator ?? null; } catch { nextDiscriminator = null; }
     }
     // В браузере без моста идентичности (демо-режим) дискриминатор генерируется локально.
-    onComplete({ id: "local-user", username: username.trim().toLowerCase(), discriminator: nextDiscriminator ?? randomDiscriminator(), bio: bio.trim(), avatar: null, banner: null, createdAt: new Date().toISOString() });
+    onComplete({ id: "local-user", username: username.trim().toLowerCase(), discriminator: nextDiscriminator ?? randomDiscriminator(), bio: bio.trim(), avatar: null, banner: null, memberBackground: null, createdAt: new Date().toISOString() });
   }
 
   return (

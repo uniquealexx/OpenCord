@@ -29,6 +29,7 @@ const STATE_STORAGE_KEY = "opencord.client-state";
 
 const MAX_INLINE_PREVIEW_BYTES = 10 * 1024 * 1024;
 const IMAGE_PREVIEW_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const AUDIO_PREVIEW_TYPES = new Set(["audio/mpeg", "audio/ogg", "audio/webm", "audio/mp4", "audio/wav"]);
 
 interface StoredIdentity {
   publicKey: string;
@@ -269,12 +270,13 @@ async function download(requestInput: AttachmentDownloadRequest): Promise<boolea
 
 async function preview(requestInput: AttachmentDownloadRequest): Promise<string> {
   const request = attachmentDownloadRequestSchema.parse(requestInput);
-  if (!IMAGE_PREVIEW_TYPES.has(request.attachment.mimeType)) {
+  const isAudioPreview = AUDIO_PREVIEW_TYPES.has(request.attachment.mimeType);
+  if (!IMAGE_PREVIEW_TYPES.has(request.attachment.mimeType) && !isAudioPreview) {
     throw new Error(["video/mp4", "video/webm", "video/ogg"].includes(request.attachment.mimeType)
       ? "Предпросмотр видео недоступен в мобильной версии"
       : "Предпросмотр этого типа файла недоступен");
   }
-  if (request.attachment.sizeBytes > MAX_INLINE_PREVIEW_BYTES) throw new Error("Предпросмотр изображений больше 10 МБ недоступен");
+  if (request.attachment.sizeBytes > MAX_INLINE_PREVIEW_BYTES) throw new Error(isAudioPreview ? "Предпросмотр аудио больше 10 МБ недоступен" : "Предпросмотр изображений больше 10 МБ недоступен");
   const response = await CapacitorHttp.get({
     url: attachmentUrl(request.serverAddress, request.attachment.id),
     headers: { authorization: `Bearer ${request.sessionToken}` },
@@ -401,6 +403,11 @@ function bytesToHex(bytes: Uint8Array): string {
 
 function mimeTypeFor(fileName: string, fallbackType: string): string {
   const extension = `.${fileName.split(".").at(-1)?.toLowerCase() ?? ""}`;
+  const fallbackBase = fallbackType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const fallbackValid = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(fallbackBase);
+  // Запись диктофона приходит с расширением контейнера (.webm) и типом audio/*:
+  // доверяем типу, иначе голосовое классифицируется как видео.
+  if (fallbackValid && fallbackBase.startsWith("audio/")) return fallbackBase;
   const byExtension: Record<string, string> = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
     ".pdf": "application/pdf", ".txt": "text/plain", ".json": "application/json", ".zip": "application/zip",
@@ -408,5 +415,5 @@ function mimeTypeFor(fileName: string, fallbackType: string): string {
   };
   const known = byExtension[extension];
   if (known) return known;
-  return fallbackType && fallbackType !== "application/octet-stream" ? fallbackType : "application/octet-stream";
+  return fallbackValid && fallbackType !== "application/octet-stream" ? fallbackBase : "application/octet-stream";
 }

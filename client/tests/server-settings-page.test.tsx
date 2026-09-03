@@ -5,7 +5,7 @@ import { ServerPreviewDialog } from "@/components/server-preview-dialog";
 import { ServerSettingsPage } from "@/components/server-settings-page";
 import type { LocalProfile, MockServer } from "@/shared/state";
 
-const profile: LocalProfile = { id: "owner", username: "owner", discriminator: "0001", bio: "", avatar: null, banner: null, createdAt: "2026-08-18T00:00:00.000Z" };
+const profile: LocalProfile = { id: "owner", username: "owner", discriminator: "0001", bio: "", avatar: null, banner: null, memberBackground: null, createdAt: "2026-08-18T00:00:00.000Z" };
 const server: MockServer = {
   id: "server",
   name: "Команда",
