@@ -8,7 +8,7 @@ export function Avatar({ name, image, color = "#4d6bfe", size = "md", status, cl
       {/* User-selected data URLs are local and intentionally bypass Next image optimization. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       {image ? <img src={image} alt="" className="absolute inset-0 size-full rounded-full object-cover" /> : initials(name)}
-      {status && <span className={cn("absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-[#212327]", status === "online" && "bg-emerald-400", status === "idle" && "bg-amber-400", status === "dnd" && "bg-red-400", status === "offline" && "bg-slate-600")} />}
+      {status && <span className={cn("absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-canvas", status === "online" && "bg-emerald-400", status === "idle" && "bg-amber-400", status === "dnd" && "bg-red-400", status === "offline" && "bg-slate-600")} />}
     </span>
   );
 }

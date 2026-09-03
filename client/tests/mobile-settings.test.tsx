@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileSettingsScreen } from "@/mobile/screens/settings-screen";
@@ -57,6 +57,24 @@ describe("mobile settings screen", () => {
     await user.click(screen.getByRole("button", { name: t().common.back }));
     await waitFor(() => expect(screen.queryByRole("radio", { name: t().settings.voiceActivation })).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: t().settings.title })).toBeInTheDocument();
+  });
+
+  it("shows the color scheme as the second item and saves a theme choice", async () => {
+    const user = userEvent.setup();
+    const onPreferences = vi.fn();
+    renderSettings({ onPreferences });
+
+    const appearance = screen.getByRole("button", { name: new RegExp(t().settings.appearance) });
+    const firstGroup = appearance.closest("section");
+    expect(firstGroup).not.toBeNull();
+    const links = within(firstGroup!).getAllByRole("button");
+    expect(links[0]).toBe(appearance);
+    expect(links[1]).toBe(screen.getByRole("button", { name: new RegExp(t().settings.colorTheme) }));
+
+    await user.click(links[1]!);
+    expect(screen.getByRole("radiogroup", { name: t().settings.colorTheme })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: t().settings.colorThemeNames.sunset }));
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ colorTheme: "sunset" }));
   });
 
   it("lets the Android back button leave a section without closing settings", async () => {

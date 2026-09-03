@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Headphones, KeyRound, Languages, LoaderCircle, Mic, RotateCcw, Sliders, SlidersHorizontal, Square, Volume2, ZoomIn } from "lucide-react";
+import { Copy, Headphones, KeyRound, Languages, LoaderCircle, Mic, Palette, RotateCcw, Sliders, SlidersHorizontal, Square, Volume2, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { MicLevelBar } from "@/components/settings-dialog";
+import { ThemeSelector } from "@/components/theme-selector";
 import { useAudioSettings } from "@/components/settings/use-audio-settings";
 import { useLocalIdentity } from "@/components/settings/use-local-identity";
 import { LANGUAGE_LABELS, LANGUAGES, useI18n, type Language } from "@/lib/i18n";
@@ -14,7 +15,7 @@ import { useScreenStack } from "@/mobile/navigation";
 import { isMobilePlatform } from "@/platform";
 import { UI_SCALE_OPTIONS, type ClientPreferences } from "@/shared/state";
 
-type Page = "root" | "appearance" | "scale" | "language" | "voice" | "sensitivity" | "identity";
+type Page = "root" | "appearance" | "theme" | "scale" | "language" | "voice" | "sensitivity" | "identity";
 
 /**
  * Настройки как набор мобильных экранов вместо одной прокручиваемой простыни.
@@ -82,6 +83,23 @@ export function MobileSettingsScreen({
           <ListToggle label={t.settings.compact} hint={t.settings.compactHint} checked={preferences.compactMode} onChange={(compactMode) => update({ compactMode })} />
           <ListToggle label={t.settings.members} checked={preferences.showMemberList} onChange={(showMemberList) => update({ showMemberList })} />
           <ListToggle label={t.settings.notifications} checked={preferences.notifications} onChange={(notifications) => update({ notifications })} />
+        </ListGroup>
+      </Screen>
+    );
+  }
+
+  if (stack.current === "theme") {
+    return (
+      <Screen title={t.settings.colorTheme} onBack={back}>
+        <ListGroup hint={t.settings.colorThemeHint}>
+          <ListBlock>
+            <ThemeSelector
+              value={preferences.colorTheme}
+              label={t.settings.colorTheme}
+              labels={t.settings.colorThemeNames}
+              onChange={(colorTheme) => update({ colorTheme })}
+            />
+          </ListBlock>
         </ListGroup>
       </Screen>
     );
@@ -243,6 +261,7 @@ export function MobileSettingsScreen({
     <Screen title={t.settings.title} onClose={close}>
       <ListGroup>
         <ListLink icon={<SlidersHorizontal className="size-4" />} label={t.settings.appearance} onClick={() => stack.push("appearance")} />
+        <ListLink icon={<Palette className="size-4" />} label={t.settings.colorTheme} value={t.settings.colorThemeNames[preferences.colorTheme]} onClick={() => stack.push("theme")} />
         {isMobilePlatform() && <ListLink icon={<ZoomIn className="size-4" />} label={t.settings.uiScale} value={`${Math.round(preferences.uiScale * 100)}%`} onClick={() => stack.push("scale")} />}
         <ListLink icon={<Languages className="size-4" />} label={t.settings.language} value={LANGUAGE_LABELS[preferences.language]} onClick={() => stack.push("language")} />
       </ListGroup>

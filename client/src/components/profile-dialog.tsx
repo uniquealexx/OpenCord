@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CUSTOM_STATUS_MAX_LENGTH, userAvatarSchema, userBannerSchema, type UserStatus } from "@opencord/shared";
-import { AtSign, Camera, Check, Copy, Crop, Fingerprint, ImagePlus, LoaderCircle, Trash2, X } from "lucide-react";
+import { AtSign, Camera, Check, Copy, Crop, Fingerprint, Frame, ImagePlus, LoaderCircle, Trash2, Type, X } from "lucide-react";
+import { AccentColorPicker, ColorSwatchPicker } from "@/components/accent-color-picker";
 import { Avatar } from "@/components/avatar";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { ImageCropDialog } from "@/components/image-crop-dialog";
@@ -11,12 +12,22 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
+import { accentCardStyle, accentGlassBackground, FALLBACK_ACCENT_COLOR, nameGlowStyle } from "@/lib/accent-color";
 import { compressUserAvatar } from "@/lib/user-avatar-image";
 import { compressUserBanner } from "@/lib/user-banner-image";
 import { imageDataUrlToFile, type ImageCrop } from "@/lib/image-crop";
 import type { LocalProfile } from "@/shared/state";
 
 const emojiFont = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+
+/**
+ * Заготовки будущей кастомизации профиля (аналог подписочных возможностей Discord):
+ * UI-плейсхолдеры без передачи данных — в протокол они попадут только при реализации.
+ */
+const CUSTOMIZATION_PLACEHOLDERS = [
+  { icon: Type, labelKey: "nameFont" },
+  { icon: Frame, labelKey: "avatarDecoration" },
+] as const;
 
 export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile: LocalProfile; open: boolean; onOpenChange: (open: boolean) => void; onSave: (profile: LocalProfile) => void }): React.ReactElement {
   const { t } = useI18n();
@@ -27,6 +38,11 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
   const [status, setStatus] = useState<UserStatus>(profile.status ?? "online");
   const [customStatus, setCustomStatus] = useState(profile.customStatus ?? "");
   const [customStatusEmoji, setCustomStatusEmoji] = useState(profile.customStatusEmoji ?? "");
+  const [accentColor, setAccentColor] = useState<string | null>(profile.accentColor ?? null);
+  const [nameGlowEnabled, setNameGlowEnabled] = useState(profile.nameGlow != null);
+  // Выбранный цвет свечения запоминается на время диалога: выключение галочки
+  // снимает свечение, но повторное включение возвращает тот же цвет.
+  const [nameGlowColor, setNameGlowColor] = useState(profile.nameGlow ?? FALLBACK_ACCENT_COLOR);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState("");
@@ -98,7 +114,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     try {
       const nextAvatar = avatar && !userAvatarSchema.safeParse(avatar).success ? await compressUserAvatar(await (await fetch(avatar)).blob()) : avatar;
       const nextBanner = banner && !userBannerSchema.safeParse(banner).success ? await compressUserBanner(await (await fetch(banner)).blob()) : banner;
-      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "" });
+      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "", accentColor, nameGlow: nameGlowEnabled ? nameGlowColor : null });
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t.profile.avatarFailed);
@@ -174,6 +190,42 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             <p className="text-right text-[11px] text-slate-500">{customStatus.length}/{CUSTOM_STATUS_MAX_LENGTH}</p>
             <p className="text-[11px] leading-4 text-slate-500">{t.profile.customStatusHint}</p>
           </div>
+          <fieldset className="grid gap-3 rounded-2xl border border-white/[.07] bg-white/[.025] p-4">
+            <legend className="px-1 text-sm font-medium text-slate-300">{t.profile.customization}</legend>
+            <label className="text-sm font-medium text-slate-300">{t.profile.accentColor}</label>
+            <AccentColorPicker value={accentColor} onChange={setAccentColor} />
+            {/* Живое превью: как акцент окрасит стекло карточки профиля. */}
+            <div
+              className="glass flex items-center gap-3 rounded-xl px-3 py-2.5"
+              style={{ ...(accentColor ? { backgroundColor: accentGlassBackground(accentColor) } : {}), ...accentCardStyle(accentColor) }}
+              data-testid="profile-accent-preview"
+            >
+              <Avatar name={username || profile.username} image={avatar} size="sm" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-bold text-[color:var(--pv-heading)]" style={nameGlowEnabled ? nameGlowStyle(nameGlowColor) : undefined}>{username.trim().toLowerCase() || profile.username}</span>
+                <span className="block truncate text-[10px] text-[color:var(--pv-soft)]">@{username.trim().toLowerCase() || profile.username}#{profile.discriminator}</span>
+              </span>
+            </div>
+            <div className="grid gap-3 border-t border-white/[.06] pt-3" data-testid="name-glow-picker">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-300">
+                <input type="checkbox" checked={nameGlowEnabled} onChange={(event) => setNameGlowEnabled(event.target.checked)} className="size-4 rounded accent-violet-500" />
+                {t.profile.nameGlow}
+              </label>
+              {nameGlowEnabled && <>
+                <ColorSwatchPicker value={nameGlowColor} onChange={setNameGlowColor} groupLabel={t.profile.nameGlowColor} customLabel={t.profile.accentColorCustom} />
+                <p className="text-[11px] leading-4 text-slate-500">{t.profile.nameGlowHint}</p>
+              </>}
+            </div>
+            <div className="grid gap-1.5 border-t border-white/[.06] pt-3">
+              {CUSTOMIZATION_PLACEHOLDERS.map(({ icon: Icon, labelKey }) => (
+                <div key={labelKey} className="flex items-center gap-2 rounded-lg px-1 py-1 opacity-60" aria-disabled="true">
+                  <Icon className="size-3.5 shrink-0 text-violet-300/70" />
+                  <span className="text-xs text-slate-400">{t.profile[labelKey]}</span>
+                  <span className="ml-auto rounded-full border border-white/10 bg-white/[.04] px-2 py-0.5 text-[10px] font-semibold text-slate-500">{t.profile.comingSoon}</span>
+                </div>
+              ))}
+            </div>
+          </fieldset>
           <Button type="submit" className="w-full" disabled={compressing || !usernameValid}>{t.profile.save}</Button>
         </form>
       </DialogContent>

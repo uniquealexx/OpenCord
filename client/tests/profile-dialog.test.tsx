@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProfileDialog } from "@/components/profile-dialog";
@@ -139,5 +139,91 @@ describe("ProfileDialog status", () => {
     await user.clear(usernameInput);
     await user.type(usernameInput, "плохое имя");
     expect(screen.getByRole("button", { name: "Сохранить профиль" })).toBeDisabled();
+  });
+});
+
+describe("ProfileDialog customization", () => {
+  it("saves a preset accent color and previews the tinted card glass", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("radio", { name: "Цвет #7c3aed" }));
+    expect(screen.getByTestId("profile-accent-preview")).toHaveStyle({ backgroundColor: "#7c3aed73" });
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ accentColor: "#7c3aed" }));
+  });
+
+  it("picks a custom color in the saturation and hue picker without alpha", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("button", { name: "Свой цвет" }));
+    expect(screen.getByTestId("accent-color-popover")).toBeInTheDocument();
+    const hexInput = screen.getByLabelText("Свой цвет в HEX");
+    fireEvent.change(hexInput, { target: { value: "#123abc" } });
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ accentColor: "#123abc" }));
+  });
+
+  it("resets the accent color back to the default glass", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={{ ...profile, accentColor: "#4d6bfe" }} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("button", { name: "Сбросить на обычный" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ accentColor: null }));
+  });
+
+  it("keeps future customization options as disabled placeholders", () => {
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
+
+    expect(screen.getByText("Шрифт ника")).toBeInTheDocument();
+    expect(screen.getByText("Декорация аватара")).toBeInTheDocument();
+    expect(screen.getAllByText("Скоро")).toHaveLength(2);
+  });
+
+  it("enables the name glow and saves its color", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    expect(onSave).not.toHaveBeenCalled();
+    await user.click(screen.getByLabelText("Подсветка ника"));
+    const glowPicker = screen.getByTestId("name-glow-picker");
+    await user.click(within(glowPicker).getByRole("radio", { name: "Цвет #34d399" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ nameGlow: "#34d399" }));
+  });
+
+  it("keeps the name glow off while the checkbox is unchecked", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ nameGlow: null }));
+  });
+
+  it("restores a saved name glow with its checkbox and color", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={{ ...profile, nameGlow: "#58b0ff" }} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    expect(screen.getByLabelText("Подсветка ника")).toBeChecked();
+    const glowPicker = screen.getByTestId("name-glow-picker");
+    expect(within(glowPicker).getByRole("radio", { name: "Цвет #58b0ff" })).toHaveAttribute("aria-checked", "true");
+
+    await user.click(screen.getByLabelText("Подсветка ника"));
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ nameGlow: null }));
   });
 });

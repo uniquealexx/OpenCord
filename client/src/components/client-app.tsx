@@ -27,13 +27,14 @@ import { useMobileLayout } from "@/hooks/use-mobile-layout";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
 import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization, type VoiceSessionStatus } from "@/hooks/use-voice-session";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
+import { nameGlowStyle } from "@/lib/accent-color";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
 import { playVoiceSound, primeVoiceSounds } from "@/lib/voice-sounds";
-import { createDefaultState, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
+import { createDefaultState, DEFAULT_COLOR_THEME, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
 import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 
 // В Capacitor-оболочке (Android) подставляет мобильный мост window.openCord до первого рендера.
@@ -251,6 +252,8 @@ export function ClientApp(): React.ReactElement {
                       status: member.status,
                       customStatus: member.customStatus,
                       customStatusEmoji: member.customStatusEmoji,
+                      accentColor: member.accentColor,
+                      nameGlow: member.nameGlow,
                       avatarColor: colorFromId(member.id),
                       avatar: member.avatar,
                       banner: member.banner,
@@ -447,6 +450,11 @@ export function ClientApp(): React.ReactElement {
     document.documentElement.style.setProperty("--ui-zoom", String(scale));
   }, [state?.preferences.uiScale]);
 
+  // Схема живёт на <html>, чтобы её наследовали и порталы диалогов в body.
+  useEffect(() => {
+    document.documentElement.dataset.colorTheme = state?.preferences.colorTheme ?? DEFAULT_COLOR_THEME;
+  }, [state?.preferences.colorTheme]);
+
   useEffect(() => {
     const language = state?.preferences.language;
     if (language) setActiveLanguage(language);
@@ -551,7 +559,8 @@ export function ClientApp(): React.ReactElement {
     const frame = window.requestAnimationFrame(() => {
       const element = document.getElementById(`message-${highlightedMessageId}`);
       element?.scrollIntoView({ block: "center", behavior: "smooth" });
-      element?.animate([{ backgroundColor: "rgba(77,107,254,.28)" }, { backgroundColor: "rgba(77,107,254,0)" }], { duration: 2_200, easing: "ease-out" });
+      const accent = getComputedStyle(document.documentElement).getPropertyValue("--theme-accent-rgb").trim() || "64 95 232";
+      element?.animate([{ backgroundColor: `rgb(${accent} / .28)` }, { backgroundColor: `rgb(${accent} / 0)` }], { duration: 2_200, easing: "ease-out" });
     });
     const timer = window.setTimeout(() => setHighlightedMessageId(null), 2_500);
     return () => {
@@ -601,7 +610,7 @@ export function ClientApp(): React.ReactElement {
     searchRequestRef.current = null;
   }
 
-  if (!state) return <div className="grid flex-1 place-items-center bg-[#212327] text-sm text-slate-500">{t.loadingApp}</div>;
+  if (!state) return <div className="grid flex-1 place-items-center bg-canvas text-sm text-slate-500">{t.loadingApp}</div>;
 
   if (!state.onboardingComplete || !state.profile) {
     return (
@@ -904,6 +913,8 @@ export function ClientApp(): React.ReactElement {
         status: profile.status ?? "online",
         customStatus: profile.customStatus ?? "",
         customStatusEmoji: profile.customStatusEmoji ?? "",
+        accentColor: profile.accentColor ?? null,
+        nameGlow: profile.nameGlow ?? null,
       })
     )
       setNotice(t.notices.profileSavedLocalOnly);
@@ -1408,7 +1419,7 @@ export function ClientApp(): React.ReactElement {
   }
 
   return (
-    <main className="relative flex min-h-0 flex-1 overflow-hidden bg-[#212327] text-slate-200">
+    <main className="relative flex min-h-0 flex-1 overflow-hidden bg-canvas text-slate-200">
       {(!mobile || !activeServer) && serverRail}
       {serverSettingsOpen && activeServer && currentAccess && (
         <ServerSettingsPage
@@ -1507,7 +1518,7 @@ export function ClientApp(): React.ReactElement {
             />
           ) : activeChannel ? (
             <section
-              className="relative flex min-w-0 flex-1 flex-col bg-[#212327]"
+              className="relative flex min-w-0 flex-1 flex-col bg-canvas"
               onTouchStart={mobile ? (event) => beginSwipe((event.touches[0]?.clientX ?? 0) <= EDGE ? "left" : "right", event) : undefined}
               onTouchEnd={mobile ? (event) => endSwipe(event, (edge) => setMobilePanel(edge === "right" ? "members" : "channels")) : undefined}
               onDragEnter={(event) => {
@@ -1577,7 +1588,7 @@ export function ClientApp(): React.ReactElement {
               <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => resetSearch()} onReset={resetSearchSession} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
               {draggingFiles && (
                 <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-black/40">
-                  <div className="rounded-2xl border-2 border-dashed border-violet-400/80 bg-[#212327]/95 px-8 py-5 text-sm font-semibold text-violet-100 shadow-2xl">{t.chat.dropFiles}</div>
+                  <div className="rounded-2xl border-2 border-dashed border-violet-400/80 bg-canvas/95 px-8 py-5 text-sm font-semibold text-violet-100 shadow-2xl">{t.chat.dropFiles}</div>
                 </div>
               )}
             </section>
@@ -1755,7 +1766,7 @@ function ServerRail({ mobile = false, servers, activeId, onHome, onSelect, onCre
   }
 
   return (
-    <nav aria-label={t.nav.servers} className={cn("flex shrink-0 flex-col items-center gap-2 border-r border-white/[.055] bg-[#191b1e] py-3", mobile ? "w-16" : "w-[76px]")}>
+    <nav aria-label={t.nav.servers} className={cn("flex shrink-0 flex-col items-center gap-2 border-r border-white/[.055] bg-rail py-3", mobile ? "w-16" : "w-[76px]")}>
       <button aria-label={t.nav.friends} title={t.nav.friends} onClick={onHome} className={cn("mb-1 grid size-12 place-items-center rounded-xl bg-primary text-lg font-bold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)] transition-colors", activeId ? "hover:bg-violet-400" : "ring-2 ring-white/70 ring-offset-2 ring-offset-rail")}>
         O
       </button>
@@ -1890,7 +1901,7 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
   }
 
   return (
-    <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-[#1d1f23]">
+    <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-sidebar">
       {server.banner ? (
         <button aria-label={`${t.server.manage}: ${server.name}`} onClick={onServerMenu} className="group/banner relative h-24 shrink-0 overflow-hidden border-b border-white/[.055] text-left text-white">
           <Image src={server.banner} alt="" fill unoptimized sizes="262px" className="object-cover transition duration-200 group-hover/banner:scale-[1.02]" />
@@ -1954,7 +1965,7 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
         <button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5">
           <Avatar name={profile.username} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} />
           <span className="min-w-0">
-            <span className="block truncate text-xs font-semibold text-slate-200">{profile.username}</span>
+            <span className="block truncate text-xs font-semibold text-slate-200" style={profile.nameGlow ? nameGlowStyle(profile.nameGlow) : undefined}>{profile.username}</span>
             {profile.customStatus
               ? <span className="block truncate text-[10px] text-slate-400">{profile.customStatusEmoji ? `${profile.customStatusEmoji} ` : ""}{profile.customStatus}</span>
               : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
@@ -2013,6 +2024,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const memberName = member?.username ?? (isCurrentUser ? profile.username : t.voice.participant);
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
+  const glow = member?.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
   return (
     <ProfilePreview
       side="right"
@@ -2024,6 +2036,8 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         fingerprint: member?.fingerprint,
         avatar,
         banner: member?.banner ?? (isCurrentUser ? profile.banner : undefined),
+        accentColor: member?.accentColor ?? (isCurrentUser ? profile.accentColor : undefined),
+        nameGlow: glow,
         color: member?.avatarColor,
         status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
         customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
@@ -2033,8 +2047,8 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         isCurrentUser,
       }}
     >
-      <Avatar name={memberName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#1d1f23] shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
-      <span className="min-w-0 flex-1 truncate">
+      <Avatar name={memberName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-sidebar shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
+      <span className="min-w-0 flex-1 truncate" style={glow ? nameGlowStyle(glow) : undefined}>
         {memberName}
         {isCurrentUser && ` ${t.voice.youSuffix}`}
       </span>
@@ -2116,6 +2130,8 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
     name: string;
     avatar: string | null;
     banner?: string | null;
+    accentColor?: string | null;
+    nameGlow?: string | null;
     color?: string;
     status: PublicMemberStatus;
     customStatus?: string;
@@ -2136,6 +2152,8 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
       fingerprint: member?.fingerprint,
       avatar: member?.avatar ?? (isCurrentUser ? profile.avatar : null),
       banner: member?.banner ?? (isCurrentUser ? profile.banner : null),
+      accentColor: member?.accentColor ?? (isCurrentUser ? profile.accentColor : undefined),
+      nameGlow: member?.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined),
       color: member?.avatarColor,
       status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
       customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
@@ -2151,7 +2169,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
   const viewedScreenShareViewers = viewingScreenShareId ? channelParticipants.filter((participant) => participant.viewingScreenShareUserId === viewingScreenShareId) : [];
 
   return (
-    <section aria-label={t.voice.channelAria(channel.name)} className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#212327]">
+    <section aria-label={t.voice.channelAria(channel.name)} className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">
       <header className={cn("flex shrink-0 items-center gap-2.5 border-b border-white/[.06]", mobile ? "h-14 px-1.5" : "h-12 px-4")}>
         {mobile && onOpenChannels && (
           <button type="button" aria-label={t.chat.openChannels} title={t.chat.openChannels} onClick={onOpenChannels} className="grid size-11 shrink-0 place-items-center rounded-xl text-slate-300 transition hover:bg-white/6 hover:text-slate-100">
@@ -2192,7 +2210,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                   <div className="flex items-center">
                     {viewedScreenShareViewers.slice(0, 4).map((viewer, index) => {
                       const viewerProfile = participantProfile(viewer.userId);
-                      return <Avatar key={viewer.userId} name={viewerProfile.name} image={viewerProfile.avatar} color={viewerProfile.color} size="sm" className={cn("size-6 ring-2 ring-[#26282c]", index > 0 && "-ml-1.5")} />;
+                      return <Avatar key={viewer.userId} name={viewerProfile.name} image={viewerProfile.avatar} color={viewerProfile.color} size="sm" className={cn("size-6 ring-2 ring-panel", index > 0 && "-ml-1.5")} />;
                     })}
                   </div>
                   <span className="text-[10px] tabular-nums text-slate-500">{viewedScreenShareViewers.length}</span>
@@ -2287,7 +2305,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                     const targetRole = server.members.find((member) => member.id === participant.userId)?.serverRole;
                     const canDisconnect = canDisconnectVoiceParticipant(canModerateVoice, currentUserRole, targetRole, currentUserId, participant.userId);
                     return (
-                      <div key={participant.userId} className={cn("relative flex min-h-0 flex-col rounded-xl border bg-[#26282c] p-3 transition", speaking ? "border-emerald-400/45" : "border-white/[.065]", (locallyMuted || participant.serverMuted) && "border-red-400/20")}>
+                      <div key={participant.userId} className={cn("relative flex min-h-0 flex-col rounded-xl border bg-panel p-3 transition", speaking ? "border-emerald-400/45" : "border-white/[.065]", (locallyMuted || participant.serverMuted) && "border-red-400/20")}>
                         {participant.userId !== currentUserId && (
                           <button type="button" aria-label={`${locallyMuted ? t.voice.unmuteLocallyOf(participantData.name) : t.voice.muteLocallyOf(participantData.name)}`} aria-pressed={locallyMuted} onClick={() => onParticipantMuted(participant.userId, !locallyMuted)} className={cn("absolute left-3 top-3 z-10 grid size-11 place-items-center rounded-xl border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70", locallyMuted ? "border-red-400/25 bg-red-400/12 text-red-300" : "border-white/10 bg-black/20 text-slate-500 hover:bg-white/[.06] hover:text-slate-200")}>
                             <VolumeX className="pointer-events-none size-4" />
@@ -2310,6 +2328,8 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                             fingerprint: participantData.fingerprint,
                             avatar: participantData.avatar,
                             banner: participantData.banner,
+                            accentColor: participantData.accentColor,
+                            nameGlow: participantData.nameGlow,
                             color: participantData.color,
                             status: participantData.status,
                             customStatus: participantData.customStatus,
@@ -2321,8 +2341,8 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                           wrapperClassName="w-full justify-center"
                           triggerClassName="flex max-w-full flex-col items-center rounded-lg px-2 py-1 outline-none transition hover:bg-white/[.035] focus-visible:ring-2 focus-visible:ring-violet-400/70"
                         >
-                          <Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="lg" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#26282c]")} />
-                          <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100">
+                          <Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="lg" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-panel")} />
+                          <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100" style={participantData.nameGlow ? nameGlowStyle(participantData.nameGlow) : undefined}>
                             {participantData.name}
                             {participant.userId === currentUserId && ` ${t.voice.youSuffix}`}
                           </span>
@@ -2362,10 +2382,10 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                     const streamProfile = participantProfile(stream.participantIdentity, stream.participantName);
                     const viewers = channelParticipants.filter((participant) => participant.viewingScreenShareUserId === stream.participantIdentity);
                     return (
-                      <button key={stream.participantIdentity} type="button" aria-label={t.voice.watchStream(streamProfile.name)} onClick={() => onViewScreenShare(stream.participantIdentity)} className="group flex items-center gap-3 rounded-xl border border-white/[.065] bg-[#26282c] p-3 text-left transition hover:border-cyan-300/35 hover:bg-[#2b2d32]">
+                      <button key={stream.participantIdentity} type="button" aria-label={t.voice.watchStream(streamProfile.name)} onClick={() => onViewScreenShare(stream.participantIdentity)} className="group flex items-center gap-3 rounded-xl border border-white/[.065] bg-panel p-3 text-left transition hover:border-cyan-300/35 hover:bg-raised">
                         <span className="relative grid size-10 shrink-0 place-items-center rounded-lg bg-cyan-400/[.08] text-cyan-300">
                           <MonitorUp className="size-4" />
-                          <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border-2 border-[#26282c] bg-red-400" />
+                          <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border-2 border-panel bg-red-400" />
                         </span>
                         <Avatar name={streamProfile.name} image={streamProfile.avatar} color={streamProfile.color} size="sm" status={streamProfile.status} />
                         <div className="min-w-0 flex-1">
@@ -2377,7 +2397,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                             <div className="flex items-center">
                               {viewers.slice(0, 4).map((viewer, index) => {
                                 const viewerProfile = participantProfile(viewer.userId);
-                                return <Avatar key={viewer.userId} name={viewerProfile.name} image={viewerProfile.avatar} color={viewerProfile.color} size="sm" className={cn("size-6 ring-2 ring-[#26282c]", index > 0 && "-ml-1.5")} />;
+                                return <Avatar key={viewer.userId} name={viewerProfile.name} image={viewerProfile.avatar} color={viewerProfile.color} size="sm" className={cn("size-6 ring-2 ring-panel", index > 0 && "-ml-1.5")} />;
                               })}
                             </div>
                             <span className="text-[10px] tabular-nums text-slate-500">{viewers.length}</span>
@@ -2733,7 +2753,7 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="overflow-hidden border-white/10 bg-[#26282c] p-0 sm:max-w-xl">
+      <DialogContent className="overflow-hidden border-white/10 bg-panel p-0 sm:max-w-xl">
         <div className="relative -mx-5 -mt-5 mb-12">
           <div className="relative h-32 overflow-hidden border-b border-white/10 bg-primary/15">{server.banner && <Image src={server.banner} alt="" fill unoptimized sizes="576px" className="object-cover" />}</div>
           <div className="absolute -bottom-10 left-6">
@@ -2902,7 +2922,7 @@ function NoTextChannelView({ mobile = false, server, profile, access, connection
   const { t } = useI18n();
   const canManageChannels = access?.permissions.includes("MANAGE_CHANNELS") === true;
   return (
-    <section className="flex min-w-0 flex-1 flex-col bg-[#212327]">
+    <section className="flex min-w-0 flex-1 flex-col bg-canvas">
       <header className={cn("flex h-14 shrink-0 items-center gap-3 border-b border-white/[.055] shadow-sm", mobile ? "px-1.5" : "px-4")}>
         {mobile && onOpenChannels && (
           <button type="button" aria-label={t.chat.openChannels} title={t.chat.openChannels} onClick={onOpenChannels} className="grid size-11 shrink-0 place-items-center rounded-xl text-slate-300 transition hover:bg-white/6 hover:text-slate-100">
@@ -3034,7 +3054,7 @@ function BannedView({ server, expiresAt, onRetry, onRemove }: { server: MockServ
   }, [expiresAt]);
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col items-center justify-center bg-[#212327] px-6 py-10 text-center">
+    <section className="flex min-w-0 flex-1 flex-col items-center justify-center bg-canvas px-6 py-10 text-center">
       <div className="grid size-16 place-items-center rounded-2xl bg-red-400/10 text-red-300">
         <ShieldBan className="size-8" />
       </div>
@@ -3145,6 +3165,8 @@ export function Message({ message, replyToMessage, member, members, profile, com
     fingerprint: member?.fingerprint,
     avatar: message.authorAvatar ?? ownAvatar,
     banner: member?.banner ?? (own ? profile?.banner : undefined),
+    accentColor: member?.accentColor ?? (own ? profile?.accentColor : undefined),
+    nameGlow: member?.nameGlow ?? (own ? profile?.nameGlow : undefined),
     color: message.authorColor,
     status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : ("offline" as const)),
     customStatus: member?.customStatus ?? (own ? profile?.customStatus : undefined),
@@ -3271,14 +3293,14 @@ export function Message({ message, replyToMessage, member, members, profile, com
         {(!grouped || compact) && (
           <div className="flex min-w-0 items-baseline gap-2 leading-5">
             <ProfilePreview profile={previewProfile} wrapperClassName="min-w-0 max-w-full" triggerClassName="block min-w-0 max-w-full truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
-              {message.authorName}
+              <span style={previewProfile.nameGlow ? nameGlowStyle(previewProfile.nameGlow) : undefined}>{message.authorName}</span>
             </ProfilePreview>
             <time className="shrink-0 whitespace-nowrap text-[10px] leading-5 tabular-nums text-slate-600">{time}</time>
             {message.editedAt && <span className="shrink-0 text-[10px] leading-5 text-slate-600">{t.chat.edited}</span>}
           </div>
         )}
         {editing ? (
-          <div className="mt-1.5 overflow-hidden rounded-xl border border-violet-400/40 bg-[#212327] shadow-[0_10px_28px_rgba(0,0,0,.3)] transition focus-within:border-violet-400">
+          <div className="mt-1.5 overflow-hidden rounded-xl border border-violet-400/40 bg-canvas shadow-[0_10px_28px_rgba(0,0,0,.3)] transition focus-within:border-violet-400">
             <div className="flex items-center gap-1.5 border-b border-white/[.06] px-3 py-1.5">
               <Pencil className="size-3 shrink-0 text-violet-300/80" />
               <span className="text-[10px] font-semibold uppercase tracking-[.12em] text-violet-200/80">{t.chat.editingTitle}</span>
@@ -3287,7 +3309,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
               {editAttachments.length ? (
                 <div className="mb-2 flex flex-wrap gap-2">
                   {editAttachments.map((attachment) => (
-                    <span key={attachment.id} className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-white/8 bg-[#26282c] px-2.5 py-1.5 text-xs text-slate-300 sm:max-w-64">
+                    <span key={attachment.id} className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-white/8 bg-panel px-2.5 py-1.5 text-xs text-slate-300 sm:max-w-64">
                       <Paperclip className="size-3.5 shrink-0 text-violet-300" />
                       <span className="min-w-0 flex-1 truncate">{attachment.fileName}</span>
                       <button type="button" aria-label={t.chat.detach(attachment.fileName)} onClick={() => setEditAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded p-0.5 text-slate-500 transition hover:bg-white/5 hover:text-red-300">
@@ -3366,7 +3388,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
         )}
       </div>
       {!editing && (canReact || canDelete || onReply) && (
-        <div role="toolbar" aria-label={t.chat.messageActions(message.authorName)} data-open={menuOpen || reactionPickerOpen || touchActionsOpen} className="message-action-bar absolute -top-2 right-2 z-20 flex h-9 items-center rounded-lg border border-white/[.08] bg-[#2b2d32] px-1 shadow-[0_6px_18px_rgba(0,0,0,.28)] transition duration-150 max-md:h-12 max-md:gap-0.5 max-md:px-1.5">
+        <div role="toolbar" aria-label={t.chat.messageActions(message.authorName)} data-open={menuOpen || reactionPickerOpen || touchActionsOpen} className="message-action-bar absolute -top-2 right-2 z-20 flex h-9 items-center rounded-lg border border-white/[.08] bg-raised px-1 shadow-[0_6px_18px_rgba(0,0,0,.28)] transition duration-150 max-md:h-12 max-md:gap-0.5 max-md:px-1.5">
           {canReact &&
             QUICK_REACTION_EMOJIS.map((emoji) => (
               <button key={emoji} type="button" title={t.chat.reactionPick(emoji)} aria-label={t.chat.reactionPick(emoji)} onClick={() => onToggleReaction(message.id, emoji)} className="grid size-7 place-items-center rounded-md text-[17px] leading-none transition hover:bg-white/[.075] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:size-10 max-md:text-[20px]">
@@ -3461,6 +3483,8 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
         fingerprint: member.fingerprint,
         avatar: member.avatar,
         banner: member.banner,
+        accentColor: member.accentColor,
+        nameGlow: member.nameGlow,
         color: member.avatarColor,
         status: member.status,
         customStatus: member.customStatus,
@@ -3470,7 +3494,7 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
       }}
       label={t.chat.mentionAria(member.username)}
     >
-      <span>@{member.username}</span>
+      <span style={member.nameGlow ? nameGlowStyle(member.nameGlow) : undefined}>@{member.username}</span>
     </ProfilePreview>
   );
 }
@@ -3489,6 +3513,7 @@ function memberToMentionCandidate(member: MockMember): MentionCandidate {
     role: member.role,
     bio: member.bio,
     fingerprint: member.fingerprint,
+    nameGlow: member.nameGlow ?? null,
   };
 }
 
@@ -3801,7 +3826,7 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
       {attachments.length ? (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
-            <span key={attachment.id} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-white/8 bg-[#26282c] px-2.5 py-2 text-xs text-slate-300 sm:max-w-64">
+            <span key={attachment.id} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-white/8 bg-panel px-2.5 py-2 text-xs text-slate-300 sm:max-w-64">
               <Paperclip className="size-3.5 shrink-0 text-violet-300" />
               <span className="min-w-0 flex-1 truncate">{attachment.fileName}</span>
               <button type="button" aria-label={t.chat.remove(attachment.fileName)} onClick={() => onRemoveAttachment(attachment.id)} className="rounded p-0.5 text-slate-500 hover:bg-white/5 hover:text-red-300">
@@ -3818,7 +3843,7 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
         </div>
       )}
       <div className={cn("flex min-h-12 items-center gap-2 rounded-2xl border border-white/[.065] bg-panel px-3 shadow-[0_1px_3px_rgba(0,0,0,.3)] focus-within:border-violet-400/40 max-md:min-h-13 max-md:gap-1.5 max-md:px-2", composerDisabled && "opacity-55", muted && "pointer-events-none border-white/[.04] opacity-40 grayscale")}>
-        <button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-[#26282c] hover:bg-slate-300 disabled:opacity-40 max-md:size-10">
+        <button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-panel hover:bg-slate-300 disabled:opacity-40 max-md:size-10">
           {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
         </button>
         <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
@@ -3867,7 +3892,7 @@ function MentionSuggestions({ suggestions, activeIndex, onSelect, onHover }: { s
         <button key={candidate.id} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => onHover(index)} onClick={() => onSelect(candidate)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition", index === activeIndex ? "bg-violet-400/10" : "hover:bg-white/[.04]")}>
           <Avatar name={candidate.username} image={candidate.avatar} color={candidate.color} size="sm" status={candidate.status} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-semibold text-slate-200">@{candidate.username}</span>
+            <span className="block truncate text-xs font-semibold text-slate-200" style={candidate.nameGlow ? nameGlowStyle(candidate.nameGlow) : undefined}>@{candidate.username}</span>
             <span className="block truncate text-[10px] text-slate-500">{candidate.customStatus ? `${candidate.customStatusEmoji ? `${candidate.customStatusEmoji} ` : ""}${candidate.customStatus}` : (candidate.role ?? t.chat.mentionCandidate)}</span>
           </span>
         </button>
@@ -3958,7 +3983,7 @@ export function AttachmentView({ attachment, previewAvailable = true, onDownload
           <AttachmentFooter attachment={attachment} onDownload={onDownload} />
         </div>
         <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
-          <DialogContent className="max-h-[94%] max-w-[96%] bg-[#191b1e]">
+          <DialogContent className="max-h-[94%] max-w-[96%] bg-rail">
             <DialogTitle className="sr-only">{attachment.fileName}</DialogTitle>
             <DialogDescription className="sr-only">{t.attachments.fullscreenView}</DialogDescription>
             <div ref={imageFullscreenRef} className="relative h-[76vh] w-full overflow-hidden rounded-2xl bg-black fullscreen:h-screen fullscreen:w-screen fullscreen:rounded-none">
@@ -4078,7 +4103,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
       .filter((group) => group.items.length > 0);
   }, [members, t]);
   return (
-    <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-[#1d1f23] px-3 py-5 max-md:w-full">
+    <aside className="scrollbar-thin w-[240px] shrink-0 overflow-y-auto border-l border-white/[.055] bg-sidebar px-3 py-5 max-md:w-full">
       <h3 className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[.14em] text-slate-600">
         {t.chat.members} — {members.length}
       </h3>
@@ -4091,6 +4116,8 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
             {group.items.map((member) => {
               const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
               const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
+              const memberGlow = member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
+              const memberGlowStyle = memberGlow ? nameGlowStyle(memberGlow) : undefined;
               return (
                 <div key={member.id} className="flex w-full items-center rounded-lg hover:bg-white/[.045]">
                   <ProfilePreview
@@ -4103,6 +4130,8 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                       fingerprint: member.fingerprint,
                       avatar,
                       banner: member.banner ?? (isCurrentUser ? profile.banner : undefined),
+                      accentColor: member.accentColor ?? (isCurrentUser ? profile.accentColor : undefined),
+                      nameGlow: member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined),
                       color: member.avatarColor,
                       status: member.status,
                       customStatus: member.customStatus,
@@ -4114,7 +4143,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                   >
                     <Avatar name={member.username} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
                     <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}>
-                      <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300">
+                      <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300" style={memberGlowStyle}>
                         {member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}
                         {member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}
                         {member.username}
@@ -4214,6 +4243,8 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     status: member.status,
     customStatus: member.customStatus,
     customStatusEmoji: member.customStatusEmoji,
+    accentColor: member.accentColor,
+    nameGlow: member.nameGlow,
     avatarColor: colorFromId(member.id),
     avatar: member.avatar,
     banner: member.banner,

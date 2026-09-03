@@ -275,6 +275,52 @@ describe("ChatRepository", () => {
     expect(await database.query("SELECT user_id FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"])).toEqual([]);
   });
 
+  it("stores the profile accent color and clears it on anonymization", async () => {
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["029_user_profile_accent_color"])).toHaveLength(1);
+    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", avatar: null });
+    await repository.ensureMembership("member", "member-public-key", undefined, true);
+    expect((await repository.getMember("member", "online")).accentColor).toBeNull();
+
+    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", avatar: null, accentColor: "#7c3aed" })).toBe(true);
+    expect(await repository.getMember("member", "online")).toMatchObject({ accentColor: "#7c3aed" });
+
+    // SQL-ограничение держит формат даже при записи в обход Zod на границе протокола.
+    await expect(database.query("UPDATE users SET accent_color = $2 WHERE id = $1", ["member", "violet"])).rejects.toThrow();
+    await expect(database.query("UPDATE users SET accent_color = $2 WHERE id = $1", ["member", "#7C3AED"])).rejects.toThrow();
+
+    // Цвет очищается и повторной установкой, и анонимизацией ушедшего профиля.
+    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", avatar: null, accentColor: null })).toBe(true);
+    expect((await repository.getMember("member", "online")).accentColor).toBeNull();
+
+    await repository.upsertUser("leaver", "leaver-public-key", { username: "leaver", discriminator: "4321", avatar: null, accentColor: "#4d6bfe" });
+    await repository.ensureMembership("leaver", "leaver-public-key");
+    expect(await repository.leaveServer("leaver")).toBe("member");
+    await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "leaver"]);
+    await repository.performRetentionCleanup();
+    expect((await database.query<{ accent_color: string | null }>("SELECT accent_color FROM users WHERE id = $1", ["leaver"]))[0]).toEqual({ accent_color: null });
+  });
+
+  it("stores the name glow and clears it on anonymization", async () => {
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["030_user_profile_name_glow"])).toHaveLength(1);
+    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", avatar: null });
+    await repository.ensureMembership("member", "member-public-key", undefined, true);
+    expect((await repository.getMember("member", "online")).nameGlow).toBeNull();
+
+    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", avatar: null, nameGlow: "#34d399" })).toBe(true);
+    expect(await repository.getMember("member", "online")).toMatchObject({ nameGlow: "#34d399" });
+
+    // SQL-ограничение держит формат даже при записи в обход Zod на границе протокола.
+    await expect(database.query("UPDATE users SET name_glow = $2 WHERE id = $1", ["member", "green"])).rejects.toThrow();
+    await expect(database.query("UPDATE users SET name_glow = $2 WHERE id = $1", ["member", "#34D399"])).rejects.toThrow();
+
+    await repository.upsertUser("leaver", "leaver-public-key", { username: "leaver", discriminator: "4321", avatar: null, nameGlow: "#58b0ff" });
+    await repository.ensureMembership("leaver", "leaver-public-key");
+    expect(await repository.leaveServer("leaver")).toBe("member");
+    await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "leaver"]);
+    await repository.performRetentionCleanup();
+    expect((await database.query<{ name_glow: string | null }>("SELECT name_glow FROM users WHERE id = $1", ["leaver"]))[0]).toEqual({ name_glow: null });
+  });
+
   it("keeps a deletion tombstone across restarts and clears it for a new deployment", async () => {
     const firstDeployment = randomUUID();
     await repository.configureServer("Первая версия", firstDeployment);

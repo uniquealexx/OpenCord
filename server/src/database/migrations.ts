@@ -438,6 +438,39 @@ const migrations = [
       ALTER TABLE server_members ADD COLUMN IF NOT EXISTS voice_muted boolean NOT NULL DEFAULT false;
     `,
   },
+  {
+    // Акцентный цвет превью профиля: декоративное публичное поле, HEX без альфы
+    // (эффект стекла карточки строится на непрозрачности фона). NULL — цвет не задан;
+    // при анонимизации профиля очищается вместе с остальными публичными полями.
+    id: "029_user_profile_accent_color",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS accent_color text;
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_accent_color_check') THEN
+          ALTER TABLE users ADD CONSTRAINT users_accent_color_check CHECK (accent_color IS NULL OR accent_color ~ '^#[0-9a-f]{6}$');
+        END IF;
+      END
+      $$;
+    `,
+  },
+  {
+    // Мягкое свечение ника: декоративное публичное поле в том же формате HEX без
+    // альфы, что и акцент. NULL — свечение выключено; при анонимизации очищается.
+    id: "030_user_profile_name_glow",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS name_glow text;
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_name_glow_check') THEN
+          ALTER TABLE users ADD CONSTRAINT users_name_glow_check CHECK (name_glow IS NULL OR name_glow ~ '^#[0-9a-f]{6}$');
+        END IF;
+      END
+      $$;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

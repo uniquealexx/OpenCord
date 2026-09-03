@@ -71,7 +71,7 @@ describe("ClientApp", () => {
     };
   });
 
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); delete document.documentElement.dataset.colorTheme; });
 
   it("does not request another voice join when opening the current room", () => {
     expect(shouldRequestVoiceJoin("connected", "voice", "voice", "voice")).toBe(false);
@@ -79,6 +79,14 @@ describe("ClientApp", () => {
     expect(shouldRequestVoiceJoin("reconnecting", "voice", "voice", "voice")).toBe(false);
     expect(shouldRequestVoiceJoin("connected", "voice", "voice", "another-voice")).toBe(true);
     expect(shouldRequestVoiceJoin("error", null, "voice", "voice")).toBe(true);
+  });
+
+  it("applies the saved color theme to the document root", async () => {
+    const state = readyState();
+    state.preferences.colorTheme = "forest";
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await waitFor(() => expect(document.documentElement.dataset.colorTheme).toBe("forest"));
   });
 
   it("enforces the voice moderation role hierarchy in the client", () => {

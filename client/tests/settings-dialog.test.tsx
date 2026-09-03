@@ -93,6 +93,17 @@ describe("SettingsDialog microphone test", () => {
     expect(screen.getByText(/0\.2\.0-beta\.1/u)).toBeInTheDocument();
   });
 
+  it("shows six color schemes near the top and saves the selected one", async () => {
+    const user = userEvent.setup();
+    const onPreferences = vi.fn();
+    render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={onPreferences} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+
+    expect(screen.getByRole("radiogroup", { name: "Цветовая схема" })).toBeInTheDocument();
+    expect(screen.getAllByRole("radio")).toHaveLength(6);
+    await user.click(screen.getByRole("radio", { name: "Океан" }));
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ colorTheme: "ocean" }));
+  });
+
   it("toggles RNNoise noise suppression from the voice section", async () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();

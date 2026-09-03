@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Fingerprint, ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { useI18n } from "@/lib/i18n";
+import { accentCardStyle, accentGlassBackground, nameGlowStyle } from "@/lib/accent-color";
 import { cn } from "@/lib/utils";
 import type { PublicMemberStatus } from "@opencord/shared";
 
@@ -16,6 +17,10 @@ export interface PreviewProfile {
   fingerprint?: string;
   avatar?: string | null;
   banner?: string | null;
+  /** Акцентный цвет превью профиля (HEX без альфы) — перекрашивает стекло карточки. */
+  accentColor?: string | null;
+  /** Мягкое свечение ника (HEX без альфы) — подсвечивает имя на карточке. */
+  nameGlow?: string | null;
   color?: string;
   status?: PreviewStatus;
   customStatus?: string;
@@ -106,29 +111,32 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
   return <span className={cn("relative inline-flex", wrapperClassName)}>
     <button ref={triggerRef} type="button" aria-label={label ?? t.preview.openProfile(profile.username)} aria-expanded={open} onClick={toggle} className={cn("text-left", triggerClassName)}>{children}</button>
     {open && typeof document !== "undefined" && createPortal(
-      <div ref={cardRef} role="dialog" aria-label={t.preview.profile(profile.username)} className="glass fixed z-[100] flex w-[300px] max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={{ left: position.left, top: position.top, visibility: positioned ? undefined : "hidden" }}>
-        <div data-testid="profile-banner" className="relative h-[96px] shrink-0 overflow-hidden bg-primary/15">
-          {/* Public profile banners are compact data URLs supplied by OpenCord Server. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {profile.banner && <img src={profile.banner} alt="" className="absolute inset-0 size-full object-cover" />}
-        </div>
-        <div className="-mt-9 flex shrink-0 items-end justify-between px-4">
+      <div ref={cardRef} role="dialog" aria-label={t.preview.profile(profile.username)} className="glass fixed z-[100] flex w-[300px] max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,.6)]" style={{ left: position.left, top: position.top, visibility: positioned ? undefined : "hidden", ...(profile.accentColor ? { backgroundColor: accentGlassBackground(profile.accentColor) } : {}), ...accentCardStyle(profile.accentColor ?? null) }}>
+        {/* Шапка занимает место только при заданном изображении: без него карточка
+            начинается с аватара, а с баннером — вырастает вверх под его высоту. */}
+        {profile.banner && (
+          <div data-testid="profile-banner" className="relative h-[96px] shrink-0 overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={profile.banner} alt="" className="absolute inset-0 size-full object-cover" />
+          </div>
+        )}
+        <div className={cn("flex shrink-0 items-end justify-between px-4", profile.banner ? "-mt-9" : "pt-5")}>
           <div data-testid="profile-avatar-frame" className="rounded-full bg-panel p-1.5"><Avatar name={profile.username} image={profile.avatar} color={profile.color} size="xl" status={status} /></div>
-          {profile.isCurrentUser && <span className="mb-1 rounded-full border border-violet-300/15 bg-violet-400/10 px-2.5 py-1 text-[10px] font-semibold text-violet-200">{t.preview.thisIsYou}</span>}
+          {profile.isCurrentUser && <span className="mb-1 rounded-full border border-[color:var(--pv-badge-border)] bg-[color:var(--pv-badge-bg)] px-2.5 py-1 text-[10px] font-semibold text-[color:var(--pv-badge-text)]">{t.preview.thisIsYou}</span>}
         </div>
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          <h3 className="mt-2 truncate text-base font-bold text-white">{profile.username}</h3>
-          <p className="mt-0.5 truncate text-xs font-medium text-slate-400">{tag}</p>
-          <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{t.statuses[status]}</span></div>
-          {profile.customStatus && <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-slate-300">{profile.customStatusEmoji && <span className="shrink-0 text-sm leading-5" style={{ fontFamily: emojiFont }}>{profile.customStatusEmoji}</span>}<span className="min-w-0 break-words">{profile.customStatus}</span></p>}
-          {profile.fingerprint && <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-white/[.06] bg-black/15 px-2.5 py-1.5">
-            <Fingerprint className="size-3.5 shrink-0 text-violet-300/70" />
-            <code title={t.preview.identityCodeHint} className="min-w-0 flex-1 truncate text-[10px] tracking-wide text-slate-400">{profile.fingerprint}</code>
+          <h3 className="mt-2 truncate text-base font-bold text-[color:var(--pv-heading)]" style={profile.nameGlow ? nameGlowStyle(profile.nameGlow) : undefined}>{profile.username}</h3>
+          <p className="mt-0.5 truncate text-xs font-medium text-[color:var(--pv-muted)]">{tag}</p>
+          <div className="mt-1 flex items-center gap-2 text-xs text-[color:var(--pv-muted)]"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{t.statuses[status]}</span></div>
+          {profile.customStatus && <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-[color:var(--pv-soft)]">{profile.customStatusEmoji && <span className="shrink-0 text-sm leading-5" style={{ fontFamily: emojiFont }}>{profile.customStatusEmoji}</span>}<span className="min-w-0 break-words">{profile.customStatus}</span></p>}
+          {profile.fingerprint && <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-[color:var(--pv-box-border)] bg-[color:var(--pv-box-bg)] px-2.5 py-1.5">
+            <Fingerprint className="size-3.5 shrink-0 text-[color:var(--pv-icon)]" />
+            <code title={t.preview.identityCodeHint} className="min-w-0 flex-1 truncate text-[10px] tracking-wide text-[color:var(--pv-muted)]">{profile.fingerprint}</code>
             <CopyCodeButton value={profile.fingerprint} />
           </div>}
-          <div className="mt-4 rounded-xl border border-white/[.06] bg-black/15 px-3 py-2.5">
-            {profile.role && <div className="flex items-center gap-2 text-xs text-slate-300"><ShieldCheck className="size-3.5 text-violet-300" /><span>{profile.role}</span></div>}
-            <p className={cn("text-xs leading-5 text-slate-400", profile.role && "mt-2 border-t border-white/[.06] pt-2")}>{profile.bio?.trim() || t.preview.memberProfile}</p>
+          <div className="mt-4 rounded-xl border border-[color:var(--pv-box-border)] bg-[color:var(--pv-box-bg)] px-3 py-2.5">
+            {profile.role && <div className="flex items-center gap-2 text-xs text-[color:var(--pv-soft)]"><ShieldCheck className="size-3.5 text-[color:var(--pv-icon)]" /><span>{profile.role}</span></div>}
+            <p className={cn("text-xs leading-5 text-[color:var(--pv-muted)]", profile.role && "mt-2 border-t border-[color:var(--pv-box-border)] pt-2")}>{profile.bio?.trim() || t.preview.memberProfile}</p>
           </div>
         </div>
       </div>,

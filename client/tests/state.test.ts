@@ -47,6 +47,17 @@ describe("persisted client state", () => {
     expect(restored.preferences.uiScale).toBe(1.2);
   });
 
+  it("adds the default color theme to older states and persists a chosen theme", () => {
+    const state = createDefaultState();
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.colorTheme;
+    const upgraded = parsePersistedState({ ...state, preferences: olderPreferences });
+    expect(upgraded.preferences.colorTheme).toBe("midnight");
+
+    const restored = parsePersistedState({ ...state, preferences: { ...state.preferences, colorTheme: "forest" } });
+    expect(restored.preferences.colorTheme).toBe("forest");
+  });
+
   it("migrates v3 profiles by deriving a username and generating a discriminator", () => {
     const state = createDefaultState();
     const legacyProfile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };
@@ -60,6 +71,19 @@ describe("persisted client state", () => {
     const state = createDefaultState();
     const restored = parsePersistedState({ ...state, profile: { id: "local-user", username: "Lina.Dev", discriminator: "0042", bio: "", avatar: null, banner: null, createdAt: "2026-08-07T00:00:00.000Z" } });
     expect(restored.profile).toMatchObject({ username: "lina.dev", discriminator: "0042" });
+  });
+
+  it("persists the profile accent color and keeps older profiles without one readable", () => {
+    const state = createDefaultState();
+    const withoutAccent = parsePersistedState({ ...state, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, createdAt: "2026-08-07T00:00:00.000Z" } });
+    expect(withoutAccent.profile?.accentColor).toBeUndefined();
+
+    const withAccent = parsePersistedState({ ...state, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, accentColor: "#7c3aed", nameGlow: "#34d399", createdAt: "2026-08-07T00:00:00.000Z" } });
+    expect(withAccent.profile?.accentColor).toBe("#7c3aed");
+    expect(withAccent.profile?.nameGlow).toBe("#34d399");
+
+    const state2 = createDefaultState();
+    expect(() => parsePersistedState({ ...state2, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, accentColor: "violet", createdAt: "2026-08-07T00:00:00.000Z" } })).toThrow();
   });
 
   it("rejects an active channel outside the active server", () => {

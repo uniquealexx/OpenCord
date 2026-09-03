@@ -259,7 +259,7 @@ export function DeploymentDialog({ open, onOpenChange, onDeployed, preset, updat
                 : <LoaderCircle className="size-5 animate-spin text-violet-300" />}
           <div><div className={`text-sm font-semibold ${failedByError ? "text-red-200" : ""}`}>{finished ? redeployment ? t.deployment.redeploymentDone : t.deployment.done : failedByError ? redeployment ? t.deployment.redeploymentFailed : t.deployment.failed : cancelled ? t.deployment.cancelled : redeployment ? t.deployment.redeploymentProgress : t.deployment.progress}</div><div className="text-xs text-slate-500">{domain || `http://${host}:3210`}</div></div>
         </div>
-        <div aria-label={t.deployment.deploymentLog} className="scrollbar-thin h-64 overflow-y-auto rounded-xl bg-[#191b1e] p-3 font-mono text-[11px] leading-5 text-slate-400">
+        <div aria-label={t.deployment.deploymentLog} className="scrollbar-thin h-64 overflow-y-auto rounded-xl bg-rail p-3 font-mono text-[11px] leading-5 text-slate-400">
           {progress.length ? progress.map((item, index) => <div key={`${item.phase}-${index}`} className={item.level === "error" ? "text-red-300" : item.level === "success" ? "text-emerald-300" : ""}>[{item.phase}] {item.message}</div>) : <div>{t.deployment.waitingForOperation}</div>}
         </div>
         {finished ? <Button onClick={() => close(false)} className="w-full">{t.deployment.finished}</Button> : failed ? <Button variant="secondary" onClick={() => setStep(environment ? "environment" : "configuration")} className="w-full">{t.deployment.chooseInstallMethod}</Button> : <Button variant="danger" onClick={() => void cancel()} className="w-full">{t.deployment.cancel}</Button>}

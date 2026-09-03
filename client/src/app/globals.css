@@ -1,28 +1,27 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   OpenCord design tokens — DeepSeek dark theme.
-   Плоский Material-стиль: нейтральные тёмные поверхности, один синий акцент,
-   без градиентов. Лёгкое «стекло» (как на главном сайте DeepSeek) — только для
-   плавающих слоёв через класс .glass.
+   OpenCord design tokens — тёмные цветовые схемы в исходном DeepSeek-стиле.
+   Плоские поверхности, один акцент на схему, без градиентов. Лёгкое «стекло» —
+   только для плавающих слоёв через класс .glass.
 --------------------------------------------------------------------------- */
 
 @theme {
-  /* Акценты — фирменный синий DeepSeek. Старые имена violet/cyan оставлены,
-     чтобы все существующие utility-классы автоматически стали синими. */
+  /* Базовая схема «Полночь». Имена violet/cyan сохранены как семантические
+     акценты для существующих utility-классов и переопределяются ниже. */
   --color-violet-100: #dbe3ff;
   --color-violet-200: #b7c6ff;
   --color-violet-300: #8fa5ff;
-  --color-violet-400: #6b86ff;
-  --color-violet-500: #4d6bfe;
-  --color-violet-600: #3d5cf5;
+  --color-violet-400: #4867ef;
+  --color-violet-500: #405fe8;
+  --color-violet-600: #3653d0;
   --color-violet-700: #2f47c9;
 
   --color-cyan-100: #d7ecff;
   --color-cyan-200: #b3d9ff;
   --color-cyan-300: #8cc6ff;
   --color-cyan-400: #58b0ff;
-  --color-cyan-500: #3b98ff;
+  --color-cyan-500: #176fae;
   --color-cyan-600: #2b7de0;
   --color-cyan-700: #1f63b8;
 
@@ -33,14 +32,155 @@
   --color-panel: #26282c;    /* карточки, поля ввода, композер */
   --color-raised: #2b2d32;   /* меню, поповеры, тосты */
 
-  --color-primary: #4d6bfe;
-  --color-primary-hover: #6b86ff;
+  --color-primary: #405fe8;
+  --color-primary-hover: #4867ef;
 }
 
 :root {
   color-scheme: dark;
-  --background: #212327;
+  --background: var(--color-canvas);
   --foreground: #f1f2f4;
+  --theme-accent-rgb: 64 95 232;
+  --glass-background: rgba(43, 45, 50, .78);
+  --glass-clear-background: rgba(20, 22, 26, .28);
+}
+
+/* Шесть тёмных схем сохраняют исходную иерархию поверхностей и контраст текста.
+   Старые имена violet/cyan выступают семантическими акцентами: благодаря этому
+   тема охватывает существующий интерфейс без дублирования классов в компонентах. */
+:root[data-color-theme="amethyst"] {
+  --color-violet-100: #f1eaff;
+  --color-violet-200: #e2d4ff;
+  --color-violet-300: #c9afff;
+  --color-violet-400: #8652ec;
+  --color-violet-500: #7c3aed;
+  --color-violet-600: #7744dc;
+  --color-violet-700: #6132ba;
+  --color-cyan-100: #fde7ff;
+  --color-cyan-200: #f9c7ff;
+  --color-cyan-300: #f0a0fb;
+  --color-cyan-400: #d96ee8;
+  --color-cyan-500: #a82bb5;
+  --color-cyan-600: #9c37ad;
+  --color-cyan-700: #7d288d;
+  --color-canvas: #211f29;
+  --color-rail: #17151e;
+  --color-sidebar: #1c1924;
+  --color-panel: #282430;
+  --color-raised: #302b39;
+  --color-primary: #7c3aed;
+  --color-primary-hover: #8652ec;
+  --theme-accent-rgb: 124 58 237;
+  --glass-background: rgba(48, 43, 57, .8);
+  --glass-clear-background: rgba(23, 21, 30, .3);
+}
+
+:root[data-color-theme="ocean"] {
+  --color-violet-100: #d9fffa;
+  --color-violet-200: #aaf5eb;
+  --color-violet-300: #72e3d5;
+  --color-violet-400: #108278;
+  --color-violet-500: #0f766e;
+  --color-violet-600: #0c776f;
+  --color-violet-700: #095f59;
+  --color-cyan-100: #dcfaff;
+  --color-cyan-200: #b2f1fa;
+  --color-cyan-300: #7cdeec;
+  --color-cyan-400: #3fc5d8;
+  --color-cyan-500: #126f89;
+  --color-cyan-600: #19899b;
+  --color-cyan-700: #136d7b;
+  --color-canvas: #172326;
+  --color-rail: #10191c;
+  --color-sidebar: #132024;
+  --color-panel: #1d2b2f;
+  --color-raised: #24353a;
+  --color-primary: #0f766e;
+  --color-primary-hover: #108278;
+  --theme-accent-rgb: 15 118 110;
+  --glass-background: rgba(36, 53, 58, .8);
+  --glass-clear-background: rgba(10, 25, 29, .3);
+}
+
+:root[data-color-theme="forest"] {
+  --color-violet-100: #e1f8e9;
+  --color-violet-200: #bceacb;
+  --color-violet-300: #8bd6a6;
+  --color-violet-400: #2f855a;
+  --color-violet-500: #26734d;
+  --color-violet-600: #276f4b;
+  --color-violet-700: #205a3e;
+  --color-cyan-100: #f1f8d7;
+  --color-cyan-200: #dfeca9;
+  --color-cyan-300: #c4d876;
+  --color-cyan-400: #a2bd4e;
+  --color-cyan-500: #657d28;
+  --color-cyan-600: #667f2a;
+  --color-cyan-700: #506422;
+  --color-canvas: #1d241f;
+  --color-rail: #131a15;
+  --color-sidebar: #18201a;
+  --color-panel: #252e27;
+  --color-raised: #2c382f;
+  --color-primary: #26734d;
+  --color-primary-hover: #2f855a;
+  --theme-accent-rgb: 38 115 77;
+  --glass-background: rgba(44, 56, 47, .8);
+  --glass-clear-background: rgba(15, 25, 18, .3);
+}
+
+:root[data-color-theme="sunset"] {
+  --color-violet-100: #ffe9df;
+  --color-violet-200: #ffd0bd;
+  --color-violet-300: #f5a98c;
+  --color-violet-400: #bd4f31;
+  --color-violet-500: #ad4029;
+  --color-violet-600: #a94930;
+  --color-violet-700: #893a28;
+  --color-cyan-100: #fff2d2;
+  --color-cyan-200: #ffe2a1;
+  --color-cyan-300: #f4c66c;
+  --color-cyan-400: #dca33f;
+  --color-cyan-500: #966a05;
+  --color-cyan-600: #99671e;
+  --color-cyan-700: #795019;
+  --color-canvas: #29211e;
+  --color-rail: #1c1614;
+  --color-sidebar: #241b18;
+  --color-panel: #322824;
+  --color-raised: #3a2f2a;
+  --color-primary: #ad4029;
+  --color-primary-hover: #bd4f31;
+  --theme-accent-rgb: 173 64 41;
+  --glass-background: rgba(58, 47, 42, .8);
+  --glass-clear-background: rgba(28, 20, 17, .3);
+}
+
+:root[data-color-theme="rose"] {
+  --color-violet-100: #ffe8f1;
+  --color-violet-200: #ffc9dc;
+  --color-violet-300: #f39cbb;
+  --color-violet-400: #b84b78;
+  --color-violet-500: #a43b65;
+  --color-violet-600: #9b3b64;
+  --color-violet-700: #7e2e51;
+  --color-cyan-100: #f2eaff;
+  --color-cyan-200: #dfd0fb;
+  --color-cyan-300: #c4a9ee;
+  --color-cyan-400: #a37bdc;
+  --color-cyan-500: #875bc3;
+  --color-cyan-600: #6e45a4;
+  --color-cyan-700: #583684;
+  --color-canvas: #271f25;
+  --color-rail: #1b151a;
+  --color-sidebar: #221920;
+  --color-panel: #30262e;
+  --color-raised: #392d36;
+  --color-primary: #a43b65;
+  --color-primary-hover: #b84b78;
+  --theme-accent-rgb: 164 59 101;
+  --glass-background: rgba(57, 45, 54, .8);
+  --glass-clear-background: rgba(27, 19, 25, .3);
 }
 
 * { box-sizing: border-box; }
@@ -62,7 +202,7 @@ body {
 }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
-input[type="range"] { accent-color: #4d6bfe; }
+input[type="range"] { accent-color: var(--color-primary); }
 
 /* Безопасные зоны мобильной оболочки.
    `env(safe-area-inset-*)` работает не во всех сборках Android WebView, поэтому
@@ -95,7 +235,7 @@ input[type="range"] { accent-color: #4d6bfe; }
 }
 
 .app-shell {
-  background: #191b1e;
+  background: var(--color-rail);
   padding-top: var(--shell-inset-top);
   /* Когда открыта клавиатура, она перекрывает панель навигации: снизу отступаем
      ровно на её высоту, чтобы композер оставался виден, а лента не «прыгала». */
@@ -157,7 +297,7 @@ button, a { touch-action: manipulation; }
 }
 
 @keyframes message-jump-highlight {
-  0%, 55% { background-color: rgba(77, 107, 254, .14); }
+  0%, 55% { background-color: rgb(var(--theme-accent-rgb) / .14); }
   100% { background-color: transparent; }
 }
 
@@ -175,10 +315,10 @@ button, a { touch-action: manipulation; }
 .scrollbar-none { scrollbar-width: none; }
 .scrollbar-none::-webkit-scrollbar { display: none; }
 
-/* Плоский скроллбар в фирменном синем, без градиентов и свечения. */
+/* Плоский скроллбар в цвете текущей схемы, без градиентов и свечения. */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #4d6bfe rgba(255, 255, 255, .06);
+  scrollbar-color: var(--color-primary) rgba(255, 255, 255, .06);
   scrollbar-gutter: stable;
 }
 
@@ -198,11 +338,11 @@ button, a { touch-action: manipulation; }
   min-height: 44px;
   border: 2px solid transparent;
   border-radius: 999px;
-  background: #4d6bfe padding-box;
+  background: var(--color-primary) padding-box;
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #6b86ff padding-box; }
-.scrollbar-thin::-webkit-scrollbar-thumb:active { background: #3d5cf5 padding-box; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: var(--color-primary-hover) padding-box; }
+.scrollbar-thin::-webkit-scrollbar-thumb:active { background: var(--color-violet-600) padding-box; }
 
 .scrollbar-thin::-webkit-scrollbar-button,
 .scrollbar-thin::-webkit-scrollbar-button:single-button,
@@ -226,11 +366,11 @@ button, a { touch-action: manipulation; }
   .scrollbar-thin::-webkit-scrollbar { width: 0; height: 0; }
 }
 
-/* Тумблер слайдеров — плоский синий кружок, как в Material. */
+/* Ползунок — плоский акцентный кружок, как в Material. */
 .voice-limit-slider::-webkit-slider-thumb {
   width: 16px;
   height: 16px;
-  border: 2px solid #4d6bfe;
+  border: 2px solid var(--color-primary);
   border-radius: 999px;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
@@ -241,14 +381,14 @@ button, a { touch-action: manipulation; }
 .voice-limit-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  border: 2px solid #4d6bfe;
+  border: 2px solid var(--color-primary);
   border-radius: 999px;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
 }
 
 .voice-limit-slider:focus-visible {
-  outline: 2px solid rgba(77, 107, 254, .6);
+  outline: 2px solid rgb(var(--theme-accent-rgb) / .6);
   outline-offset: 4px;
 }
 
@@ -258,18 +398,18 @@ button, a { touch-action: manipulation; }
    могли переопределить фон на мобильных. */
 @layer components {
   .glass {
-    background: rgba(43, 45, 50, .78);
+    background: var(--glass-background);
     -webkit-backdrop-filter: blur(20px) saturate(1.3);
     backdrop-filter: blur(20px) saturate(1.3);
     border: 1px solid rgba(255, 255, 255, .08);
   }
 
   .glass-clear {
-    background: rgba(20, 22, 26, .28);
+    background: var(--glass-clear-background);
     -webkit-backdrop-filter: blur(26px) saturate(1.35);
     backdrop-filter: blur(26px) saturate(1.35);
     border: 1px solid rgba(255, 255, 255, .11);
   }
 }
 
-::selection { background: rgba(77, 107, 254, .35); color: #ffffff; }
+::selection { background: rgb(var(--theme-accent-rgb) / .35); color: #ffffff; }

@@ -20,6 +20,7 @@ export interface MentionCandidate {
   role?: string;
   bio?: string;
   fingerprint?: string;
+  nameGlow?: string | null;
 }
 
 export type ContentSegment = { kind: "text"; text: string } | { kind: "mention"; userId: string };

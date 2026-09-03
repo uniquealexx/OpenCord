@@ -228,7 +228,7 @@ export function ScreenShareDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden border-[#34363b] bg-[#202124] p-0 shadow-[0_24px_70px_rgba(0,0,0,.52)] sm:max-w-6xl [&>div:first-of-type]:max-h-none [&>div:first-of-type]:overflow-hidden">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden border-white/[.08] bg-canvas p-0 shadow-[0_24px_70px_rgba(0,0,0,.52)] sm:max-w-6xl [&>div:first-of-type]:max-h-none [&>div:first-of-type]:overflow-hidden">
         <DialogHeader className="mb-3 pr-10 text-left">
           <DialogTitle className="text-sm font-semibold tracking-tight text-slate-200">
             {t.screenShare.title}
@@ -257,15 +257,15 @@ export function ScreenShareDialog({
                     onClick={() => setSelectedId(source.id)}
                     aria-pressed={selectedId === source.id}
                     className={cn(
-                      "group relative overflow-hidden rounded-2xl border bg-[#181a1e] p-1.5 text-left transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60",
+                      "group relative overflow-hidden rounded-2xl border bg-rail p-1.5 text-left transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60",
                       selectedId === source.id
-                        ? "border-[#5b7fd8] bg-[#232a36] ring-1 ring-[#5b7fd8]/35"
+                        ? "border-violet-400/60 bg-violet-400/[.08] ring-1 ring-violet-400/25"
                         : "border-white/[.07] hover:border-white/20 hover:bg-white/[.025]",
                     )}
                   >
                     <div className="relative aspect-video overflow-hidden rounded-xl bg-black">
                       {source.previewUnavailable ? (
-                        <div className="grid size-full place-items-center bg-[#202329]">
+                        <div className="grid size-full place-items-center bg-panel">
                           {source.appIcon ? (
                             <Image
                               unoptimized
@@ -289,7 +289,7 @@ export function ScreenShareDialog({
                           className="object-cover"
                         />
                       )}
-                      {selectedId === source.id && <span className="absolute right-2 top-2 grid size-6 place-items-center rounded-full bg-[#4f6fdc] text-white ring-2 ring-black/35"><Check className="size-3.5 stroke-[3]" /></span>}
+                      {selectedId === source.id && <span className="absolute right-2 top-2 grid size-6 place-items-center rounded-full bg-primary text-white ring-2 ring-black/35"><Check className="size-3.5 stroke-[3]" /></span>}
                     </div>
                     <div className="flex h-10 items-center gap-2 px-1.5">
                       {source.appIcon ? (
@@ -319,7 +319,7 @@ export function ScreenShareDialog({
                 </p>
               )}
             </section>
-            <aside className="space-y-4 border-t border-white/[.06] bg-[#1d1e21] p-5 lg:border-l lg:border-t-0">
+            <aside className="space-y-4 border-t border-white/[.06] bg-sidebar p-5 lg:border-l lg:border-t-0">
               <OptionGroup
                 label={t.screenShare.quality}
                 values={availableResolutions}
@@ -353,7 +353,7 @@ export function ScreenShareDialog({
                     className={cn(
                       "rounded-lg px-2 py-2.5 text-[11px] font-semibold transition",
                       contentHint === "detail"
-                        ? "bg-[#4f6fdc] text-white"
+                        ? "bg-primary text-white"
                         : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300",
                     )}
                   >
@@ -365,7 +365,7 @@ export function ScreenShareDialog({
                     className={cn(
                       "rounded-lg px-2 py-2.5 text-[11px] font-semibold transition",
                       contentHint === "motion"
-                        ? "bg-[#4f6fdc] text-white"
+                        ? "bg-primary text-white"
                         : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300",
                     )}
                   >
@@ -397,14 +397,14 @@ export function ScreenShareDialog({
             {error}
           </p>
         )}
-        <div className="flex items-center justify-end gap-2 border-t border-white/[.06] bg-[#202124] px-6 py-3 sm:px-7">
+        <div className="flex items-center justify-end gap-2 border-t border-white/[.06] bg-canvas px-6 py-3 sm:px-7">
           <Button variant="secondary" onClick={() => onOpenChange(false)} className="min-w-24 border-white/[.08] bg-white/[.035]">
             {t.screenShare.cancel}
           </Button>
           <Button
             onClick={() => void start()}
             disabled={!selected || loading || starting}
-            className="min-w-52 bg-[#4f6fdc] hover:bg-[#5b79df]"
+            className="min-w-52 bg-primary hover:bg-violet-400"
           >
             {starting ? (
               <LoaderCircle className="size-4 animate-spin" />
@@ -449,7 +449,7 @@ function OptionGroup({
             className={cn(
               "rounded-lg px-2 py-2.5 text-[11px] font-medium transition",
               value === option
-                ? "bg-[#4f6fdc] text-white"
+                ? "bg-primary text-white"
                 : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300",
             )}
           >

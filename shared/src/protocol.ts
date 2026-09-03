@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 36 as const;
+export const PROTOCOL_VERSION = 38 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -124,6 +124,8 @@ export const usernameSchema = z.string().trim().toLowerCase().regex(/^[a-z0-9_.-
 export const discriminatorSchema = z.string().regex(/^[0-9]{4}$/u);
 // Код идентичности — SHA-256 отпечаток публичного ключа, группы по 4 hex-символа.
 export const fingerprintSchema = z.string().regex(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){3}$/u);
+// Акцентный цвет превью профиля: только HEX без альфы, чтобы сохранять эффект стекла.
+export const profileAccentColorSchema = z.string().regex(/^#[0-9a-f]{6}$/u);
 
 export const publicProfileSchema = z.object({
   username: usernameSchema,
@@ -134,6 +136,9 @@ export const publicProfileSchema = z.object({
   status: userStatusSchema.default("online"),
   customStatus: z.string().trim().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: customStatusEmojiSchema.optional(),
+  accentColor: profileAccentColorSchema.nullish(),
+  // Мягкое свечение ника; отсутствует или null — выключено.
+  nameGlow: profileAccentColorSchema.nullish(),
 });
 
 export const channelSchema = z.object({
@@ -172,6 +177,8 @@ export const memberSchema = z.object({
   status: publicMemberStatusSchema,
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: customStatusEmojiSchema.optional(),
+  accentColor: profileAccentColorSchema.nullish(),
+  nameGlow: profileAccentColorSchema.nullish(),
   role: memberRoleSchema,
   chatMuted: z.boolean().default(false),
   chatMutedUntil: z.string().datetime().nullable().default(null),

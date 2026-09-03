@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
@@ -16,6 +16,10 @@ export const localProfileSchema = z.object({
   status: userStatusSchema.optional(),
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
+  // Акцентный цвет превью профиля; поле необязательное, чтобы старые состояния читались.
+  accentColor: profileAccentColorSchema.nullish(),
+  // Мягкое свечение ника; отсутствует или null — выключено.
+  nameGlow: profileAccentColorSchema.nullish(),
   createdAt: z.string().datetime(),
 });
 
@@ -52,6 +56,8 @@ export const mockMemberSchema = z.object({
   status: publicMemberStatusSchema,
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
+  accentColor: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
+  nameGlow: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   avatar: z.string().max(2_000_000).nullable().optional(),
   banner: z.string().max(500_000).nullable().optional(),
@@ -98,8 +104,13 @@ export const mockMessageSchema = z.object({
 });
 
 export const UI_SCALE_OPTIONS = [0.9, 1, 1.1, 1.2] as const;
+export const COLOR_THEMES = ["midnight", "amethyst", "ocean", "forest", "sunset", "rose"] as const;
+export type ColorTheme = (typeof COLOR_THEMES)[number];
+export const DEFAULT_COLOR_THEME: ColorTheme = "midnight";
+
 export const clientPreferencesSchema = z.object({
   language: z.enum(LANGUAGES).default(DEFAULT_LANGUAGE),
+  colorTheme: z.enum(COLOR_THEMES).default(DEFAULT_COLOR_THEME),
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
   notifications: z.boolean(),
@@ -160,7 +171,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { language: DEFAULT_LANGUAGE, compactMode: false, showMemberList: true, notifications: true, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
+    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, compactMode: false, showMemberList: true, notifications: true, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
   };
 }
 

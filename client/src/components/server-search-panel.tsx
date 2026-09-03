@@ -91,7 +91,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
       {result && <><div className="mb-2 flex items-center justify-between px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600"><span>{t.search.results}</span><span>{result.total}</span></div><div className="space-y-2">{result.messages.map((message) => {
         const channel = channels.find((item) => item.id === message.channelId);
         const member = members.find((item) => item.id === message.authorId);
-        return <button key={message.id} type="button" onClick={() => onOpenMessage(toLocalSearchMessage(message))} className="group w-full rounded-xl border border-white/[.065] bg-[#26282c] p-3 text-left hover:border-violet-400/25 hover:bg-[#2b2d32]">
+        return <button key={message.id} type="button" onClick={() => onOpenMessage(toLocalSearchMessage(message))} className="group w-full rounded-xl border border-white/[.065] bg-panel p-3 text-left hover:border-violet-400/25 hover:bg-raised">
           <div className="flex items-center gap-2"><Avatar name={message.authorName} image={message.authorAvatar} color={member?.avatarColor} size="sm" /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{message.authorName}</span>{message.kind && message.kind !== "chat" && <span className="shrink-0 rounded-md bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</span>}<span className="text-[10px] text-slate-600">#{channel?.name ?? t.search.removedChannel}</span></div>
           {message.content && <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-400 group-hover:text-slate-300">{readableContent(message.content, members, t.chat.unknownUser)}</p>}
           {message.attachments.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{message.attachments.map((attachment) => <SearchAttachment key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onPreview={onPreview} />)}</div>}
@@ -104,7 +104,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
 
 /** Заменяет маркеры <@userId> на читаемые @username; неизвестных — на «неизвестный пользователь». */
 function readableContent(content: string, members: MockMember[], unknownLabel: string): string {
-  const candidates: MentionCandidate[] = members.map((member) => ({ id: member.id, username: member.username, discriminator: member.discriminator, avatar: member.avatar ?? null, banner: member.banner ?? null, color: member.avatarColor, status: member.status, role: member.role, bio: member.bio, fingerprint: member.fingerprint }));
+  const candidates: MentionCandidate[] = members.map((member) => ({ id: member.id, username: member.username, discriminator: member.discriminator, avatar: member.avatar ?? null, banner: member.banner ?? null, color: member.avatarColor, status: member.status, role: member.role, bio: member.bio, fingerprint: member.fingerprint, nameGlow: member.nameGlow ?? null }));
   return expandMentionsForEditing(content, candidates).replace(MENTION_TOKEN_PATTERN, `@${unknownLabel}`);
 }
 

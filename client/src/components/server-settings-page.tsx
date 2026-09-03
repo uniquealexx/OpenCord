@@ -11,6 +11,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
+import { nameGlowStyle } from "@/lib/accent-color";
 import { cn } from "@/lib/utils";
 import type { LocalProfile, MockMember, MockServer } from "@/shared/state";
 
@@ -76,8 +77,8 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
 
   // На телефоне настройки занимают весь экран: колонки серверов рядом нет.
   return (
-    <section className={cn("absolute inset-y-0 z-40 flex min-w-0 flex-1 overflow-hidden bg-[#212327] max-md:flex-col", mobile ? "left-0" : "left-[76px]")} style={{ right: 0 }}>
-      <aside className="w-64 shrink-0 border-r border-white/[.055] bg-[#191b1e] px-3 py-4 max-md:w-full max-md:border-b max-md:border-r-0">
+    <section className={cn("absolute inset-y-0 z-40 flex min-w-0 flex-1 overflow-hidden bg-canvas max-md:flex-col", mobile ? "left-0" : "left-[76px]")} style={{ right: 0 }}>
+      <aside className="w-64 shrink-0 border-r border-white/[.055] bg-rail px-3 py-4 max-md:w-full max-md:border-b max-md:border-r-0">
         <div className="mb-5 flex items-center gap-3 px-2">
           <Avatar name={server.name} image={server.avatar} color={server.accent} size="sm" />
           <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-white">{server.name}</p><p className="text-[10px] text-slate-500">{t.serverSettings.title}</p></div>
@@ -99,10 +100,10 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
         {page === "visual" ? (
           <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8">
             <PageHeading title={t.serverSettings.visualTitle} description={t.serverSettings.visualDescription} />
-            <div className="overflow-hidden rounded-3xl border border-white/[.08] bg-[#26282c]">
+            <div className="overflow-hidden rounded-3xl border border-white/[.08] bg-panel">
               <div className="relative h-48 bg-primary/15">{server.banner && <Image src={server.banner} alt="" fill unoptimized sizes="768px" className="object-cover" />}</div>
               <div className="relative px-6 pb-6 pt-14">
-                <div className="absolute -top-11 left-6"><Avatar name={server.name} image={server.avatar} color={server.accent} size="xl" className="ring-4 ring-[#26282c]" /></div>
+                <div className="absolute -top-11 left-6"><Avatar name={server.name} image={server.avatar} color={server.accent} size="xl" className="ring-4 ring-panel" /></div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <button type="button" onClick={onAvatar} disabled={!canManageVisual} className="flex items-center gap-3 rounded-xl border border-white/[.07] bg-black/15 p-3 text-left text-sm text-slate-200 disabled:opacity-45"><Camera className="size-4 text-violet-300" />{t.server.serverAvatar}</button>
                   <button type="button" onClick={onBanner} disabled={!canManageVisual} className="flex items-center gap-3 rounded-xl border border-white/[.07] bg-black/15 p-3 text-left text-sm text-slate-200 disabled:opacity-45"><ImageIcon className="size-4 text-cyan-300" />{t.server.serverBanner}</button>
@@ -119,7 +120,7 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
         ) : page === "limits" ? (
           <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8">
             <PageHeading title={t.serverSettings.limitsTitle} description={t.serverSettings.limitsDescription} />
-            <section className="space-y-5 rounded-3xl border border-white/[.08] bg-[#26282c] p-5 sm:p-6">
+            <section className="space-y-5 rounded-3xl border border-white/[.08] bg-panel p-5 sm:p-6">
               <div>
                 <div className="mb-4 flex items-start justify-between gap-4">
                   <div>
@@ -204,19 +205,22 @@ function RoleManagementBoard({ server, profile, canManageRoles, onSetRole }: { s
 
 function RoleColumn({ title, members, empty, profile, action, onAction }: { title: string; members: MockMember[]; empty: string; profile: LocalProfile; action?: string; onAction?: (member: MockMember) => void }): React.ReactElement {
   const { t } = useI18n();
-  return <section className="min-w-0 overflow-hidden rounded-2xl border border-white/[.07] bg-[#26282c]">
+  return <section className="min-w-0 overflow-hidden rounded-2xl border border-white/[.07] bg-panel">
     <header className="flex items-center justify-between border-b border-white/[.06] px-4 py-3"><h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">{title}</h2><span className="rounded-full bg-white/[.06] px-2 py-0.5 text-[10px] font-semibold text-slate-400">{members.length}</span></header>
     <div className="space-y-2 p-3">
       {members.length === 0 && <p className="px-2 py-8 text-center text-xs text-slate-500">{empty}</p>}
-      {members.map((member) => <div key={member.id} className="rounded-xl border border-white/[.055] bg-black/10 p-3">
+      {members.map((member) => {
+        const glow = member.nameGlow ?? (member.id === profile.id ? profile.nameGlow : undefined);
+        return <div key={member.id} className="rounded-xl border border-white/[.055] bg-black/10 p-3">
         <div className="flex min-w-0 items-center gap-3">
-          <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser: member.id === profile.id }}>
+          <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, accentColor: member.accentColor ?? (member.id === profile.id ? profile.accentColor : undefined), nameGlow: glow, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser: member.id === profile.id }}>
             <Avatar name={member.username} image={member.avatar ?? (member.id === profile.id ? profile.avatar : null)} color={member.avatarColor} size="md" status={member.status} />
           </ProfilePreview>
-          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-200" style={glow ? nameGlowStyle(glow) : undefined}>{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
         </div>
         {action && onAction && <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => onAction(member)}><UserCog className="size-3.5" />{action}</Button>}
-      </div>)}
+      </div>;
+      })}
     </div>
     <footer className="border-t border-white/[.05] px-4 py-2 text-[10px] text-slate-600">{t.serverSettings.usersInColumn(members.length)}</footer>
   </section>;
@@ -225,7 +229,7 @@ function RoleColumn({ title, members, empty, profile, action, onAction }: { titl
 function BannedList({ members, canModerate, onUnban }: { members: BannedMember[]; canModerate: boolean; onUnban: (userId: string) => void }): React.ReactElement {
   const { t, locale } = useI18n();
   if (members.length === 0) return <EmptyState>{t.serverSettings.noBans}</EmptyState>;
-  return <div className="space-y-2">{members.map((member) => <div key={member.id} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-[#26282c] p-3">
+  return <div className="space-y-2">{members.map((member) => <div key={member.id} className="flex items-center gap-3 rounded-2xl border border-white/[.07] bg-panel p-3">
     <ProfilePreview profile={{ username: member.username ?? t.chat.unknownUser, discriminator: member.discriminator ?? undefined, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, status: "offline" }}>
       <Avatar name={member.username ?? t.chat.unknownUser} image={member.avatar} size="md" />
     </ProfilePreview>
@@ -239,11 +243,11 @@ function BanManagementRow({ member, disabled, onBan }: { member: MockMember; dis
   const [duration, setDuration] = useState<BanDurationMinutes>(1_440);
   const [confirming, setConfirming] = useState(false);
   function run(): void { onBan(member.id, duration); setConfirming(false); }
-  return <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[.07] bg-[#26282c] p-3">
-    <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser: false }}>
+  return <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[.07] bg-panel p-3">
+    <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, accentColor: member.accentColor, nameGlow: member.nameGlow, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser: false }}>
       <Avatar name={member.username} image={member.avatar} color={member.avatarColor} size="md" status={member.status} />
     </ProfilePreview>
-    <div className="min-w-32 flex-1"><p className="truncate text-sm font-semibold text-slate-200">{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
+    <div className="min-w-32 flex-1"><p className="truncate text-sm font-semibold text-slate-200" style={member.nameGlow ? nameGlowStyle(member.nameGlow) : undefined}>{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
     <Combobox label={t.serverSettings.banDurationLabel} value={duration === null ? "permanent" : String(duration)} placeholder={t.serverSettings.banDurationLabel} icon={Clock3} options={[...BAN_DURATION_MINUTES.map((minutes) => ({ value: String(minutes), label: t.serverSettings.banDuration(minutes) })), { value: "permanent", label: t.serverSettings.permanentBan }]} disabled={disabled} clearable={false} className="w-40 shrink-0" onChange={(value) => setDuration(value === "permanent" ? null : Number(value) as BanDurationMinutes)} />
     <Button variant="danger" size="sm" disabled={disabled || confirming} onClick={() => setConfirming(true)}>{t.serverSettings.banAction}</Button>
     {confirming && <div role="alertdialog" aria-label={t.serverSettings.confirmBan(member.username)} className="basis-full rounded-xl border border-red-400/15 bg-red-400/[.055] p-3"><p className="text-xs leading-5 text-red-100/80">{t.serverSettings.confirmBan(member.username)}</p><div className="mt-3 flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>{t.common.cancel}</Button><Button variant="danger" size="sm" onClick={run}>{t.serverSettings.banAction}</Button></div></div>}
@@ -254,12 +258,13 @@ function MemberManagementRow({ member, profile, isCurrentUser, action, confirmTe
   const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
   function run(): void { onAction(); setConfirming(false); }
-  return <div className="rounded-2xl border border-white/[.07] bg-[#26282c] p-3">
+  const glow = member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
+  return <div className="rounded-2xl border border-white/[.07] bg-panel p-3">
     <div className="flex items-center gap-3">
-      <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser }}>
+      <ProfilePreview profile={{ username: member.username, discriminator: member.discriminator, fingerprint: member.fingerprint, avatar: member.avatar, banner: member.banner, accentColor: member.accentColor ?? (isCurrentUser ? profile.accentColor : undefined), nameGlow: glow, bio: member.bio, role: member.role, status: member.status, customStatus: member.customStatus, customStatusEmoji: member.customStatusEmoji, isCurrentUser }}>
         <Avatar name={member.username} image={member.avatar ?? (isCurrentUser ? profile.avatar : null)} color={member.avatarColor} size="md" status={member.status} />
       </ProfilePreview>
-      <div className="min-w-0 flex-1"><p className="flex items-center gap-1 truncate text-sm font-semibold text-slate-200">{member.serverRole === "administrator" && <ShieldCheck className="size-3.5 shrink-0 text-violet-300" />}{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
+      <div className="min-w-0 flex-1"><p className="flex items-center gap-1 truncate text-sm font-semibold text-slate-200" style={glow ? nameGlowStyle(glow) : undefined}>{member.serverRole === "administrator" && <ShieldCheck className="size-3.5 shrink-0 text-violet-300" />}{member.username}</p><p className="truncate text-[10px] text-slate-500">{member.role}</p></div>
       <Button variant={destructive ? "danger" : "secondary"} size="sm" disabled={disabled || confirming} onClick={() => confirmText ? setConfirming(true) : run()}>{action}</Button>
     </div>
     {confirming && confirmText && <div role="alertdialog" aria-label={confirmText} className="mt-3 rounded-xl border border-red-400/15 bg-red-400/[.055] p-3"><p className="text-xs leading-5 text-red-100/80">{confirmText}</p><div className="mt-3 flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>{t.common.cancel}</Button><Button variant="danger" size="sm" onClick={run}>{action}</Button></div></div>}

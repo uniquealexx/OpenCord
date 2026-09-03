@@ -428,12 +428,12 @@ it("forbids the sender from reacting to their own anonymous private message", as
     const banner = "data:image/webp;base64,AQ==";
 
     const profileUpdated = waitForEvent(observer.socket, "member.updated");
-    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd" } }));
-    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd" } });
+    member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd", accentColor: "#7c3aed", nameGlow: "#34d399" } }));
+    expect(await profileUpdated).toMatchObject({ member: { id: member.userId, username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "dnd", accentColor: "#7c3aed", nameGlow: "#34d399" } });
 
     const becameInvisible = waitForEvent(observer.socket, "member.updated");
     member.socket.send(JSON.stringify({ type: "profile.update", requestId: randomUUID(), profile: { username: "member", discriminator: "1234", bio: "Описание участника", avatar, banner, status: "invisible" } }));
-    expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, status: "offline" } });
+    expect(await becameInvisible).toMatchObject({ member: { id: member.userId, bio: "Описание участника", banner, status: "offline", accentColor: null, nameGlow: null } });
 
     const memberRemoved = waitForEvent(observer.socket, "member.removed");
     const memberClosed = once(member.socket, "close");

@@ -25,7 +25,7 @@ export function Combobox({ label, value, placeholder, icon: Icon, options, onCha
 
   const choose = (nextValue: string): void => { onChange(nextValue); setOpen(false); };
   return <div ref={rootRef} className={cn("relative min-w-0", className)}>
-    <button type="button" role="combobox" aria-label={label} aria-controls={listboxId} aria-expanded={open} aria-haspopup="listbox" disabled={disabled} onClick={() => setOpen((current) => !current)} className={cn("flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border px-3 text-left text-xs shadow-[inset_0_1px_rgba(255,255,255,.025)] transition disabled:pointer-events-none disabled:opacity-45", open ? "border-violet-400/45 bg-[#2b2d32] ring-2 ring-violet-400/10" : "border-white/[.08] bg-[#26282c] hover:border-white/[.14] hover:bg-[#2b2d32]")}>
+    <button type="button" role="combobox" aria-label={label} aria-controls={listboxId} aria-expanded={open} aria-haspopup="listbox" disabled={disabled} onClick={() => setOpen((current) => !current)} className={cn("flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border px-3 text-left text-xs shadow-[inset_0_1px_rgba(255,255,255,.025)] transition disabled:pointer-events-none disabled:opacity-45", open ? "border-violet-400/45 bg-raised ring-2 ring-violet-400/10" : "border-white/[.08] bg-panel hover:border-white/[.14] hover:bg-raised")}>
       <Icon className={cn("size-3.5 shrink-0", open ? "text-violet-300" : "text-slate-500")} />
       <span className={cn("min-w-0 flex-1 truncate", selected ? "text-slate-200" : "text-slate-500")}>{selected?.label ?? placeholder}</span>
       <ChevronDown className={cn("size-3.5 shrink-0 text-slate-600 transition-transform", open && "rotate-180 text-violet-300")} />

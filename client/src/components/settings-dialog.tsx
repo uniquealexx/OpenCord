@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { ThemeSelector } from "@/components/theme-selector";
 import { useAudioSettings } from "@/components/settings/use-audio-settings";
 import { useLocalIdentity } from "@/components/settings/use-local-identity";
 import { LANGUAGE_LABELS, LANGUAGES, useI18n, type Language } from "@/lib/i18n";
@@ -47,6 +48,7 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
         <DialogHeader><DialogTitle>{t.settings.title}</DialogTitle></DialogHeader>
         {!confirmReset ? <div className="space-y-6">
           <ClientUpdateSection state={updateState} />
+          <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{t.settings.colorTheme}</h3><div className="rounded-2xl border border-white/7 bg-white/[.025] p-4"><ThemeSelector value={preferences.colorTheme} label={t.settings.colorTheme} labels={t.settings.colorThemeNames} onChange={(colorTheme) => updatePreferences({ ...preferences, colorTheme })} /><p className="mt-3 text-xs leading-5 text-slate-500">{t.settings.colorThemeHint}</p></div></section>
           <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{t.settings.appearance}</h3><div className="divide-y divide-white/6 rounded-2xl border border-white/7 bg-white/[.025]">
             <SettingRow title={t.settings.compact} hint={t.settings.compactHint}><Switch checked={preferences.compactMode} onCheckedChange={(value) => onPreferences({ ...preferences, compactMode: value })} /></SettingRow>
             <SettingRow title={t.settings.members}><Switch checked={preferences.showMemberList} onCheckedChange={(value) => onPreferences({ ...preferences, showMemberList: value })} /></SettingRow>
