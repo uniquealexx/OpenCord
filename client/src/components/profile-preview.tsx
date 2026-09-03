@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Fingerprint, ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { useI18n } from "@/lib/i18n";
-import { accentCardStyle, accentGlassBackground, nameGlowStyle } from "@/lib/accent-color";
+import { accentCardStyle, accentGlassBackground } from "@/lib/accent-color";
+import { nicknameStyle } from "@/lib/name-font";
 import { cn } from "@/lib/utils";
-import type { PublicMemberStatus } from "@opencord/shared";
+import type { NameFont, PublicMemberStatus } from "@opencord/shared";
 
 type PreviewStatus = PublicMemberStatus;
 
@@ -21,6 +22,8 @@ export interface PreviewProfile {
   accentColor?: string | null;
   /** Мягкое свечение ника (HEX без альфы) — подсвечивает имя на карточке. */
   nameGlow?: string | null;
+  /** Шрифт ника — отрисовывается только CSS, текст не меняется. */
+  nameFont?: NameFont | null;
   color?: string;
   status?: PreviewStatus;
   customStatus?: string;
@@ -125,7 +128,7 @@ export function ProfilePreview({ profile, side = "right", wrapperClassName, trig
           {profile.isCurrentUser && <span className="mb-1 rounded-full border border-[color:var(--pv-badge-border)] bg-[color:var(--pv-badge-bg)] px-2.5 py-1 text-[10px] font-semibold text-[color:var(--pv-badge-text)]">{t.preview.thisIsYou}</span>}
         </div>
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          <h3 className="mt-2 truncate text-base font-bold text-[color:var(--pv-heading)]" style={profile.nameGlow ? nameGlowStyle(profile.nameGlow) : undefined}>{profile.username}</h3>
+          <h3 className="mt-2 truncate text-base font-bold text-[color:var(--pv-heading)]" style={nicknameStyle(profile.nameFont, profile.nameGlow)}>{profile.username}</h3>
           <p className="mt-0.5 truncate text-xs font-medium text-[color:var(--pv-muted)]">{tag}</p>
           <div className="mt-1 flex items-center gap-2 text-xs text-[color:var(--pv-muted)]"><span className={cn("size-2 rounded-full", statusColors[status])} /><span>{t.statuses[status]}</span></div>
           {profile.customStatus && <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-[color:var(--pv-soft)]">{profile.customStatusEmoji && <span className="shrink-0 text-sm leading-5" style={{ fontFamily: emojiFont }}>{profile.customStatusEmoji}</span>}<span className="min-w-0 break-words">{profile.customStatus}</span></p>}

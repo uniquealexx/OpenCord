@@ -1,18 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CUSTOM_STATUS_MAX_LENGTH, userAvatarSchema, userBannerSchema, type UserStatus } from "@opencord/shared";
+import { CUSTOM_STATUS_MAX_LENGTH, userAvatarSchema, userBannerSchema, type NameFont, type UserStatus } from "@opencord/shared";
 import { AtSign, Camera, Check, Copy, Crop, Fingerprint, Frame, ImagePlus, LoaderCircle, Trash2, Type, X } from "lucide-react";
 import { AccentColorPicker, ColorSwatchPicker } from "@/components/accent-color-picker";
 import { Avatar } from "@/components/avatar";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { ImageCropDialog } from "@/components/image-crop-dialog";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
-import { accentCardStyle, accentGlassBackground, FALLBACK_ACCENT_COLOR, nameGlowStyle } from "@/lib/accent-color";
+import { accentCardStyle, accentGlassBackground, FALLBACK_ACCENT_COLOR } from "@/lib/accent-color";
+import { NAME_FONT_VALUES, nicknameStyle } from "@/lib/name-font";
 import { compressUserAvatar } from "@/lib/user-avatar-image";
 import { compressUserBanner } from "@/lib/user-banner-image";
 import { imageDataUrlToFile, type ImageCrop } from "@/lib/image-crop";
@@ -25,7 +27,6 @@ const emojiFont = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sa
  * UI-плейсхолдеры без передачи данных — в протокол они попадут только при реализации.
  */
 const CUSTOMIZATION_PLACEHOLDERS = [
-  { icon: Type, labelKey: "nameFont" },
   { icon: Frame, labelKey: "avatarDecoration" },
 ] as const;
 
@@ -43,6 +44,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
   // Выбранный цвет свечения запоминается на время диалога: выключение галочки
   // снимает свечение, но повторное включение возвращает тот же цвет.
   const [nameGlowColor, setNameGlowColor] = useState(profile.nameGlow ?? FALLBACK_ACCENT_COLOR);
+  const [nameFont, setNameFont] = useState<NameFont>(profile.nameFont ?? "none");
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState("");
@@ -57,6 +59,10 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
   }, [open]);
 
   const usernameValid = /^[a-z0-9_.-]{2,32}$/u.test(username.trim().toLowerCase());
+  const previewName = username.trim().toLowerCase() || profile.username;
+  // Опции шрифтов показывают ник пользователя в каждом начертании — со свечением,
+  // если оно включено: видно и шрифт, и glow до сохранения.
+  const fontOptions = NAME_FONT_VALUES.map((font) => ({ value: font, label: previewName, style: nicknameStyle(font, nameGlowEnabled ? nameGlowColor : undefined) }));
 
   function chooseAvatar(event: React.ChangeEvent<HTMLInputElement>): void {
     const file = event.target.files?.[0];
@@ -114,7 +120,7 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
     try {
       const nextAvatar = avatar && !userAvatarSchema.safeParse(avatar).success ? await compressUserAvatar(await (await fetch(avatar)).blob()) : avatar;
       const nextBanner = banner && !userBannerSchema.safeParse(banner).success ? await compressUserBanner(await (await fetch(banner)).blob()) : banner;
-      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "", accentColor, nameGlow: nameGlowEnabled ? nameGlowColor : null });
+      onSave({ ...profile, username: username.trim().toLowerCase(), bio: bio.trim(), avatar: nextAvatar, banner: nextBanner, status, customStatus: customStatus.trim(), customStatusEmoji: customStatus.trim() ? customStatusEmoji : "", accentColor, nameGlow: nameGlowEnabled ? nameGlowColor : null, nameFont });
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t.profile.avatarFailed);
@@ -194,18 +200,6 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
             <legend className="px-1 text-sm font-medium text-slate-300">{t.profile.customization}</legend>
             <label className="text-sm font-medium text-slate-300">{t.profile.accentColor}</label>
             <AccentColorPicker value={accentColor} onChange={setAccentColor} />
-            {/* Живое превью: как акцент окрасит стекло карточки профиля. */}
-            <div
-              className="glass flex items-center gap-3 rounded-xl px-3 py-2.5"
-              style={{ ...(accentColor ? { backgroundColor: accentGlassBackground(accentColor) } : {}), ...accentCardStyle(accentColor) }}
-              data-testid="profile-accent-preview"
-            >
-              <Avatar name={username || profile.username} image={avatar} size="sm" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-bold text-[color:var(--pv-heading)]" style={nameGlowEnabled ? nameGlowStyle(nameGlowColor) : undefined}>{username.trim().toLowerCase() || profile.username}</span>
-                <span className="block truncate text-[10px] text-[color:var(--pv-soft)]">@{username.trim().toLowerCase() || profile.username}#{profile.discriminator}</span>
-              </span>
-            </div>
             <div className="grid gap-3 border-t border-white/[.06] pt-3" data-testid="name-glow-picker">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-300">
                 <input type="checkbox" checked={nameGlowEnabled} onChange={(event) => setNameGlowEnabled(event.target.checked)} className="size-4 rounded accent-violet-500" />
@@ -215,6 +209,23 @@ export function ProfileDialog({ profile, open, onOpenChange, onSave }: { profile
                 <ColorSwatchPicker value={nameGlowColor} onChange={setNameGlowColor} groupLabel={t.profile.nameGlowColor} customLabel={t.profile.accentColorCustom} />
                 <p className="text-[11px] leading-4 text-slate-500">{t.profile.nameGlowHint}</p>
               </>}
+            </div>
+            <div className="grid gap-2 border-t border-white/[.06] pt-3" data-testid="name-font-picker">
+              <label className="text-sm font-medium text-slate-300">{t.profile.nameFont}</label>
+              <Combobox label={t.profile.nameFont} value={nameFont} placeholder={t.profile.nameFont} icon={Type} options={fontOptions} onChange={(value) => setNameFont(value as NameFont)} clearable={false} />
+              <p className="text-[11px] leading-4 text-slate-500">{t.profile.nameFontHint}</p>
+            </div>
+            {/* Живое превью: как акцент, свечение и шрифт лягут на карточку профиля. */}
+            <div
+              className="glass flex items-center gap-3 rounded-xl px-3 py-2.5"
+              style={{ ...(accentColor ? { backgroundColor: accentGlassBackground(accentColor) } : {}), ...accentCardStyle(accentColor) }}
+              data-testid="profile-accent-preview"
+            >
+              <Avatar name={username || profile.username} image={avatar} size="sm" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-bold text-[color:var(--pv-heading)]" style={nicknameStyle(nameFont, nameGlowEnabled ? nameGlowColor : undefined)}>{previewName}</span>
+                <span className="block truncate text-[10px] text-[color:var(--pv-soft)]">@{previewName}#{profile.discriminator}</span>
+              </span>
             </div>
             <div className="grid gap-1.5 border-t border-white/[.06] pt-3">
               {CUSTOMIZATION_PLACEHOLDERS.map(({ icon: Icon, labelKey }) => (

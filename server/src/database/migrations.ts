@@ -471,6 +471,23 @@ const migrations = [
       $$;
     `,
   },
+  {
+    // Шрифт ника: декоративное публичное поле, одно из фиксированных значений.
+    // Отсутствия как состояния нет — «обычный» шрифт кодируется 'none', им же
+    // анонимизация сбрасывает поле, чтобы тип значения держался дефолта.
+    id: "031_user_profile_name_font",
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS name_font text;
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_name_font_check') THEN
+          ALTER TABLE users ADD CONSTRAINT users_name_font_check CHECK (name_font IS NULL OR name_font IN ('none', 'pixel', 'gothic', 'italic', 'mono', 'serif'));
+        END IF;
+      END
+      $$;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

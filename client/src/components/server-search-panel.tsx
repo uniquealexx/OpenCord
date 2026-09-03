@@ -104,7 +104,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
 
 /** Заменяет маркеры <@userId> на читаемые @username; неизвестных — на «неизвестный пользователь». */
 function readableContent(content: string, members: MockMember[], unknownLabel: string): string {
-  const candidates: MentionCandidate[] = members.map((member) => ({ id: member.id, username: member.username, discriminator: member.discriminator, avatar: member.avatar ?? null, banner: member.banner ?? null, color: member.avatarColor, status: member.status, role: member.role, bio: member.bio, fingerprint: member.fingerprint, nameGlow: member.nameGlow ?? null }));
+  const candidates: MentionCandidate[] = members.map((member) => ({ id: member.id, username: member.username, discriminator: member.discriminator, avatar: member.avatar ?? null, banner: member.banner ?? null, color: member.avatarColor, status: member.status, role: member.role, bio: member.bio, fingerprint: member.fingerprint, nameGlow: member.nameGlow ?? null, nameFont: member.nameFont ?? "none" }));
   return expandMentionsForEditing(content, candidates).replace(MENTION_TOKEN_PATTERN, `@${unknownLabel}`);
 }
 

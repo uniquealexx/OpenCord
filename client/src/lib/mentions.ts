@@ -6,6 +6,7 @@
 // передаётся в поле mentions и проверяется сервером.
 
 import { MENTION_TOKEN_PATTERN, buildMentionToken, parseMentionTokens } from "@opencord/shared";
+import type { NameFont } from "@opencord/shared";
 
 export interface MentionCandidate {
   id: string;
@@ -21,6 +22,7 @@ export interface MentionCandidate {
   bio?: string;
   fingerprint?: string;
   nameGlow?: string | null;
+  nameFont?: NameFont | null;
 }
 
 export type ContentSegment = { kind: "text"; text: string } | { kind: "mention"; userId: string };

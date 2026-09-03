@@ -78,9 +78,10 @@ describe("persisted client state", () => {
     const withoutAccent = parsePersistedState({ ...state, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, createdAt: "2026-08-07T00:00:00.000Z" } });
     expect(withoutAccent.profile?.accentColor).toBeUndefined();
 
-    const withAccent = parsePersistedState({ ...state, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, accentColor: "#7c3aed", nameGlow: "#34d399", createdAt: "2026-08-07T00:00:00.000Z" } });
+    const withAccent = parsePersistedState({ ...state, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, accentColor: "#7c3aed", nameGlow: "#34d399", nameFont: "pixel", createdAt: "2026-08-07T00:00:00.000Z" } });
     expect(withAccent.profile?.accentColor).toBe("#7c3aed");
     expect(withAccent.profile?.nameGlow).toBe("#34d399");
+    expect(withAccent.profile?.nameFont).toBe("pixel");
 
     const state2 = createDefaultState();
     expect(() => parsePersistedState({ ...state2, profile: { id: "local-user", username: "lina", discriminator: "0042", bio: "", avatar: null, banner: null, accentColor: "violet", createdAt: "2026-08-07T00:00:00.000Z" } })).toThrow();

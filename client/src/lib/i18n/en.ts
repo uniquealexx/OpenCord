@@ -382,7 +382,7 @@ export const en = {
 
   profile: {
     title: "Public profile",
-    description: "Your username, description, compressed avatar and banner, presence, custom status, and profile accent color are sent to the OpenCord servers you connect to.",
+    description: "Your username, description, compressed avatar and banner, presence, custom status, profile accent color, name glow, and nickname font are sent to the OpenCord servers you connect to.",
     username: "Username (id)",
     usernameHint: "Lowercase letters, digits, dot, underscore or dash. Members mention you with @username.",
     tag: "Tag",
@@ -426,6 +426,7 @@ export const en = {
     nameGlowColor: "Name glow color",
     nameGlowHint: "Adds a soft diffuse glow to your nickname everywhere it is shown. Sent with the profile as a #rrggbb color.",
     nameFont: "Name font",
+    nameFontHint: "Changes the typeface of your nickname everywhere it is shown. Sent with the profile.",
     avatarDecoration: "Avatar decoration",
     cropBannerTitle: "Crop banner",
     cropBannerDescription: "Choose the wide area that will be visible in the profile banner.",

@@ -383,7 +383,7 @@ export const zh = {
 
   profile: {
     title: "公开资料",
-    description: "你的用户名、简介、压缩后的头像和横幅、在线状态、自定义状态和资料预览强调色会发送给你连接的 OpenCord 服务器。",
+    description: "你的用户名、简介、压缩后的头像和横幅、在线状态、自定义状态、资料预览强调色、昵称光晕和昵称字体会发送给你连接的 OpenCord 服务器。",
     username: "用户名 (id)",
     usernameHint: "小写字母、数字、点、下划线或连字符。成员通过 @用户名 提及你。",
     tag: "标签",
@@ -427,6 +427,7 @@ export const zh = {
     nameGlowColor: "昵称发光颜色",
     nameGlowHint: "为你的昵称在所有显示位置添加柔和的弥散光晕。随资料以 #rrggbb 颜色发送。",
     nameFont: "昵称字体",
+    nameFontHint: "更改昵称在所有显示位置的字体。随资料一起发送。",
     avatarDecoration: "头像装饰",
     cropBannerTitle: "裁剪横幅",
     cropBannerDescription: "选择资料横幅中要显示的区域。",

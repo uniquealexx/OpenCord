@@ -183,9 +183,29 @@ describe("ProfileDialog customization", () => {
   it("keeps future customization options as disabled placeholders", () => {
     render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
 
-    expect(screen.getByText("Шрифт ника")).toBeInTheDocument();
     expect(screen.getByText("Декорация аватара")).toBeInTheDocument();
-    expect(screen.getAllByText("Скоро")).toHaveLength(2);
+    expect(screen.getAllByText("Скоро")).toHaveLength(1);
+  });
+
+  it("saves the nickname font selected in the combobox", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProfileDialog profile={profile} open onOpenChange={vi.fn()} onSave={onSave} />);
+
+    await user.click(screen.getByRole("combobox", { name: "Шрифт ника" }));
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(6);
+    expect(options[1]!.querySelector("span")?.getAttribute("style")).toContain("OpenCord Pixel");
+    await user.click(options[1]!);
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ nameFont: "pixel" }));
+  });
+
+  it("restores a saved nickname font", async () => {
+    render(<ProfileDialog profile={{ ...profile, nameFont: "mono" }} open onOpenChange={vi.fn()} onSave={vi.fn()} />);
+
+    expect(screen.getByRole("combobox", { name: "Шрифт ника" })).toHaveTextContent("lina");
   });
 
   it("enables the name glow and saves its color", async () => {

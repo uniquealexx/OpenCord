@@ -300,7 +300,8 @@ describe("ChatRepository", () => {
     expect((await database.query<{ accent_color: string | null }>("SELECT accent_color FROM users WHERE id = $1", ["leaver"]))[0]).toEqual({ accent_color: null });
   });
 
-  it("stores the name glow and clears it on anonymization", async () => {
+    it("stores the name glow and clears it on anonymization", async () => {
+
     expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["030_user_profile_name_glow"])).toHaveLength(1);
     await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", avatar: null });
     await repository.ensureMembership("member", "member-public-key", undefined, true);
@@ -319,6 +320,27 @@ describe("ChatRepository", () => {
     await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "leaver"]);
     await repository.performRetentionCleanup();
     expect((await database.query<{ name_glow: string | null }>("SELECT name_glow FROM users WHERE id = $1", ["leaver"]))[0]).toEqual({ name_glow: null });
+  });
+
+  it("stores the name font and resets it to the default on anonymization", async () => {
+    expect(await database.query<{ id: string }>("SELECT id FROM schema_migrations WHERE id = $1", ["031_user_profile_name_font"])).toHaveLength(1);
+    await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "1234", avatar: null });
+    await repository.ensureMembership("member", "member-public-key", undefined, true);
+    expect((await repository.getMember("member", "online")).nameFont).toBe("none");
+
+    expect(await repository.updateUserProfile("member", { username: "member", discriminator: "1234", avatar: null, nameFont: "pixel" })).toBe(true);
+    expect(await repository.getMember("member", "online")).toMatchObject({ nameFont: "pixel" });
+    expect((await repository.listMembers(new Map())).find((member) => member.id === "member")).toMatchObject({ nameFont: "pixel" });
+
+    // SQL-ограничение держит enum даже при записи в обход Zod на границе протокола.
+    await expect(database.query("UPDATE users SET name_font = $2 WHERE id = $1", ["member", "comic"])).rejects.toThrow();
+
+    await repository.upsertUser("leaver", "leaver-public-key", { username: "leaver", discriminator: "4321", avatar: null, nameFont: "gothic" });
+    await repository.ensureMembership("leaver", "leaver-public-key");
+    expect(await repository.leaveServer("leaver")).toBe("member");
+    await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "leaver"]);
+    await repository.performRetentionCleanup();
+    expect((await database.query<{ name_font: string | null }>("SELECT name_font FROM users WHERE id = $1", ["leaver"]))[0]).toEqual({ name_font: "none" });
   });
 
   it("keeps a deletion tombstone across restarts and clears it for a new deployment", async () => {

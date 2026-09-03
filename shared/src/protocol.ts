@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 38 as const;
+export const PROTOCOL_VERSION = 39 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -126,6 +126,10 @@ export const discriminatorSchema = z.string().regex(/^[0-9]{4}$/u);
 export const fingerprintSchema = z.string().regex(/^[0-9a-f]{4}(?:-[0-9a-f]{4}){3}$/u);
 // Акцентный цвет превью профиля: только HEX без альфы, чтобы сохранять эффект стекла.
 export const profileAccentColorSchema = z.string().regex(/^#[0-9a-f]{6}$/u);
+// Шрифт ника: отрисовывается только CSS на клиенте, текст username не меняется.
+export const NAME_FONT_VALUES = ["none", "pixel", "gothic", "italic", "mono", "serif"] as const;
+export const nameFontSchema = z.enum(NAME_FONT_VALUES);
+export type NameFont = z.infer<typeof nameFontSchema>;
 
 export const publicProfileSchema = z.object({
   username: usernameSchema,
@@ -139,6 +143,8 @@ export const publicProfileSchema = z.object({
   accentColor: profileAccentColorSchema.nullish(),
   // Мягкое свечение ника; отсутствует или null — выключено.
   nameGlow: profileAccentColorSchema.nullish(),
+  // Шрифт ника; дефолт держит совместимость со старыми клиентами.
+  nameFont: nameFontSchema.default("none"),
 });
 
 export const channelSchema = z.object({
@@ -179,6 +185,7 @@ export const memberSchema = z.object({
   customStatusEmoji: customStatusEmojiSchema.optional(),
   accentColor: profileAccentColorSchema.nullish(),
   nameGlow: profileAccentColorSchema.nullish(),
+  nameFont: nameFontSchema.default("none"),
   role: memberRoleSchema,
   chatMuted: z.boolean().default(false),
   chatMutedUntil: z.string().datetime().nullable().default(null),

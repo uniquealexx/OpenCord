@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type Permission, type PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type
+BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
+PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type
+UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
 import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
@@ -27,7 +30,7 @@ import { useMobileLayout } from "@/hooks/use-mobile-layout";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
 import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization, type VoiceSessionStatus } from "@/hooks/use-voice-session";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
-import { nameGlowStyle } from "@/lib/accent-color";
+import { nicknameStyle } from "@/lib/name-font";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
@@ -254,6 +257,7 @@ export function ClientApp(): React.ReactElement {
                       customStatusEmoji: member.customStatusEmoji,
                       accentColor: member.accentColor,
                       nameGlow: member.nameGlow,
+                      nameFont: member.nameFont,
                       avatarColor: colorFromId(member.id),
                       avatar: member.avatar,
                       banner: member.banner,
@@ -915,6 +919,7 @@ export function ClientApp(): React.ReactElement {
         customStatusEmoji: profile.customStatusEmoji ?? "",
         accentColor: profile.accentColor ?? null,
         nameGlow: profile.nameGlow ?? null,
+        nameFont: profile.nameFont ?? "none",
       })
     )
       setNotice(t.notices.profileSavedLocalOnly);
@@ -1965,7 +1970,7 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
         <button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5">
           <Avatar name={profile.username} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} />
           <span className="min-w-0">
-            <span className="block truncate text-xs font-semibold text-slate-200" style={profile.nameGlow ? nameGlowStyle(profile.nameGlow) : undefined}>{profile.username}</span>
+            <span className="block truncate text-xs font-semibold text-slate-200" style={nicknameStyle(profile.nameFont, profile.nameGlow)}>{profile.username}</span>
             {profile.customStatus
               ? <span className="block truncate text-[10px] text-slate-400">{profile.customStatusEmoji ? `${profile.customStatusEmoji} ` : ""}{profile.customStatus}</span>
               : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
@@ -2025,6 +2030,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const avatar = member?.avatar ?? (isCurrentUser ? profile.avatar : null);
   const isSpeaking = speaking && !participant.muted && !participant.deafened;
   const glow = member?.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
+  const font = member?.nameFont ?? (isCurrentUser ? profile.nameFont : undefined);
   return (
     <ProfilePreview
       side="right"
@@ -2038,6 +2044,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         banner: member?.banner ?? (isCurrentUser ? profile.banner : undefined),
         accentColor: member?.accentColor ?? (isCurrentUser ? profile.accentColor : undefined),
         nameGlow: glow,
+        nameFont: font,
         color: member?.avatarColor,
         status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
         customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
@@ -2048,7 +2055,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
       }}
     >
       <Avatar name={memberName} image={avatar} color={member?.avatarColor} size="sm" className={cn(isSpeaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-sidebar shadow-[0_0_12px_rgba(52,211,153,.35)]")} />
-      <span className="min-w-0 flex-1 truncate" style={glow ? nameGlowStyle(glow) : undefined}>
+      <span className="min-w-0 flex-1 truncate" style={nicknameStyle(font, glow)}>
         {memberName}
         {isCurrentUser && ` ${t.voice.youSuffix}`}
       </span>
@@ -2132,6 +2139,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
     banner?: string | null;
     accentColor?: string | null;
     nameGlow?: string | null;
+    nameFont?: NameFont | null;
     color?: string;
     status: PublicMemberStatus;
     customStatus?: string;
@@ -2154,6 +2162,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
       banner: member?.banner ?? (isCurrentUser ? profile.banner : null),
       accentColor: member?.accentColor ?? (isCurrentUser ? profile.accentColor : undefined),
       nameGlow: member?.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined),
+      nameFont: member?.nameFont ?? (isCurrentUser ? profile.nameFont : undefined),
       color: member?.avatarColor,
       status: member?.status ?? (isCurrentUser ? visibleProfileStatus(profile.status) : "offline"),
       customStatus: member?.customStatus ?? (isCurrentUser ? profile.customStatus : undefined),
@@ -2330,6 +2339,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                             banner: participantData.banner,
                             accentColor: participantData.accentColor,
                             nameGlow: participantData.nameGlow,
+                            nameFont: participantData.nameFont,
                             color: participantData.color,
                             status: participantData.status,
                             customStatus: participantData.customStatus,
@@ -2342,7 +2352,7 @@ export function VoiceChannelView({ mobile = false, onOpenChannels, channel, serv
                           triggerClassName="flex max-w-full flex-col items-center rounded-lg px-2 py-1 outline-none transition hover:bg-white/[.035] focus-visible:ring-2 focus-visible:ring-violet-400/70"
                         >
                           <Avatar name={participantData.name} image={participantData.avatar} color={participantData.color} size="lg" className={cn(speaking && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-panel")} />
-                          <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100" style={participantData.nameGlow ? nameGlowStyle(participantData.nameGlow) : undefined}>
+                          <span className="mt-4 max-w-full truncate text-sm font-semibold text-slate-100" style={nicknameStyle(participantData.nameFont, participantData.nameGlow)}>
                             {participantData.name}
                             {participant.userId === currentUserId && ` ${t.voice.youSuffix}`}
                           </span>
@@ -3167,6 +3177,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
     banner: member?.banner ?? (own ? profile?.banner : undefined),
     accentColor: member?.accentColor ?? (own ? profile?.accentColor : undefined),
     nameGlow: member?.nameGlow ?? (own ? profile?.nameGlow : undefined),
+    nameFont: member?.nameFont ?? (own ? profile?.nameFont : undefined),
     color: message.authorColor,
     status: member?.status ?? (own ? visibleProfileStatus(profile?.status) : ("offline" as const)),
     customStatus: member?.customStatus ?? (own ? profile?.customStatus : undefined),
@@ -3293,7 +3304,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
         {(!grouped || compact) && (
           <div className="flex min-w-0 items-baseline gap-2 leading-5">
             <ProfilePreview profile={previewProfile} wrapperClassName="min-w-0 max-w-full" triggerClassName="block min-w-0 max-w-full truncate rounded text-sm font-semibold text-slate-200 hover:text-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50">
-              <span style={previewProfile.nameGlow ? nameGlowStyle(previewProfile.nameGlow) : undefined}>{message.authorName}</span>
+              <span style={nicknameStyle(previewProfile.nameFont, previewProfile.nameGlow)}>{message.authorName}</span>
             </ProfilePreview>
             <time className="shrink-0 whitespace-nowrap text-[10px] leading-5 tabular-nums text-slate-600">{time}</time>
             {message.editedAt && <span className="shrink-0 text-[10px] leading-5 text-slate-600">{t.chat.edited}</span>}
@@ -3485,6 +3496,7 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
         banner: member.banner,
         accentColor: member.accentColor,
         nameGlow: member.nameGlow,
+        nameFont: member.nameFont,
         color: member.avatarColor,
         status: member.status,
         customStatus: member.customStatus,
@@ -3494,7 +3506,7 @@ function MessageMention({ userId, mentioned, members }: { userId: string; mentio
       }}
       label={t.chat.mentionAria(member.username)}
     >
-      <span style={member.nameGlow ? nameGlowStyle(member.nameGlow) : undefined}>@{member.username}</span>
+      <span style={nicknameStyle(member.nameFont, member.nameGlow)}>@{member.username}</span>
     </ProfilePreview>
   );
 }
@@ -3514,6 +3526,7 @@ function memberToMentionCandidate(member: MockMember): MentionCandidate {
     bio: member.bio,
     fingerprint: member.fingerprint,
     nameGlow: member.nameGlow ?? null,
+    nameFont: member.nameFont ?? "none",
   };
 }
 
@@ -3892,7 +3905,7 @@ function MentionSuggestions({ suggestions, activeIndex, onSelect, onHover }: { s
         <button key={candidate.id} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => onHover(index)} onClick={() => onSelect(candidate)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition", index === activeIndex ? "bg-violet-400/10" : "hover:bg-white/[.04]")}>
           <Avatar name={candidate.username} image={candidate.avatar} color={candidate.color} size="sm" status={candidate.status} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-semibold text-slate-200" style={candidate.nameGlow ? nameGlowStyle(candidate.nameGlow) : undefined}>@{candidate.username}</span>
+            <span className="block truncate text-xs font-semibold text-slate-200" style={nicknameStyle(candidate.nameFont, candidate.nameGlow)}>@{candidate.username}</span>
             <span className="block truncate text-[10px] text-slate-500">{candidate.customStatus ? `${candidate.customStatusEmoji ? `${candidate.customStatusEmoji} ` : ""}${candidate.customStatus}` : (candidate.role ?? t.chat.mentionCandidate)}</span>
           </span>
         </button>
@@ -4117,9 +4130,8 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
               const isCurrentUser = member.id === access?.id || (!server.address && member.id === profile.id);
               const avatar = member.avatar ?? (isCurrentUser ? profile.avatar : null);
               const memberGlow = member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
-              const memberGlowStyle = memberGlow ? nameGlowStyle(memberGlow) : undefined;
-              return (
-                <div key={member.id} className="flex w-full items-center rounded-lg hover:bg-white/[.045]">
+              const memberFont = member.nameFont ?? (isCurrentUser ? profile.nameFont : undefined);
+              return (                <div key={member.id} className="flex w-full items-center rounded-lg hover:bg-white/[.045]">
                   <ProfilePreview
                     side="left"
                     wrapperClassName="min-w-0 flex-1"
@@ -4131,7 +4143,8 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                       avatar,
                       banner: member.banner ?? (isCurrentUser ? profile.banner : undefined),
                       accentColor: member.accentColor ?? (isCurrentUser ? profile.accentColor : undefined),
-                      nameGlow: member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined),
+                      nameGlow: memberGlow,
+                      nameFont: memberFont,
                       color: member.avatarColor,
                       status: member.status,
                       customStatus: member.customStatus,
@@ -4143,7 +4156,7 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                   >
                     <Avatar name={member.username} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
                     <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}>
-                      <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300" style={memberGlowStyle}>
+                      <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300" style={nicknameStyle(memberFont, memberGlow)}>
                         {member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}
                         {member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}
                         {member.username}
@@ -4245,6 +4258,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     customStatusEmoji: member.customStatusEmoji,
     accentColor: member.accentColor,
     nameGlow: member.nameGlow,
+    nameFont: member.nameFont,
     avatarColor: colorFromId(member.id),
     avatar: member.avatar,
     banner: member.banner,

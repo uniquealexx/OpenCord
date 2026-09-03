@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, nameFontSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
@@ -20,6 +20,8 @@ export const localProfileSchema = z.object({
   accentColor: profileAccentColorSchema.nullish(),
   // Мягкое свечение ника; отсутствует или null — выключено.
   nameGlow: profileAccentColorSchema.nullish(),
+  // Шрифт ника; дефолт держит совместимость со старыми состояниями.
+  nameFont: nameFontSchema.nullish(),
   createdAt: z.string().datetime(),
 });
 
@@ -58,6 +60,7 @@ export const mockMemberSchema = z.object({
   customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
   accentColor: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
   nameGlow: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
+  nameFont: nameFontSchema.nullish(),
   avatarColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   avatar: z.string().max(2_000_000).nullable().optional(),
   banner: z.string().max(500_000).nullable().optional(),
