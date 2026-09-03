@@ -47,7 +47,7 @@ const contentSecurityPolicy = [
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>): React.ReactElement {
   // Язык по умолчанию — английский; I18nRoot обновляет атрибут при смене языка в настройках.
   return (
-    <html lang="en" className="dark" data-color-theme="midnight">
+    <html lang="en" className="dark" data-color-theme="midnight" data-appearance="dark" data-dark-shade="night">
       <head>
         <meta httpEquiv="Content-Security-Policy" content={contentSecurityPolicy} />
       </head>

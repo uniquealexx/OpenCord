@@ -183,6 +183,281 @@
   --glass-clear-background: rgba(27, 19, 25, .3);
 }
 
+/* ---------------------------------------------------------------------------
+   Яркость тёмной темы: «Туман» (светлее) и «Мрак» (темнее) для каждой палитры.
+   «Ночь» — отсутствие блока: действуют базовые значения выше, поэтому текущие
+   цвета пользователей не меняются. Селектор включает data-appearance="dark",
+   чтобы оттенки не просачивались в светлую тему.
+--------------------------------------------------------------------------- */
+:root[data-color-theme="midnight"][data-appearance="dark"][data-dark-shade="mist"] {
+  --color-canvas: #2e3138;
+  --color-rail: #232529;
+  --color-sidebar: #292b31;
+  --color-panel: #33363d;
+  --color-raised: #383b43;
+  --glass-background: rgba(56, 59, 67, .8);
+  --glass-clear-background: rgba(35, 37, 41, .3);
+}
+:root[data-color-theme="midnight"][data-appearance="dark"][data-dark-shade="abyss"] {
+  --color-canvas: #131518;
+  --color-rail: #0b0c0f;
+  --color-sidebar: #0f1114;
+  --color-panel: #16181d;
+  --color-raised: #1a1d23;
+  --glass-background: rgba(26, 29, 35, .82);
+  --glass-clear-background: rgba(11, 12, 15, .32);
+}
+:root[data-color-theme="amethyst"][data-appearance="dark"][data-dark-shade="mist"] {
+  --color-canvas: #2d2a38;
+  --color-rail: #211e2b;
+  --color-sidebar: #272433;
+  --color-panel: #353042;
+  --color-raised: #3d3849;
+  --glass-background: rgba(61, 56, 73, .8);
+  --glass-clear-background: rgba(33, 30, 43, .3);
+}
+:root[data-color-theme="amethyst"][data-appearance="dark"][data-dark-shade="abyss"] {
+  --color-canvas: #141219;
+  --color-rail: #0c0a12;
+  --color-sidebar: #0f0c16;
+  --color-panel: #17131f;
+  --color-raised: #1b1725;
+  --glass-background: rgba(27, 23, 37, .82);
+  --glass-clear-background: rgba(12, 10, 18, .32);
+}
+:root[data-color-theme="ocean"][data-appearance="dark"][data-dark-shade="mist"] {
+  --color-canvas: #223237;
+  --color-rail: #182427;
+  --color-sidebar: #1d2c31;
+  --color-panel: #293b41;
+  --color-raised: #32454c;
+  --glass-background: rgba(50, 69, 76, .8);
+  --glass-clear-background: rgba(24, 36, 39, .3);
+}
+:root[data-color-theme="ocean"][data-appearance="dark"][data-dark-shade="abyss"] {
+  --color-canvas: #0d1517;
+  --color-rail: #070d0f;
+  --color-sidebar: #090f12;
+  --color-panel: #0f191c;
+  --color-raised: #131e22;
+  --glass-background: rgba(19, 30, 34, .82);
+  --glass-clear-background: rgba(7, 13, 15, .32);
+}
+:root[data-color-theme="forest"][data-appearance="dark"][data-dark-shade="mist"] {
+  --color-canvas: #29332c;
+  --color-rail: #1d2420;
+  --color-sidebar: #232c25;
+  --color-panel: #313c34;
+  --color-raised: #39463e;
+  --glass-background: rgba(57, 70, 62, .8);
+  --glass-clear-background: rgba(29, 36, 32, .3);
+}
+:root[data-color-theme="forest"][data-appearance="dark"][data-dark-shade="abyss"] {
+  --color-canvas: #111612;
+  --color-rail: #090d0a;
+  --color-sidebar: #0b0f0c;
+  --color-panel: #121713;
+  --color-raised: #151b16;
+  --glass-background: rgba(21, 27, 22, .82);
+  --glass-clear-background: rgba(9, 13, 10, .32);
+}
+:root[data-color-theme="sunset"][data-appearance="dark"][data-dark-shade="mist"] {
+  --color-canvas: #362d29;
+  --color-rail: #26201d;
+  --color-sidebar: #2e2622;
+  --color-panel: #403834;
+  --color-raised: #49413c;
+  --glass-background: rgba(73, 65, 60, .8);
+  --glass-clear-background: rgba(38, 32, 29, .3);
+}
+:root[data-color-theme="sunset"][data-appearance="dark"][data-dark-shade="abyss"] {
+  --color-canvas: #1a1412;
+  --color-rail: #100c0b;
+  --color-sidebar: #130e0c;
+  --color-panel: #1b1412;
+  --color-raised: #201815;
+  --glass-background: rgba(32, 24, 21, .82);
+  --glass-clear-background: rgba(16, 12, 11, .32);
+}
+:root[data-color-theme="rose"][data-appearance="dark"][data-dark-shade="mist"] {
+  --color-canvas: #342b32;
+  --color-rail: #252026;
+  --color-sidebar: #2d242b;
+  --color-panel: #3e343c;
+  --color-raised: #474046;
+  --glass-background: rgba(71, 64, 70, .8);
+  --glass-clear-background: rgba(37, 32, 38, .3);
+}
+:root[data-color-theme="rose"][data-appearance="dark"][data-dark-shade="abyss"] {
+  --color-canvas: #191216;
+  --color-rail: #100b0f;
+  --color-sidebar: #130d12;
+  --color-panel: #1a1319;
+  --color-raised: #1f161e;
+  --glass-background: rgba(31, 22, 30, .82);
+  --glass-clear-background: rgba(16, 11, 15, .32);
+}
+
+/* ---------------------------------------------------------------------------
+   Светлая тема: свой набор поверхностей с тоном палитры для каждой из шести
+   схем. Акцент бренда (ступени 400–700) сохранён, а светлые ступени 100–300
+   переопределены в тёмные «чернила»: в коде они используются только как текст
+   (классы text-violet-100…300 и text-cyan-100…300) и как текст на акцентных
+   чипах, поэтому на белом должны быть тёмными. Ступени 400+ как текст не
+   используются (только bg/border).
+--------------------------------------------------------------------------- */
+:root[data-color-theme="midnight"][data-appearance="light"] {
+  --color-violet-100: #333fa3;
+  --color-violet-200: #3d4fc4;
+  --color-violet-300: #4a5fd6;
+  --color-cyan-100: #155a80;
+  --color-cyan-200: #14648f;
+  --color-cyan-300: #1273a5;
+  --color-canvas: #e9ebf1;
+  --color-rail: #d9dce4;
+  --color-sidebar: #e0e3ea;
+  --color-panel: #fbfcff;
+  --color-raised: #ffffff;
+  --foreground: #191d25;
+  --glass-background: rgba(255, 255, 255, .78);
+  --glass-clear-background: rgba(233, 235, 241, .55);
+}
+
+:root[data-color-theme="amethyst"][data-appearance="light"] {
+  --color-violet-100: #4c1d95;
+  --color-violet-200: #5b21b6;
+  --color-violet-300: #6d28d9;
+  --color-cyan-100: #6b1573;
+  --color-cyan-200: #831a8c;
+  --color-cyan-300: #9c37ad;
+  --color-canvas: #eceaf2;
+  --color-rail: #dbd8e5;
+  --color-sidebar: #e3e0ec;
+  --color-panel: #fcfbff;
+  --color-raised: #ffffff;
+  --foreground: #1e1a26;
+  --glass-background: rgba(255, 255, 255, .78);
+  --glass-clear-background: rgba(236, 234, 242, .55);
+}
+
+:root[data-color-theme="ocean"][data-appearance="light"] {
+  --color-violet-100: #0b4f4a;
+  --color-violet-200: #0c5f59;
+  --color-violet-300: #0e6b63;
+  --color-cyan-100: #0c4a5e;
+  --color-cyan-200: #0e5a72;
+  --color-cyan-300: #116a86;
+  --color-canvas: #e6edec;
+  --color-rail: #d3dddb;
+  --color-sidebar: #dce5e3;
+  --color-panel: #fafdfc;
+  --color-raised: #ffffff;
+  --foreground: #14201e;
+  --glass-background: rgba(255, 255, 255, .78);
+  --glass-clear-background: rgba(230, 237, 236, .55);
+}
+
+:root[data-color-theme="forest"][data-appearance="light"] {
+  --color-violet-100: #14532d;
+  --color-violet-200: #166534;
+  --color-violet-300: #187a3e;
+  --color-cyan-100: #424d12;
+  --color-cyan-200: #4d5c15;
+  --color-cyan-300: #5a6b1a;
+  --color-canvas: #e8ece4;
+  --color-rail: #d5dccf;
+  --color-sidebar: #dde3d7;
+  --color-panel: #fbfdf8;
+  --color-raised: #ffffff;
+  --foreground: #19211a;
+  --glass-background: rgba(255, 255, 255, .78);
+  --glass-clear-background: rgba(232, 236, 228, .55);
+}
+
+:root[data-color-theme="sunset"][data-appearance="light"] {
+  --color-violet-100: #7c2d12;
+  --color-violet-200: #9a3412;
+  --color-violet-300: #b03a15;
+  --color-cyan-100: #713f12;
+  --color-cyan-200: #854d0e;
+  --color-cyan-300: #99671e;
+  --color-canvas: #efe9e3;
+  --color-rail: #ded4c8;
+  --color-sidebar: #e6dccc;
+  --color-panel: #fdfaf6;
+  --color-raised: #ffffff;
+  --foreground: #231b15;
+  --glass-background: rgba(255, 255, 255, .78);
+  --glass-clear-background: rgba(239, 233, 227, .55);
+}
+
+:root[data-color-theme="rose"][data-appearance="light"] {
+  --color-violet-100: #831843;
+  --color-violet-200: #9d174d;
+  --color-violet-300: #b4235c;
+  --color-cyan-100: #5b21b6;
+  --color-cyan-200: #6d28d9;
+  --color-cyan-300: #7e3fbf;
+  --color-canvas: #efe7ec;
+  --color-rail: #ddcfd8;
+  --color-sidebar: #e5d8e0;
+  --color-panel: #fdf9fb;
+  --color-raised: #ffffff;
+  --foreground: #231a20;
+  --glass-background: rgba(255, 255, 255, .78);
+  --glass-clear-background: rgba(239, 231, 236, .55);
+}
+
+/* ---------------------------------------------------------------------------
+   Механика светлой темы.
+   Приложение писалось под тёмное оформление сотнями slate-текстов и белых
+   оверлеев/бордеров. Вместо переписывания компонентов инвертируем базовые
+   переменные палитры Tailwind: утилиты (включая hover:/focus:-варианты,
+   плейсхолдеры и color-mix-прозрачности) ссылаются на эти var и адаптируются
+   сами. Тёмные ступени slate (500+) и насыщенные палитры (red/emerald/amber)
+   на светлом и так читаются — их не трогаем.
+   --color-white инвертирован: белые оверлеи карточек/бордеров/скроллбара
+   становятся тёмными. Исключения — белый текст/элементы на насыщенных фонах
+   (кнопки, аватары, оверлеи) — возвращены правилами ниже и точечными правками.
+--------------------------------------------------------------------------- */
+:root[data-appearance="light"] {
+  color-scheme: light;
+  --color-white: #232936;
+  --color-slate-100: #20242e;
+  --color-slate-200: #303748;
+  --color-slate-300: #4b5364;
+  --color-slate-400: #687182;
+}
+
+/* Белый текст на насыщенных фонах остаётся белым и в светлой теме. */
+:root[data-appearance="light"] :is(.bg-primary, .bg-violet-500, .bg-violet-500\/85, .bg-red-500).text-white {
+  color: #fff;
+}
+:root[data-appearance="light"] :is(.bg-black\/60, .bg-black\/65).text-white {
+  color: #fff;
+}
+:root[data-appearance="light"] :is(.hover\:bg-primary.hover\:text-white, .hover\:bg-red-500.hover\:text-white, .hover\:bg-emerald-500.hover\:text-white, .hover\:bg-cyan-500.hover\:text-white):hover {
+  color: #fff;
+}
+
+/* Стекло, скроллбар и выделение на светлом: тёмные бордеры/трек, тёмный текст. */
+:root[data-appearance="light"] .glass {
+  border-color: rgb(20 24 32 / .09);
+}
+:root[data-appearance="light"] .glass-clear {
+  border-color: rgb(20 24 32 / .12);
+}
+:root[data-appearance="light"] .scrollbar-thin {
+  scrollbar-color: var(--color-primary) rgb(20 24 32 / .12);
+}
+:root[data-appearance="light"] .scrollbar-thin::-webkit-scrollbar-track {
+  background: rgb(20 24 32 / .06) padding-box;
+}
+:root[data-appearance="light"] ::selection {
+  background: rgb(var(--theme-accent-rgb) / .22);
+  color: #14171d;
+}
+
 * { box-sizing: border-box; }
 html, body {
   width: 100%;

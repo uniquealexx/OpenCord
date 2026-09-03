@@ -1,6 +1,6 @@
 {
   "name": "opencord",
-  "version": "0.1.0-beta.22",
+  "version": "0.1.0-beta.23",
   "license": "MIT",
   "private": true,
   "packageManager": "pnpm@11.9.0",

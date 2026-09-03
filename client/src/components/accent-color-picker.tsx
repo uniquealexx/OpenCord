@@ -37,7 +37,7 @@ export function ColorSwatchPicker({ value, onChange, groupLabel, customLabel, ex
             )}
             style={{ backgroundColor: color }}
           >
-            {selected && <Check className="size-4 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,.8)]" />}
+            {selected && <Check className="size-4 text-[#fff] drop-shadow-[0_1px_2px_rgba(0,0,0,.8)]" />}
           </button>
         );
       })}
@@ -54,7 +54,7 @@ export function ColorSwatchPicker({ value, onChange, groupLabel, customLabel, ex
         )}
         style={{ background: CUSTOM_SWATCH_GRADIENT }}
       >
-        {!knownPresets && <Check className="size-4 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,.8)]" />}
+        {!knownPresets && <Check className="size-4 text-[#fff] drop-shadow-[0_1px_2px_rgba(0,0,0,.8)]" />}
       </button>
       {extra}
       {pickerOpen && <AccentColorPopover value={value} onSelect={onChange} onClose={() => setPickerOpen(false)} />}

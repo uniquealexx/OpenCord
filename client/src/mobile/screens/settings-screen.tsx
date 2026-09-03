@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Headphones, KeyRound, Languages, LoaderCircle, Mic, Palette, RotateCcw, Sliders, SlidersHorizontal, Square, Volume2, ZoomIn } from "lucide-react";
+import { Copy, Headphones, KeyRound, Languages, LoaderCircle, Mic, MonitorSmartphone, Palette, RotateCcw, Sliders, SlidersHorizontal, Square, Volume2, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { MicLevelBar } from "@/components/settings-dialog";
 import { ThemeSelector } from "@/components/theme-selector";
+import { DarkShadeSlider, ThemeModeSelector } from "@/components/theme-mode-selector";
+import { resolveAppearance, useSystemDark } from "@/lib/appearance";
 import { useAudioSettings } from "@/components/settings/use-audio-settings";
 import { useLocalIdentity } from "@/components/settings/use-local-identity";
 import { LANGUAGE_LABELS, LANGUAGES, useI18n, type Language } from "@/lib/i18n";
@@ -52,6 +54,8 @@ export function MobileSettingsScreen({
   const [identityResetOpen, setIdentityResetOpen] = useState(false);
 
   const update = (next: Partial<ClientPreferences>): void => onPreferences({ ...preferences, ...next });
+  const systemDark = useSystemDark();
+  const darkEffective = resolveAppearance(preferences.themeMode, systemDark) === "dark";
   const back = (): void => {
     audio.stop();
     stack.pop();
@@ -90,9 +94,29 @@ export function MobileSettingsScreen({
 
   if (stack.current === "theme") {
     return (
-      <Screen title={t.settings.colorTheme} onBack={back}>
+      <Screen title={t.settings.themeMode} onBack={back}>
+        <ListGroup hint={t.settings.themeModeHint}>
+          <ListBlock label={t.settings.themeMode}>
+            <ThemeModeSelector
+              value={preferences.themeMode}
+              label={t.settings.themeMode}
+              labels={t.settings.themeModeNames}
+              onChange={(themeMode) => update({ themeMode })}
+            />
+          </ListBlock>
+          {darkEffective && (
+            <ListBlock label={t.settings.darkShade} hint={t.settings.darkShadeHint}>
+              <DarkShadeSlider
+                value={preferences.darkShade}
+                label={t.settings.darkShade}
+                labels={t.settings.darkShadeNames}
+                onChange={(darkShade) => update({ darkShade })}
+              />
+            </ListBlock>
+          )}
+        </ListGroup>
         <ListGroup hint={t.settings.colorThemeHint}>
-          <ListBlock>
+          <ListBlock label={t.settings.colorTheme}>
             <ThemeSelector
               value={preferences.colorTheme}
               label={t.settings.colorTheme}
@@ -261,6 +285,7 @@ export function MobileSettingsScreen({
     <Screen title={t.settings.title} onClose={close}>
       <ListGroup>
         <ListLink icon={<SlidersHorizontal className="size-4" />} label={t.settings.appearance} onClick={() => stack.push("appearance")} />
+        <ListLink icon={<MonitorSmartphone className="size-4" />} label={t.settings.themeMode} value={t.settings.themeModeNames[preferences.themeMode]} onClick={() => stack.push("theme")} />
         <ListLink icon={<Palette className="size-4" />} label={t.settings.colorTheme} value={t.settings.colorThemeNames[preferences.colorTheme]} onClick={() => stack.push("theme")} />
         {isMobilePlatform() && <ListLink icon={<ZoomIn className="size-4" />} label={t.settings.uiScale} value={`${Math.round(preferences.uiScale * 100)}%`} onClick={() => stack.push("scale")} />}
         <ListLink icon={<Languages className="size-4" />} label={t.settings.language} value={LANGUAGE_LABELS[preferences.language]} onClick={() => stack.push("language")} />

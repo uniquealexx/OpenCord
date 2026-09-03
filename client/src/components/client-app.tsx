@@ -37,7 +37,8 @@ import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
 import { playVoiceSound, primeVoiceSounds } from "@/lib/voice-sounds";
-import { createDefaultState, DEFAULT_COLOR_THEME, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
+import { createDefaultState, DEFAULT_COLOR_THEME, DEFAULT_DARK_SHADE, DEFAULT_THEME_MODE, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
+import { resolveAppearance, useSystemDark } from "@/lib/appearance";
 import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 
 // В Capacitor-оболочке (Android) подставляет мобильный мост window.openCord до первого рендера.
@@ -454,10 +455,19 @@ export function ClientApp(): React.ReactElement {
     document.documentElement.style.setProperty("--ui-zoom", String(scale));
   }, [state?.preferences.uiScale]);
 
-  // Схема живёт на <html>, чтобы её наследовали и порталы диалогов в body.
+  // Оформление живёт на <html>, чтобы его наследовали и порталы диалогов в body:
+  // палитра (data-color-theme), эффективное светлое/тёмное (data-appearance) и
+  // яркость тёмной (data-dark-shade). При themeMode=system следим за ОС наживую.
+  const systemDark = useSystemDark();
   useEffect(() => {
-    document.documentElement.dataset.colorTheme = state?.preferences.colorTheme ?? DEFAULT_COLOR_THEME;
-  }, [state?.preferences.colorTheme]);
+    const root = document.documentElement;
+    root.dataset.colorTheme = state?.preferences.colorTheme ?? DEFAULT_COLOR_THEME;
+    const effective = resolveAppearance(state?.preferences.themeMode ?? DEFAULT_THEME_MODE, systemDark);
+    root.dataset.appearance = effective;
+    root.dataset.darkShade = state?.preferences.darkShade ?? DEFAULT_DARK_SHADE;
+    root.classList.toggle("dark", effective === "dark");
+    root.style.colorScheme = effective;
+  }, [state?.preferences.colorTheme, state?.preferences.themeMode, state?.preferences.darkShade, systemDark]);
 
   useEffect(() => {
     const language = state?.preferences.language;
@@ -1908,7 +1918,8 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
   return (
     <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/[.055] bg-sidebar">
       {server.banner ? (
-        <button aria-label={`${t.server.manage}: ${server.name}`} onClick={onServerMenu} className="group/banner relative h-24 shrink-0 overflow-hidden border-b border-white/[.055] text-left text-white">
+        /* Заголовок поверх баннера-картинки: белый зафиксирован, т.к. фон — изображение. */
+        <button aria-label={`${t.server.manage}: ${server.name}`} onClick={onServerMenu} className="group/banner relative h-24 shrink-0 overflow-hidden border-b border-white/[.055] text-left text-[#fff]">
           <Image src={server.banner} alt="" fill unoptimized sizes="262px" className="object-cover transition duration-200 group-hover/banner:scale-[1.02]" />
           <span className="absolute inset-0 bg-black/35 transition group-hover/banner:bg-black/45" />
           <span className="absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-3">

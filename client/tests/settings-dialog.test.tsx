@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -93,15 +93,41 @@ describe("SettingsDialog microphone test", () => {
     expect(screen.getByText(/0\.2\.0-beta\.1/u)).toBeInTheDocument();
   });
 
-  it("shows six color schemes near the top and saves the selected one", async () => {
+  it("shows the theme mode above the color schemes and saves both", async () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
     render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={onPreferences} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
 
-    expect(screen.getByRole("radiogroup", { name: "Цветовая схема" })).toBeInTheDocument();
-    expect(screen.getAllByRole("radio")).toHaveLength(6);
+    const modeGroup = screen.getByRole("radiogroup", { name: "Тема" });
+    expect(within(modeGroup).getAllByRole("radio")).toHaveLength(3);
+    await user.click(screen.getByRole("radio", { name: "Светлая" }));
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ themeMode: "light" }));
+
+    const schemeGroup = screen.getByRole("radiogroup", { name: "Цветовая схема" });
+    expect(within(schemeGroup).getAllByRole("radio")).toHaveLength(6);
     await user.click(screen.getByRole("radio", { name: "Океан" }));
     expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ colorTheme: "ocean" }));
+  });
+
+  it("shows the dark brightness slider only for the dark appearance", async () => {
+    const user = userEvent.setup();
+    const onPreferences = vi.fn();
+    const preferences = createDefaultState().preferences;
+    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences, onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const view = render(<SettingsDialog preferences={preferences} {...props} />);
+
+    // jsdom без matchMedia: системная тема считается тёмной, слайдер виден.
+    const slider = screen.getByRole("slider", { name: "Яркость тёмной темы" });
+    expect(slider).toHaveValue("1");
+    expect(slider).toHaveAttribute("aria-valuetext", "Ночь");
+    fireEvent.change(slider, { target: { value: "2" } });
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ darkShade: "abyss" }));
+
+    await user.click(screen.getByRole("button", { name: "Туман" }));
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ darkShade: "mist" }));
+
+    view.rerender(<SettingsDialog preferences={{ ...preferences, themeMode: "light" }} {...props} />);
+    expect(screen.queryByRole("slider", { name: "Яркость тёмной темы" })).not.toBeInTheDocument();
   });
 
   it("toggles RNNoise noise suppression from the voice section", async () => {

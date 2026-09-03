@@ -111,9 +111,24 @@ export const COLOR_THEMES = ["midnight", "amethyst", "ocean", "forest", "sunset"
 export type ColorTheme = (typeof COLOR_THEMES)[number];
 export const DEFAULT_COLOR_THEME: ColorTheme = "midnight";
 
+// Глобальный режим оформления: явная тёмная/светлая или следование за системой.
+// Детект системы — matchMedia("(prefers-color-scheme: dark)") в renderer (см. lib/appearance.ts):
+// работает на Windows/macOS/Linux и в Android WebView без нативного кода.
+export const THEME_MODES = ["system", "dark", "light"] as const;
+export type ThemeMode = (typeof THEME_MODES)[number];
+export const DEFAULT_THEME_MODE: ThemeMode = "system";
+
+// Яркость тёмной темы (слайдер «Туман / Ночь / Мрак»). «Ночь» — текущие цвета схем,
+// поэтому существующие пользователи ничего не заметят. На светлую тему не влияет.
+export const DARK_SHADES = ["mist", "night", "abyss"] as const;
+export type DarkShade = (typeof DARK_SHADES)[number];
+export const DEFAULT_DARK_SHADE: DarkShade = "night";
+
 export const clientPreferencesSchema = z.object({
   language: z.enum(LANGUAGES).default(DEFAULT_LANGUAGE),
   colorTheme: z.enum(COLOR_THEMES).default(DEFAULT_COLOR_THEME),
+  themeMode: z.enum(THEME_MODES).default(DEFAULT_THEME_MODE),
+  darkShade: z.enum(DARK_SHADES).default(DEFAULT_DARK_SHADE),
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
   notifications: z.boolean(),
@@ -174,7 +189,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, compactMode: false, showMemberList: true, notifications: true, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
+    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, notifications: true, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
   };
 }
 

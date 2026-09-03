@@ -7,6 +7,8 @@ import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { ThemeSelector } from "@/components/theme-selector";
+import { DarkShadeSlider, ThemeModeSelector } from "@/components/theme-mode-selector";
+import { resolveAppearance, useSystemDark } from "@/lib/appearance";
 import { useAudioSettings } from "@/components/settings/use-audio-settings";
 import { useLocalIdentity } from "@/components/settings/use-local-identity";
 import { LANGUAGE_LABELS, LANGUAGES, useI18n, type Language } from "@/lib/i18n";
@@ -22,6 +24,10 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
   // Проверка микрофона, список устройств и идентичность общие с мобильным экраном
   // настроек (`src/mobile/screens/settings-screen.tsx`).
   const audio = useAudioSettings(preferences, open);
+  const systemDark = useSystemDark();
+  // Слайдер яркости виден только при тёмном эффективном оформлении:
+  // явная тёмная тема либо системная при тёмной ОС.
+  const darkEffective = resolveAppearance(preferences.themeMode, systemDark) === "dark";
   const identityState = useLocalIdentity(open, onIdentityReset);
   const { identity } = identityState;
   const devices = audio.devices;
@@ -48,6 +54,7 @@ export function SettingsDialog({ preferences, open, confirmReset, onOpenChange, 
         <DialogHeader><DialogTitle>{t.settings.title}</DialogTitle></DialogHeader>
         {!confirmReset ? <div className="space-y-6">
           <ClientUpdateSection state={updateState} />
+          <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{t.settings.themeMode}</h3><div className="rounded-2xl border border-white/7 bg-white/[.025] p-4"><ThemeModeSelector value={preferences.themeMode} label={t.settings.themeMode} labels={t.settings.themeModeNames} onChange={(themeMode) => updatePreferences({ ...preferences, themeMode })} />{darkEffective && <div className="mt-4 border-t border-white/6 pt-4"><DarkShadeSlider value={preferences.darkShade} label={t.settings.darkShade} labels={t.settings.darkShadeNames} hint={t.settings.darkShadeHint} onChange={(darkShade) => updatePreferences({ ...preferences, darkShade })} /></div>}<p className="mt-3 text-xs leading-5 text-slate-500">{t.settings.themeModeHint}</p></div></section>
           <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{t.settings.colorTheme}</h3><div className="rounded-2xl border border-white/7 bg-white/[.025] p-4"><ThemeSelector value={preferences.colorTheme} label={t.settings.colorTheme} labels={t.settings.colorThemeNames} onChange={(colorTheme) => updatePreferences({ ...preferences, colorTheme })} /><p className="mt-3 text-xs leading-5 text-slate-500">{t.settings.colorThemeHint}</p></div></section>
           <section><h3 className="mb-3 text-xs font-bold uppercase tracking-[.16em] text-slate-500">{t.settings.appearance}</h3><div className="divide-y divide-white/6 rounded-2xl border border-white/7 bg-white/[.025]">
             <SettingRow title={t.settings.compact} hint={t.settings.compactHint}><Switch checked={preferences.compactMode} onCheckedChange={(value) => onPreferences({ ...preferences, compactMode: value })} /></SettingRow>

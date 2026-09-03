@@ -71,7 +71,15 @@ describe("ClientApp", () => {
     };
   });
 
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); delete document.documentElement.dataset.colorTheme; });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    delete document.documentElement.dataset.colorTheme;
+    delete document.documentElement.dataset.appearance;
+    delete document.documentElement.dataset.darkShade;
+    document.documentElement.classList.remove("dark");
+    document.documentElement.style.colorScheme = "";
+  });
 
   it("does not request another voice join when opening the current room", () => {
     expect(shouldRequestVoiceJoin("connected", "voice", "voice", "voice")).toBe(false);
@@ -87,6 +95,46 @@ describe("ClientApp", () => {
     window.openCord!.storage.load = vi.fn(async () => state);
     render(<ClientApp />);
     await waitFor(() => expect(document.documentElement.dataset.colorTheme).toBe("forest"));
+  });
+
+  it("applies an explicit light appearance and the dark shade to the document root", async () => {
+    const state = readyState();
+    state.preferences.themeMode = "light";
+    state.preferences.darkShade = "abyss";
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    await waitFor(() => expect(document.documentElement.dataset.appearance).toBe("light"));
+    expect(document.documentElement.dataset.darkShade).toBe("abyss");
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(document.documentElement.style.colorScheme).toBe("light");
+  });
+
+  it("follows the OS theme in system mode and reacts to its changes", async () => {
+    let changeHandler: ((event: { matches: boolean }) => void) | null = null;
+    const matchMedia = vi.fn(() => ({
+      matches: false,
+      media: "(prefers-color-scheme: dark)",
+      addEventListener: vi.fn((_type: string, handler: (event: { matches: boolean }) => void) => {
+        changeHandler = handler;
+      }),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    }));
+    Object.defineProperty(window, "matchMedia", { configurable: true, writable: true, value: matchMedia });
+    try {
+      window.openCord!.storage.load = vi.fn(async () => readyState());
+      render(<ClientApp />);
+      await waitFor(() => expect(document.documentElement.dataset.appearance).toBe("light"));
+
+      act(() => {
+        changeHandler?.({ matches: true });
+      });
+      await waitFor(() => expect(document.documentElement.dataset.appearance).toBe("dark"));
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+    } finally {
+      Reflect.deleteProperty(window, "matchMedia");
+    }
   });
 
   it("enforces the voice moderation role hierarchy in the client", () => {

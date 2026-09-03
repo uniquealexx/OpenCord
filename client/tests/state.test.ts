@@ -58,6 +58,22 @@ describe("persisted client state", () => {
     expect(restored.preferences.colorTheme).toBe("forest");
   });
 
+  it("adds the default theme mode and dark shade to older states and persists choices", () => {
+    const state = createDefaultState();
+    expect(state.preferences.themeMode).toBe("system");
+    expect(state.preferences.darkShade).toBe("night");
+
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.themeMode;
+    delete olderPreferences.darkShade;
+    const upgraded = parsePersistedState({ ...state, preferences: olderPreferences });
+    expect(upgraded.preferences.themeMode).toBe("system");
+    expect(upgraded.preferences.darkShade).toBe("night");
+
+    const restored = parsePersistedState({ ...state, preferences: { ...state.preferences, themeMode: "light", darkShade: "abyss" } });
+    expect(restored.preferences).toMatchObject({ themeMode: "light", darkShade: "abyss" });
+  });
+
   it("migrates v3 profiles by deriving a username and generating a discriminator", () => {
     const state = createDefaultState();
     const legacyProfile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };

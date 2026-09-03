@@ -59,7 +59,7 @@ describe("mobile settings screen", () => {
     expect(screen.getByRole("heading", { name: t().settings.title })).toBeInTheDocument();
   });
 
-  it("shows the color scheme as the second item and saves a theme choice", async () => {
+  it("shows the theme mode and color scheme and saves choices", async () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
     renderSettings({ onPreferences });
@@ -69,10 +69,17 @@ describe("mobile settings screen", () => {
     expect(firstGroup).not.toBeNull();
     const links = within(firstGroup!).getAllByRole("button");
     expect(links[0]).toBe(appearance);
-    expect(links[1]).toBe(screen.getByRole("button", { name: new RegExp(t().settings.colorTheme) }));
+    expect(links[1]).toBe(screen.getByRole("button", { name: new RegExp(t().settings.themeMode) }));
+    expect(links[2]).toBe(screen.getByRole("button", { name: new RegExp(t().settings.colorTheme) }));
 
     await user.click(links[1]!);
+    expect(screen.getByRole("radiogroup", { name: t().settings.themeMode })).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: t().settings.colorTheme })).toBeInTheDocument();
+    // jsdom без matchMedia: системная тема считается тёмной, слайдер виден.
+    expect(screen.getByRole("slider", { name: t().settings.darkShade })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: t().settings.themeModeNames.light }));
+    expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ themeMode: "light" }));
     await user.click(screen.getByRole("radio", { name: t().settings.colorThemeNames.sunset }));
     expect(onPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ colorTheme: "sunset" }));
   });
