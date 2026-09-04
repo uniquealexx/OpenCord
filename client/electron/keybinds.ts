@@ -101,3 +101,109 @@ export class KeybindManager {
     this.modifiers[name] = down;
   }
 }
+
+export interface GlobalKeybindHook {
+  start(onKeyDown: (code: string) => void, onKeyUp: (code: string) => void): Promise<void>;
+  stop(): Promise<void>;
+}
+
+type UiohookModule = typeof import("uiohook-napi");
+
+// Имена UiohookKey → KeyboardEvent.code. Имена сверены с enum uiohook-napi 1.5.5:
+// буквы — «A»…«Z» (не KeyA), цифры — «0»…«9», модификаторы Ctrl/Alt/Shift/Meta.
+const NAMED_CODES: Record<string, string> = {
+  Enter: "Enter", Backspace: "Backspace", Tab: "Tab", CapsLock: "CapsLock", Escape: "Escape", Space: "Space",
+  PageUp: "PageUp", PageDown: "PageDown", End: "End", Home: "Home", Insert: "Insert", Delete: "Delete",
+  ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
+  PrintScreen: "PrintScreen", ScrollLock: "ScrollLock", NumLock: "NumLock",
+  F1: "F1", F2: "F2", F3: "F3", F4: "F4", F5: "F5", F6: "F6", F7: "F7", F8: "F8", F9: "F9", F10: "F10", F11: "F11", F12: "F12",
+  F13: "F13", F14: "F14", F15: "F15", F16: "F16", F17: "F17", F18: "F18", F19: "F19", F20: "F20", F21: "F21", F22: "F22", F23: "F23", F24: "F24",
+  Semicolon: "Semicolon", Equal: "Equal", Comma: "Comma", Minus: "Minus", Period: "Period", Slash: "Slash",
+  Backquote: "Backquote", BracketLeft: "BracketLeft", Backslash: "Backslash", BracketRight: "BracketRight", Quote: "Quote",
+  Ctrl: "ControlLeft", CtrlRight: "ControlRight", Alt: "AltLeft", AltRight: "AltRight",
+  Meta: "MetaLeft", MetaRight: "MetaRight", Shift: "ShiftLeft", ShiftRight: "ShiftRight",
+  NumpadMultiply: "NumpadMultiply", NumpadAdd: "NumpadAdd", NumpadSubtract: "NumpadSubtract",
+  NumpadDecimal: "NumpadDecimal", NumpadDivide: "NumpadDivide", NumpadEnter: "NumpadEnter",
+  // Навигационные сканкоды цифровой клавиатуры при выключенном NumLock (Windows).
+  NumpadInsert: "Numpad0", NumpadEnd: "Numpad1", NumpadArrowDown: "Numpad2", NumpadPageDown: "Numpad3",
+  NumpadArrowLeft: "Numpad4", NumpadArrowRight: "Numpad6", NumpadHome: "Numpad7",
+  NumpadArrowUp: "Numpad8", NumpadPageUp: "Numpad9", NumpadDelete: "NumpadDecimal",
+};
+
+function buildScancodeIndex(key: UiohookModule["UiohookKey"]): Map<number, string> {
+  const index = new Map<number, string>();
+  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    const scancode = key[letter as keyof typeof key];
+    if (typeof scancode === "number") index.set(scancode, `Key${letter}`);
+  }
+  for (let digit = 0; digit <= 9; digit += 1) {
+    const scancode = key[String(digit) as keyof typeof key];
+    if (typeof scancode === "number") index.set(scancode, `Digit${digit}`);
+  }
+  for (let digit = 0; digit <= 9; digit += 1) {
+    const scancode = key[`Numpad${digit}` as keyof typeof key];
+    if (typeof scancode === "number") index.set(scancode, `Numpad${digit}`);
+  }
+  for (const [name, code] of Object.entries(NAMED_CODES)) {
+    const scancode = key[name as keyof typeof key];
+    if (typeof scancode === "number") index.set(scancode, code);
+  }
+  return index;
+}
+
+/** Пассивный глобальный хук: слушает клавиатуру, НЕ перехватывая события у других приложений. */
+export function createUiohookHook(log?: (message: string) => void): GlobalKeybindHook {
+  let module: UiohookModule | null = null;
+  return {
+    async start(onKeyDown, onKeyUp) {
+      if (module) return;
+      module = await import("uiohook-napi"); // динамически: юнит-тесты и бандл его не трогают
+      const index = buildScancodeIndex(module.UiohookKey);
+      module.uIOhook.on("keydown", (event) => {
+        const code = index.get(event.keycode);
+        if (code) onKeyDown(code);
+      });
+      module.uIOhook.on("keyup", (event) => {
+        const code = index.get(event.keycode);
+        if (code) onKeyUp(code);
+      });
+      module.uIOhook.start();
+      log?.("global keybind hook started");
+    },
+    async stop() {
+      if (!module) return;
+      module.uIOhook.removeAllListeners();
+      module.uIOhook.stop();
+      module = null;
+      log?.("global keybind hook stopped");
+    },
+  };
+}
+
+/** Владеет менеджером и хуком: применяет карту биндов, стартует/останавливает хук по необходимости. */
+export class KeybindController {
+  private readonly manager: KeybindManager;
+
+  constructor(private readonly host: KeybindHost, private readonly hook: GlobalKeybindHook) {
+    this.manager = new KeybindManager(host);
+  }
+
+  async configure(input: unknown): Promise<void> {
+    const map = keybindMapSchema.parse(input ?? {});
+    this.manager.configure(map);
+    try {
+      if (this.manager.isEmpty) await this.hook.stop();
+      else await this.hook.start(
+        (code) => this.manager.handleKeyDown({ code }),
+        (code) => this.manager.handleKeyUp({ code }),
+      );
+    } catch (error) {
+      // Без хука бинды просто не срабатывают; падать из-за этого нельзя.
+      this.host.log?.(`global keybind hook failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  setSuppressed(value: boolean): void { this.manager.setSuppressed(value); }
+
+  async stop(): Promise<void> { await this.hook.stop(); }
+}
