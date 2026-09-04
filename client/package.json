@@ -49,6 +49,7 @@
     "ssh2": "1.17.0",
     "tailwind-merge": "latest",
     "tar": "7.5.20",
+    "uiohook-napi": "^1.5.5",
     "zod": "latest"
   },
   "devDependencies": {
@@ -77,6 +78,9 @@
     "appId": "org.opencord.desktop",
     "productName": "OpenCord",
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/uiohook-napi/**"
+    ],
     "npmRebuild": false,
     "generateUpdatesFilesForAllChannels": true,
     "publish": [
