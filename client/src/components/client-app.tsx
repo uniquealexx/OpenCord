@@ -144,6 +144,31 @@ export function ClientApp(): React.ReactElement {
   const voiceSoundStatusRef = useRef<VoiceSessionStatus>("idle");
   const mutedBeforeServerMuteRef = useRef(false);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
+  // Toast trigger lives above the connection callbacks: it only reads bindings
+  // declared above it, which keeps the hooks/immutability analysis stable.
+  function pushToastForMessage(message: import("@opencord/shared").ChatMessage): void {
+    if (!state || !connectionServer) return;
+    const selfUserId = state.activeServerId ? accessByServer[state.activeServerId]?.id : undefined;
+    if (!selfUserId) return;
+    const channelName = connectionServer.channels.find((channel) => channel.id === message.channelId)?.name ?? t.chat.channelFallback;
+    const excerpt = expandMentionsForEditing(message.content, connectionServer.members.map((member) => ({ id: member.id, username: member.username }))).slice(0, 120);
+    const toast = buildToastForMessage({
+      messageId: message.id,
+      channelId: message.channelId,
+      channelName,
+      authorId: message.authorId,
+      authorName: message.authorName,
+      excerpt,
+      mentionedUserIds: message.mentions.map((mention) => mention.userId),
+      contentHasEveryone: containsEveryoneMention(message.content),
+      selfUserId,
+      activeChannelId: state.activeChannelId,
+      windowFocused: typeof document === "undefined" ? true : document.hasFocus(),
+      globalEnabled: state.preferences.notifications,
+      settings: getChannelNotificationSettings(state.preferences, message.channelId),
+    });
+    if (toast) setToasts((current) => (current.some((item) => item.id === toast.id) ? current : [...current, toast]));
+  }
   const connection = useServerConnection(
     connectionServer,
     state?.profile,
@@ -718,28 +743,6 @@ export function ClientApp(): React.ReactElement {
     setMobilePanel(null);
     setServerSettingsOpen(false);
     resetComposer();
-  }
-
-  function pushToastForMessage(message: import("@opencord/shared").ChatMessage): void {
-    if (!state || !connectionServer || !currentAccess) return;
-    const channelName = connectionServer.channels.find((channel) => channel.id === message.channelId)?.name ?? t.chat.channelFallback;
-    const excerpt = expandMentionsForEditing(message.content, connectionServer.members.map((member) => ({ id: member.id, username: member.username }))).slice(0, 120);
-    const toast = buildToastForMessage({
-      messageId: message.id,
-      channelId: message.channelId,
-      channelName,
-      authorId: message.authorId,
-      authorName: message.authorName,
-      excerpt,
-      mentionedUserIds: message.mentions.map((mention) => mention.userId),
-      contentHasEveryone: containsEveryoneMention(message.content),
-      selfUserId: currentAccess.id,
-      activeChannelId: state.activeChannelId,
-      windowFocused: typeof document === "undefined" ? true : document.hasFocus(),
-      globalEnabled: state.preferences.notifications,
-      settings: getChannelNotificationSettings(state.preferences, message.channelId),
-    });
-    if (toast) setToasts((current) => (current.some((item) => item.id === toast.id) ? current : [...current, toast]));
   }
 
   function openToastChannel(channelId: string): void {
