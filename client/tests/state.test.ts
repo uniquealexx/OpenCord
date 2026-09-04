@@ -113,6 +113,25 @@ describe("persisted client state", () => {
     expect(fallback).toEqual(createDefaultState());
   });
 
+  it("defaults per-channel notification overrides to empty and all-enabled", () => {
+    const state = createDefaultState();
+    expect(state.preferences.notificationOverrides).toEqual({});
+  });
+
+  it("adds default notification overrides to older states and persists per-channel choices", () => {
+    const state = createDefaultState();
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.notificationOverrides;
+    const upgraded = parsePersistedState({ ...state, preferences: olderPreferences });
+    expect(upgraded.preferences.notificationOverrides).toEqual({});
+
+    const restored = parsePersistedState({
+      ...state,
+      preferences: { ...state.preferences, notificationOverrides: { "channel-1": { enabled: false, everyone: true, mentions: false } } },
+    });
+    expect(restored.preferences.notificationOverrides).toEqual({ "channel-1": { enabled: false, everyone: true, mentions: false } });
+  });
+
   it("migrates v1 by removing only the legacy template server", () => {
     const current = createDefaultState();
     const legacy = {

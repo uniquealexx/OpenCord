@@ -126,6 +126,13 @@ export const DARK_SHADES = ["mist", "night", "abyss"] as const;
 export type DarkShade = (typeof DARK_SHADES)[number];
 export const DEFAULT_DARK_SHADE: DarkShade = "night";
 
+export const channelNotificationSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  everyone: z.boolean().default(true),
+  mentions: z.boolean().default(true),
+});
+export type ChannelNotificationSettings = z.infer<typeof channelNotificationSettingsSchema>;
+
 export const clientPreferencesSchema = z.object({
   language: z.enum(LANGUAGES).default(DEFAULT_LANGUAGE),
   colorTheme: z.enum(COLOR_THEMES).default(DEFAULT_COLOR_THEME),
@@ -134,6 +141,7 @@ export const clientPreferencesSchema = z.object({
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
   notifications: z.boolean(),
+  notificationOverrides: z.record(z.string(), channelNotificationSettingsSchema).default({}),
   uiScale: z.number().min(0.8).max(1.4).default(1),
   voiceInputMode: z.enum(["voice", "push-to-talk"]),
   voiceInputDeviceId: z.string().max(500).nullable(),
@@ -191,7 +199,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, notifications: true, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
+    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, notifications: true, notificationOverrides: {}, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
   };
 }
 
