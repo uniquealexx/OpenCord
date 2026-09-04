@@ -181,6 +181,18 @@ export const ru = {
     ],
   },
 
+  notifications: {
+    title: "Уведомления канала",
+    channelLabel: "Канал",
+    channelPlaceholder: "Выберите канал",
+    enabled: "Получать уведомления",
+    everyone: "Уведомления @everyone",
+    mentions: "Уведомления через @",
+    toastTitle: (author: string, channel: string) => `${author} в #${channel}`,
+    toastMention: (author: string, channel: string) => `${author} упомянул вас в #${channel}`,
+    toastEveryone: (author: string, channel: string) => `${author} обратился ко всем в #${channel}`,
+  },
+
   statuses: {
     online: "В сети",
     idle: "Недоступен",

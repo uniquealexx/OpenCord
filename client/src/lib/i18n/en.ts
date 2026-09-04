@@ -180,6 +180,18 @@ export const en = {
     ],
   },
 
+  notifications: {
+    title: "Channel notifications",
+    channelLabel: "Channel",
+    channelPlaceholder: "Select a channel",
+    enabled: "Receive notifications",
+    everyone: "Notify on @everyone",
+    mentions: "Notify on @ mentions",
+    toastTitle: (author: string, channel: string) => `${author} in #${channel}`,
+    toastMention: (author: string, channel: string) => `${author} mentioned you in #${channel}`,
+    toastEveryone: (author: string, channel: string) => `${author} pinged everyone in #${channel}`,
+  },
+
   statuses: {
     online: "Online",
     idle: "Idle",

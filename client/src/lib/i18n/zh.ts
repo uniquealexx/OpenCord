@@ -181,6 +181,18 @@ export const zh = {
     ],
   },
 
+  notifications: {
+    title: "频道通知",
+    channelLabel: "频道",
+    channelPlaceholder: "选择频道",
+    enabled: "接收通知",
+    everyone: "@everyone 通知",
+    mentions: "@提及通知",
+    toastTitle: (author: string, channel: string) => `#${channel} 中的 ${author}`,
+    toastMention: (author: string, channel: string) => `${author} 在 #${channel} 中提及了你`,
+    toastEveryone: (author: string, channel: string) => `${author} 在 #${channel} 中 @了所有人`,
+  },
+
   statuses: {
     online: "在线",
     idle: "离开",
