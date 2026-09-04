@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelDialog, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelDialog, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelNotificationPopover, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
@@ -1488,3 +1488,68 @@ function StatefulComposer({ candidates, canModerateChat = false }: { candidates:
   const [draft, setDraft] = useState("");
   return <Composer draft={draft} channelName="общий" disabled={false} uploading={false} canAttach attachments={[]} onAttach={vi.fn()} onRemoveAttachment={vi.fn()} onDraft={setDraft} onSubmit={vi.fn()} members={candidates} canModerateChat={canModerateChat} />;
 }
+
+describe("ChannelNotificationPopover", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const popoverChannels = [
+    { id: "general", serverId: "test-server", name: "общий", kind: "text" as const, description: "", participantLimit: null, slowmodeSeconds: 0 },
+    { id: "random", serverId: "test-server", name: "случайный", kind: "text" as const, description: "", participantLimit: null, slowmodeSeconds: 0 },
+    { id: "voice", serverId: "test-server", name: "Гостиная", kind: "voice" as const, description: "", participantLimit: 25, slowmodeSeconds: 0 },
+  ];
+
+  function renderPopover(overrides?: Record<string, { enabled: boolean; everyone: boolean; mentions: boolean }>): { onPreferences: ReturnType<typeof vi.fn> } {
+    const onPreferences = vi.fn();
+    const preferences = { ...createDefaultState().preferences, notificationOverrides: overrides ?? {} };
+    render(<ChannelNotificationPopover channels={popoverChannels} activeChannelId="general" preferences={preferences} onPreferences={onPreferences} />);
+    return { onPreferences };
+  }
+
+  it("opens on bell click and lists text channels only", async () => {
+    const user = userEvent.setup();
+    renderPopover();
+    await user.click(screen.getByRole("button", { name: "Уведомления канала" }));
+    expect(screen.getByRole("dialog", { name: "Уведомления канала" })).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Канал" }));
+    expect(screen.getByRole("option", { name: "# общий" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "# случайный" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "# Гостиная" })).not.toBeInTheDocument();
+  });
+
+  it("locks the children while the master switch is on and unlocks them when it is off", async () => {
+    const user = userEvent.setup();
+    const { onPreferences } = renderPopover();
+    await user.click(screen.getByRole("button", { name: "Уведомления канала" }));
+    const master = screen.getByRole("switch", { name: "Получать уведомления" });
+    const everyone = screen.getByRole("switch", { name: "Уведомления @everyone" });
+    const mentions = screen.getByRole("switch", { name: "Уведомления через @" });
+    expect(master).toBeChecked();
+    expect(everyone).toBeChecked();
+    expect(everyone).toBeDisabled();
+    expect(mentions).toBeDisabled();
+
+    await user.click(master);
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      notificationOverrides: { general: { enabled: false, everyone: true, mentions: true } },
+    }));
+    cleanup();
+
+    renderPopover({ general: { enabled: false, everyone: true, mentions: false } });
+    await user.click(screen.getByRole("button", { name: "Уведомления канала" }));
+    expect(screen.getByRole("switch", { name: "Уведомления @everyone" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Уведомления через @" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Уведомления через @" })).not.toBeChecked();
+  });
+
+  it("resets the children to on when the master switch is turned back on", async () => {
+    const user = userEvent.setup();
+    const { onPreferences } = renderPopover({ general: { enabled: false, everyone: false, mentions: false } });
+    await user.click(screen.getByRole("button", { name: "Уведомления канала" }));
+    await user.click(screen.getByRole("switch", { name: "Получать уведомления" }));
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      notificationOverrides: { general: { enabled: true, everyone: true, mentions: true } },
+    }));
+  });
+});

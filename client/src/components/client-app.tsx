@@ -25,6 +25,8 @@ import { ScreenShareDialog, ScreenShareSurface, screenShareResolutionLabel } fro
 import { SettingsDialog } from "@/components/settings-dialog";
 import { MobileSettingsScreen } from "@/mobile/screens/settings-screen";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useMobileLayout } from "@/hooks/use-mobile-layout";
@@ -34,12 +36,13 @@ import { useVoiceRecorder, voiceFileName, type VoiceRecorderError } from "@/hook
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { nicknameStyle } from "@/lib/name-font";
 import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
+import { getChannelNotificationSettings } from "@/lib/channel-notifications";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
 import { playVoiceSound, primeVoiceSounds } from "@/lib/voice-sounds";
-import { createDefaultState, DEFAULT_COLOR_THEME, DEFAULT_DARK_SHADE, DEFAULT_THEME_MODE, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
+import { createDefaultState, DEFAULT_COLOR_THEME, DEFAULT_DARK_SHADE, DEFAULT_THEME_MODE, type ChannelNotificationSettings, type ClientPreferences, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
 import { resolveAppearance, useSystemDark } from "@/lib/appearance";
 import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 
@@ -1579,6 +1582,10 @@ export function ClientApp(): React.ReactElement {
                 memberList={mobile ? mobilePanel === "members" : state.preferences.showMemberList}
                 channelsOpen={mobile && mobilePanel === "channels"}
                 searchOpen={searchOpen}
+                channels={activeServer.channels}
+                activeChannelId={activeChannel?.id ?? null}
+                preferences={state.preferences}
+                onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))}
                 onMenu={() => setMobilePanel(mobilePanel === "channels" ? null : "channels")}
                 onSearch={() => setSearchOpen(true)}
                 onToggleMembers={() => {
@@ -3004,7 +3011,69 @@ function NoTextChannelView({ mobile = false, server, profile, access, connection
   );
 }
 
-function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, onMenu, onSearch, onToggleMembers }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; onMenu?: () => void; onSearch: () => void; onToggleMembers: () => void }): React.ReactElement {
+export function ChannelNotificationPopover({ channels, activeChannelId, preferences, onPreferences }: { channels: MockChannel[]; activeChannelId: string | null; preferences: ClientPreferences; onPreferences: (preferences: ClientPreferences) => void }): React.ReactElement {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const textChannels = channels.filter((channel) => channel.kind === "text");
+  const selected = textChannels.find((channel) => channel.id === selectedChannelId)
+    ?? textChannels.find((channel) => channel.id === activeChannelId)
+    ?? textChannels[0]
+    ?? null;
+  const settings = selected ? getChannelNotificationSettings(preferences, selected.id) : null;
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent): void => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  function updateSelected(patch: Partial<ChannelNotificationSettings>): void {
+    if (!selected) return;
+    const next = { ...getChannelNotificationSettings(preferences, selected.id), ...patch };
+    // Дочерние чекбоксы заблокированы, пока мастер включён: при возврате
+    // мастера в ON они снова фиксируются во включённом состоянии.
+    if (next.enabled) {
+      next.everyone = true;
+      next.mentions = true;
+    }
+    onPreferences({ ...preferences, notificationOverrides: { ...preferences.notificationOverrides, [selected.id]: next } });
+  }
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button type="button" aria-label={t.notifications.title} aria-expanded={open} title={t.notifications.title} onClick={() => setOpen((current) => !current)} className={cn("grid size-9 shrink-0 place-items-center rounded-lg transition", open ? "bg-white/10 text-violet-200" : "text-slate-500 hover:text-slate-200")}>
+        <Bell className="size-4" />
+      </button>
+      {open && (
+        <div role="dialog" aria-label={t.notifications.title} className="glass absolute right-0 top-[calc(100%+8px)] z-30 w-72 rounded-xl p-3 shadow-[0_18px_55px_rgba(0,0,0,.5)]">
+          <p className="mb-2 px-1 text-xs font-bold uppercase tracking-[.12em] text-slate-500">{t.notifications.title}</p>
+          <Combobox label={t.notifications.channelLabel} value={selected?.id ?? ""} placeholder={t.notifications.channelPlaceholder} icon={Hash} options={textChannels.map((channel) => ({ value: channel.id, label: `# ${channel.name}` }))} onChange={(value) => setSelectedChannelId(value)} clearable={false} />
+          {settings && (
+            <div className="mt-2 divide-y divide-white/6 rounded-xl border border-white/7 bg-white/[.025]">
+              <NotificationRow title={t.notifications.enabled}><Switch aria-label={t.notifications.enabled} checked={settings.enabled} onCheckedChange={(enabled) => updateSelected({ enabled })} /></NotificationRow>
+              <NotificationRow title={t.notifications.everyone}><Switch aria-label={t.notifications.everyone} checked={settings.everyone} disabled={settings.enabled} onCheckedChange={(everyone) => updateSelected({ everyone })} /></NotificationRow>
+              <NotificationRow title={t.notifications.mentions}><Switch aria-label={t.notifications.mentions} checked={settings.mentions} disabled={settings.enabled} onCheckedChange={(mentions) => updateSelected({ mentions })} /></NotificationRow>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationRow({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
+  return <div className="flex min-h-12 items-center justify-between gap-4 px-3 py-2"><p className="text-xs font-medium text-slate-200">{title}</p>{children}</div>;
+}
+
+function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, channels, activeChannelId, preferences, onPreferences, onMenu, onSearch, onToggleMembers }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; channels: MockChannel[]; activeChannelId: string | null; preferences: ClientPreferences; onPreferences: (preferences: ClientPreferences) => void; onMenu?: () => void; onSearch: () => void; onToggleMembers: () => void }): React.ReactElement {
   const { t } = useI18n();
   const statusLabel = connectionLabel(connectionStatus, t);
   const statusTone = connectionStatus === "connected"
@@ -3043,9 +3112,7 @@ function ChatHeader({ mobile = false, channelName, description, connectionStatus
         {mobile ? <span aria-hidden="true" className="size-full rounded-full bg-current" /> : statusLabel}
       </span>
       {!mobile && (
-        <button className="text-slate-500 hover:text-slate-200">
-          <Bell className="size-4" />
-        </button>
+        <ChannelNotificationPopover channels={channels} activeChannelId={activeChannelId} preferences={preferences} onPreferences={onPreferences} />
       )}
       <button type="button" aria-label={t.search.open} aria-pressed={searchOpen} onClick={onSearch} className={mobile
         ? cn(iconButton, searchOpen ? "bg-white/10 text-violet-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")
