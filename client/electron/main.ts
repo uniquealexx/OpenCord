@@ -20,6 +20,7 @@ import { isAllowedRendererPermission } from "./permissions";
 import { isTrustedRendererUrl } from "./trusted-renderer";
 import { probeOpenCordServer } from "./server-probe";
 import { shouldHideWindowOnClose } from "./window-lifecycle";
+import { createUiohookHook, KeybindController } from "./keybinds";
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 let mainWindow: BrowserWindow | null = null;
@@ -30,6 +31,7 @@ let identityStore: IdentityStore;
 let deploymentManager: DeploymentManager;
 let serverBundleProvider: ReleaseAwareServerBundleProvider;
 let clientUpdateManager: ClientUpdateManager;
+let keybindController: KeybindController;
 let pendingUpdateDecision: ((decision: "retry" | "quit") => void) | null = null;
 let attachmentPreviewDirectory: string;
 let bundleCleanupStarted = false;
@@ -358,6 +360,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.storageLoad, () => store.load());
   ipcMain.handle(IPC.storageSave, (_event, input: unknown) => store.save(parsePersistedState(input)));
   ipcMain.handle(IPC.storageReset, () => store.reset());
+  keybindController = new KeybindController(
+    { send: (event) => mainWindow?.webContents.send(IPC.keybindsAction, event) },
+    createUiohookHook((message) => console.info(`[keybinds] ${message}`)),
+  );
+  ipcMain.handle(IPC.keybindsApply, (_event, input: unknown) => keybindController.configure(input));
+  ipcMain.handle(IPC.keybindsCapture, (_event, active: unknown) => { keybindController.setSuppressed(active === true); });
   ipcMain.handle(IPC.identityGetOrCreate, () => identityStore.getOrCreate());
   ipcMain.handle(IPC.identitySignChallenge, (_event, challenge: unknown) => identityStore.signChallenge(challenge));
   ipcMain.handle(IPC.identityReset, () => identityStore.reset());
@@ -534,6 +542,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", (event) => {
   quitting = true;
+  void keybindController?.stop();
   if (tray && !tray.isDestroyed()) tray.destroy();
   tray = null;
   if (clientUpdateInstalling) return;

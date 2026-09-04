@@ -5,6 +5,7 @@ import type { AttachmentDownloadRequest, AttachmentTransferContext } from "./att
 import type { ClientUpdateState } from "./updater";
 import type { ScreenShareSelection, ScreenShareSource } from "./screen-share";
 import type { ServerProbeResult } from "./server-probe";
+import type { KeybindActionEvent, KeybindMap } from "./keybinds";
 
 export const IPC = {
   windowMinimize: "window:minimize",
@@ -42,6 +43,9 @@ export const IPC = {
   updateInstall: "update:install",
   updateGateDecision: "update:gate-decision",
   updateStateChanged: "update:state-changed",
+  keybindsApply: "keybinds:apply",
+  keybindsCapture: "keybinds:capture",
+  keybindsAction: "keybinds:action",
 } as const;
 
 export interface PublicIdentity {
@@ -101,5 +105,11 @@ export interface OpenCordBridge {
     download(): Promise<ClientUpdateState>;
     install(): Promise<void>;
     onStateChange(listener: (state: ClientUpdateState) => void): () => void;
+  };
+  /** Глобальные бинды: только в десктоп-оболочке; на мобильном мосту отсутствует. */
+  keybinds?: {
+    apply(map: KeybindMap | null): Promise<void>;
+    setCaptureMode(active: boolean): Promise<void>;
+    onAction(listener: (event: KeybindActionEvent) => void): () => void;
   };
 }

@@ -7,6 +7,7 @@ import { attachmentDownloadRequestSchema, attachmentPreviewResultSchema, attachm
 import { clientUpdateStateSchema } from "../src/shared/updater";
 import { screenShareDiagnosticSchema, screenShareSelectionSchema, screenShareSourcesSchema } from "../src/shared/screen-share";
 import { serverProbeAddressSchema, serverProbeResultSchema } from "../src/shared/server-probe";
+import { keybindActionEventSchema, keybindMapSchema } from "../src/shared/keybinds";
 
 const bridge: OpenCordBridge = {
   window: {
@@ -84,6 +85,15 @@ const bridge: OpenCordBridge = {
       const handler = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(clientUpdateStateSchema.parse(value));
       ipcRenderer.on(IPC.updateStateChanged, handler);
       return () => ipcRenderer.removeListener(IPC.updateStateChanged, handler);
+    },
+  },
+  keybinds: {
+    apply: async (map) => { await ipcRenderer.invoke(IPC.keybindsApply, keybindMapSchema.parse(map ?? {})); },
+    setCaptureMode: async (active) => { await ipcRenderer.invoke(IPC.keybindsCapture, active === true); },
+    onAction: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(keybindActionEventSchema.parse(value));
+      ipcRenderer.on(IPC.keybindsAction, handler);
+      return () => ipcRenderer.removeListener(IPC.keybindsAction, handler);
     },
   },
 };

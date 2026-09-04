@@ -153,28 +153,28 @@ function buildScancodeIndex(key: UiohookModule["UiohookKey"]): Map<number, strin
 
 /** Пассивный глобальный хук: слушает клавиатуру, НЕ перехватывая события у других приложений. */
 export function createUiohookHook(log?: (message: string) => void): GlobalKeybindHook {
-  let module: UiohookModule | null = null;
+  let hookModule: UiohookModule | null = null;
   return {
     async start(onKeyDown, onKeyUp) {
-      if (module) return;
-      module = await import("uiohook-napi"); // динамически: юнит-тесты и бандл его не трогают
-      const index = buildScancodeIndex(module.UiohookKey);
-      module.uIOhook.on("keydown", (event) => {
+      if (hookModule) return;
+      hookModule = await import("uiohook-napi"); // динамически: юнит-тесты и бандл его не трогают
+      const index = buildScancodeIndex(hookModule.UiohookKey);
+      hookModule.uIOhook.on("keydown", (event) => {
         const code = index.get(event.keycode);
         if (code) onKeyDown(code);
       });
-      module.uIOhook.on("keyup", (event) => {
+      hookModule.uIOhook.on("keyup", (event) => {
         const code = index.get(event.keycode);
         if (code) onKeyUp(code);
       });
-      module.uIOhook.start();
+      hookModule.uIOhook.start();
       log?.("global keybind hook started");
     },
     async stop() {
-      if (!module) return;
-      module.uIOhook.removeAllListeners();
-      module.uIOhook.stop();
-      module = null;
+      if (!hookModule) return;
+      hookModule.uIOhook.removeAllListeners();
+      hookModule.uIOhook.stop();
+      hookModule = null;
       log?.("global keybind hook stopped");
     },
   };
