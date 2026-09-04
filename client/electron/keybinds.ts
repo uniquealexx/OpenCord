@@ -1,11 +1,15 @@
 import {
   MODIFIER_CODES,
+  isModifierCode,
   keybindMapSchema,
+  modifierFamily,
+  normalizeTrigger,
   type KeybindAction,
   type KeybindActionEvent,
   type KeybindMode,
   type KeybindMap,
   type KeybindTrigger,
+  type ModifierFamily,
 } from "../src/shared/keybinds";
 
 /** Событие глобального хука клавиатуры, приведённое к именам KeyboardEvent.code. */
@@ -22,6 +26,9 @@ interface BoundAction { action: KeybindAction; trigger: KeybindTrigger; mode: Ke
  * Переводит события глобального хука в семантические действия.
  * Модификаторы трекаем сами (набор полей событий хука зависит от платформы),
  * авто-повтор ОС давим по множеству зажатых клавиш.
+ * Одиночный модификатор — полноценный бинд: hold срабатывает на нажатие,
+ * toggle — на отпускание и только если между ними не было других клавиш
+ * (иначе каждый Alt+Tab мутил бы микрофон).
  * Приватность: события клавиш используются ТОЛЬКО для сопоставления с биндами
  * и никуда, кроме этого процесса, не пишутся и не отправляются.
  */
@@ -30,6 +37,7 @@ export class KeybindManager {
   private pressed = new Set<string>();
   private modifiers = { control: false, alt: false, shift: false, meta: false };
   private held = new Set<KeybindAction>();
+  private pendingToggle: { action: KeybindAction; mode: KeybindMode; family: ModifierFamily } | null = null;
   private suppressed = false;
 
   constructor(private readonly host: KeybindHost) {}
@@ -43,7 +51,7 @@ export class KeybindManager {
     this.modifiers = { control: false, alt: false, shift: false, meta: false };
     this.bound = (["mute", "deafen"] as const).flatMap((action) => {
       const bind = next[action];
-      return bind ? [{ action, trigger: bind.trigger, mode: bind.mode }] : [];
+      return bind ? [{ action, trigger: normalizeTrigger(bind.trigger), mode: bind.mode }] : [];
     });
   }
 
@@ -54,9 +62,28 @@ export class KeybindManager {
   }
 
   handleKeyDown(key: GlobalKey): void {
-    if (MODIFIER_CODES.has(key.code)) { this.setModifier(key.code, true); return; }
+    if (MODIFIER_CODES.has(key.code)) {
+      if (this.pressed.has(key.code)) return; // авто-повтор ОС
+      this.pressed.add(key.code);
+      this.setModifier(key.code, true);
+      if (this.suppressed) return;
+      const bind = this.matchModifierOnly(key.code);
+      if (!bind) return;
+      if (bind.mode === "hold") {
+        if (this.held.has(bind.action)) return;
+        this.held.add(bind.action);
+        this.host.send({ action: bind.action, mode: bind.mode, phase: "press" });
+      } else if (!this.pendingToggle) {
+        // Toggle одиночного модификатора ждёт отпускания: см. handleKeyUp.
+        this.pendingToggle = { action: bind.action, mode: bind.mode, family: modifierFamily(key.code) ?? "control" };
+      }
+      return;
+    }
     if (this.pressed.has(key.code)) return; // авто-повтор ОС
     this.pressed.add(key.code);
+    // Обычная клавиша между нажатием и отпусканием модификатора отменяет
+    // отложенный toggle (это комбо типа Alt+Tab, а не одиночный Alt).
+    this.pendingToggle = null;
     if (this.suppressed) return;
     const bind = this.match(key.code);
     if (!bind) return;
@@ -68,24 +95,31 @@ export class KeybindManager {
   }
 
   handleKeyUp(key: GlobalKey): void {
-    if (MODIFIER_CODES.has(key.code)) { this.setModifier(key.code, false); return; }
     this.pressed.delete(key.code);
+    if (MODIFIER_CODES.has(key.code)) {
+      this.setModifier(key.code, false);
+      if (this.suppressed) { this.pendingToggle = null; return; }
+      this.releaseHeld(key.code);
+      const pending = this.pendingToggle;
+      this.pendingToggle = null;
+      // Toggle одиночного модификатора: других клавиш не было и после
+      // отпускания ничего не зажато — значит, это был именно одиночный бинд.
+      if (pending && modifierFamily(key.code) === pending.family && !this.anyModifierDown()) {
+        this.host.send({ action: pending.action, mode: pending.mode, phase: "press" });
+      }
+      return;
+    }
     if (this.suppressed) return;
     // Отпускание ищем по коду клавиши среди зажатых биндов: пользователь мог
     // отпустить модификатор раньше самой клавиши, и матч по триггеру бы сорвался.
-    for (const action of [...this.held]) {
-      const bind = this.bound.find((item) => item.action === action);
-      if (bind?.trigger.code === key.code) {
-        this.held.delete(action);
-        this.host.send({ action, mode: bind.mode, phase: "release" });
-      }
-    }
+    this.releaseHeld(key.code);
   }
 
   /** Рендерер перезагрузился или бинды сменились — отпускаем зажатое, чтобы состояние не залипло. */
   releaseAll(): void {
     for (const action of [...this.held]) this.host.send({ action, mode: "hold", phase: "release" });
     this.held.clear();
+    this.pendingToggle = null;
   }
 
   private match(code: string): BoundAction | null {
@@ -94,6 +128,42 @@ export class KeybindManager {
       && bind.trigger.alt === this.modifiers.alt
       && bind.trigger.shift === this.modifiers.shift
       && bind.trigger.meta === this.modifiers.meta) ?? null;
+  }
+
+  /**
+   * Матч одиночного модификатора: бинд на то же семейство (лево/право
+   * неразличимы) и состояние остальных модификаторов совпадает — например,
+   * бинд «Ctrl» не срабатывает при зажатом «Ctrl+Shift».
+   */
+  private matchModifierOnly(pressedCode: string): BoundAction | null {
+    const family = modifierFamily(pressedCode);
+    if (!family) return null;
+    return this.bound.find((bind) => isModifierCode(bind.trigger.code)
+      && modifierFamily(bind.trigger.code) === family
+      && bind.trigger.control === this.modifiers.control
+      && bind.trigger.alt === this.modifiers.alt
+      && bind.trigger.shift === this.modifiers.shift
+      && bind.trigger.meta === this.modifiers.meta) ?? null;
+  }
+
+  /** Отпускание hold-бинда по коду клавиши; у модификаторов лево/право взаимозаменяемы. */
+  private releaseHeld(releasedCode: string): void {
+    const releasedFamily = modifierFamily(releasedCode);
+    for (const action of [...this.held]) {
+      const bind = this.bound.find((item) => item.action === action);
+      if (!bind) continue;
+      const sameKey = bind.trigger.code === releasedCode
+        || (isModifierCode(bind.trigger.code) && isModifierCode(releasedCode)
+          && modifierFamily(bind.trigger.code) === releasedFamily);
+      if (sameKey) {
+        this.held.delete(action);
+        this.host.send({ action, mode: bind.mode, phase: "release" });
+      }
+    }
+  }
+
+  private anyModifierDown(): boolean {
+    return this.modifiers.control || this.modifiers.alt || this.modifiers.shift || this.modifiers.meta;
   }
 
   private setModifier(code: string, down: boolean): void {

@@ -37,9 +37,69 @@ export const keybindActionEventSchema = z.object({
 });
 export type KeybindActionEvent = z.infer<typeof keybindActionEventSchema>;
 
-/** Клавиши-модификаторы сами по себе биндами не становятся — их состояние учитывается. */
+/** Коды клавиш-модификаторов: учитываются и как часть комбо, и как одиночный бинд. */
 export const MODIFIER_CODES = new Set(["ControlLeft", "ControlRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight", "ShiftLeft", "ShiftRight"]);
 
+export const MODIFIER_FAMILIES = ["control", "alt", "shift", "meta"] as const;
+export type ModifierFamily = (typeof MODIFIER_FAMILIES)[number];
+
+const FAMILY_BY_CODE_PREFIX: Array<[string, ModifierFamily]> = [
+  ["Control", "control"],
+  ["Alt", "alt"],
+  ["Meta", "meta"],
+  ["Shift", "shift"],
+];
+
+/** Семейство модификатора по KeyboardEvent.code, null для обычных клавиш. */
+export function modifierFamily(code: string): ModifierFamily | null {
+  for (const [prefix, family] of FAMILY_BY_CODE_PREFIX) {
+    if (code.startsWith(prefix)) return family;
+  }
+  return null;
+}
+
+export function isModifierCode(code: string): boolean {
+  return MODIFIER_CODES.has(code);
+}
+
+const CANONICAL_MODIFIER_CODE: Record<ModifierFamily, string> = {
+  control: "ControlLeft",
+  alt: "AltLeft",
+  shift: "ShiftLeft",
+  meta: "MetaLeft",
+};
+
+/** Канонический (левый) код семейства — левая и правая клавиши считаются одним биндом. */
+export function canonicalModifierCode(family: ModifierFamily): string {
+  return CANONICAL_MODIFIER_CODE[family];
+}
+
+/**
+ * Нормализует триггер: код одиночного модификатора приводится к левому
+ * варианту семейства, у него выставляется только собственный флаг.
+ */
+export function normalizeTrigger(trigger: KeybindTrigger): KeybindTrigger {
+  const family = modifierFamily(trigger.code);
+  if (!family || !isModifierCode(trigger.code)) return trigger;
+  return {
+    code: canonicalModifierCode(family),
+    control: family === "control",
+    alt: family === "alt",
+    shift: family === "shift",
+    meta: family === "meta",
+  };
+}
+
+/** Триггер на одиночный модификатор (без обычной клавиши). */
+export function isModifierOnlyTrigger(trigger: KeybindTrigger): boolean {
+  return isModifierCode(trigger.code);
+}
+
 export function sameTrigger(left: KeybindTrigger, right: KeybindTrigger): boolean {
-  return left.code === right.code && left.control === right.control && left.alt === right.alt && left.shift === right.shift && left.meta === right.meta;
+  // Нормализация сводит левый/правый варианты модификатора к одному коду,
+  // поэтому дальше достаточно строгого сравнения.
+  const a = normalizeTrigger(left);
+  const b = normalizeTrigger(right);
+  return a.code === b.code
+    && a.control === b.control && a.alt === b.alt && a.shift === b.shift && a.meta === b.meta;
 }

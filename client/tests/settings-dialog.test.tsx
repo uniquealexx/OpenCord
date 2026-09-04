@@ -265,6 +265,33 @@ describe("SettingsDialog global keybinds", () => {
     }));
   });
 
+  it("captures a lone modifier on press-and-release", () => {
+    const onPreferences = renderDialog();
+    const row = screen.getByTestId("keybind-row-mute");
+    fireEvent.click(within(row).getByRole("button", { name: "Назначить" }));
+    fireEvent.keyDown(window, { code: "AltLeft", ctrlKey: false, altKey: true, shiftKey: false, metaKey: false });
+    expect(onPreferences).not.toHaveBeenCalled();
+    fireEvent.keyUp(window, { code: "AltLeft", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false });
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      keybinds: expect.objectContaining({
+        mute: { trigger: { code: "AltLeft", control: false, alt: true, shift: false, meta: false }, mode: "toggle" },
+      }),
+    }));
+  });
+
+  it("still captures a combo when a modifier is held first", () => {
+    const onPreferences = renderDialog();
+    const row = screen.getByTestId("keybind-row-mute");
+    fireEvent.click(within(row).getByRole("button", { name: "Назначить" }));
+    fireEvent.keyDown(window, { code: "AltLeft", ctrlKey: false, altKey: true, shiftKey: false, metaKey: false });
+    fireEvent.keyDown(window, { code: "Tab", ctrlKey: false, altKey: true, shiftKey: false, metaKey: false });
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      keybinds: expect.objectContaining({
+        mute: { trigger: { code: "Tab", control: false, alt: true, shift: false, meta: false }, mode: "toggle" },
+      }),
+    }));
+  });
+
   it("Escape cancels capture and clear removes the bind", () => {
     const preferences = createDefaultState().preferences;
     preferences.keybinds = { mute: { trigger: { code: "KeyM", control: false, alt: false, shift: false, meta: false }, mode: "toggle" }, deafen: null };

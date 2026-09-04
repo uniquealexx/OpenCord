@@ -1529,6 +1529,8 @@ describe("ChannelNotificationPopover", () => {
     expect(everyone).toBeChecked();
     expect(everyone).toBeDisabled();
     expect(mentions).toBeDisabled();
+    // Заблокированные дочерние переключатели подписаны подсказкой.
+    expect(screen.getByText("Выключите «Получать уведомления», чтобы настроить")).toBeInTheDocument();
 
     await user.click(master);
     expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
@@ -1541,6 +1543,8 @@ describe("ChannelNotificationPopover", () => {
     expect(screen.getByRole("switch", { name: "Уведомления @everyone" })).toBeEnabled();
     expect(screen.getByRole("switch", { name: "Уведомления через @" })).toBeEnabled();
     expect(screen.getByRole("switch", { name: "Уведомления через @" })).not.toBeChecked();
+    // Когда мастер выключен, подсказка больше не нужна.
+    expect(screen.queryByText("Выключите «Получать уведомления», чтобы настроить")).not.toBeInTheDocument();
   });
 
   it("resets the children to on when the master switch is turned back on", async () => {
@@ -1562,10 +1566,16 @@ describe("MessageEveryone", () => {
   it("renders @everyone as a non-interactive pill", async () => {
     const user = userEvent.setup();
     const message = { id: "message-everyone", channelId: "welcome", authorId: "member", authorName: "Мира", authorColor: "#7c5cff", content: "Hi @everyone, look", createdAt: new Date().toISOString(), editedAt: null };
-    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
-    const pill = screen.getByText("@everyone");
+    const mention = { id: "member", username: "Мира", role: "member", avatarColor: "#7c5cff", status: "online" } as const;
+    render(<Message message={message} members={[mention]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
+    const pill = screen.getByLabelText("@everyone");
     expect(pill.tagName).toBe("SPAN");
     expect(pill.closest("button")).toBeNull();
+    // Пилюля @everyone повторяет вёрстку триггера обычного упоминания.
+    expect(pill).toHaveClass("bg-blue-500/18");
+    expect(pill).toHaveClass("text-blue-200");
+    expect(pill).toHaveClass("rounded-[4px]");
+    expect(pill).toHaveClass("font-medium");
     await user.click(pill);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });

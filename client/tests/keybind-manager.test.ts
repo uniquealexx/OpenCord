@@ -95,4 +95,48 @@ describe("KeybindManager", () => {
     manager.handleKeyDown({ code: "KeyM" });
     expect(sent.at(-1)).toEqual({ action: "mute", mode: "hold", phase: "press" }); // работает снова после снятия
   });
+
+  it("lone-modifier hold fires press on keydown and release on keyup", () => {
+    const { manager, sent } = createManager({ mute: { trigger: { code: "AltLeft", control: false, alt: true, shift: false, meta: false }, mode: "hold" } });
+    manager.handleKeyDown({ code: "AltLeft" });
+    manager.handleKeyDown({ code: "AltLeft" }); // авто-повтор
+    manager.handleKeyUp({ code: "AltLeft" });
+    expect(sent).toEqual([
+      { action: "mute", mode: "hold", phase: "press" },
+      { action: "mute", mode: "hold", phase: "release" },
+    ]);
+  });
+
+  it("lone-modifier toggle fires on keyup, not on keydown", () => {
+    const { manager, sent } = createManager({ mute: { trigger: { code: "AltLeft", control: false, alt: true, shift: false, meta: false }, mode: "toggle" } });
+    manager.handleKeyDown({ code: "AltLeft" });
+    expect(sent).toEqual([]);
+    manager.handleKeyUp({ code: "AltLeft" });
+    expect(sent).toEqual([{ action: "mute", mode: "toggle", phase: "press" }]);
+  });
+
+  it("lone-modifier toggle is cancelled by another key (Alt+Tab must not mute)", () => {
+    const { manager, sent } = createManager({ mute: { trigger: { code: "AltLeft", control: false, alt: true, shift: false, meta: false }, mode: "toggle" } });
+    manager.handleKeyDown({ code: "AltLeft" });
+    manager.handleKeyDown({ code: "Tab" });
+    manager.handleKeyUp({ code: "Tab" });
+    manager.handleKeyUp({ code: "AltLeft" });
+    expect(sent).toEqual([]);
+  });
+
+  it("left and right modifiers trigger the same lone bind", () => {
+    const { manager, sent } = createManager({ mute: { trigger: { code: "ControlLeft", control: true, alt: false, shift: false, meta: false }, mode: "toggle" } });
+    manager.handleKeyDown({ code: "ControlRight" });
+    manager.handleKeyUp({ code: "ControlRight" });
+    expect(sent).toEqual([{ action: "mute", mode: "toggle", phase: "press" }]);
+  });
+
+  it("lone-modifier bind ignores extra held modifiers", () => {
+    const { manager, sent } = createManager({ mute: { trigger: { code: "ControlLeft", control: true, alt: false, shift: false, meta: false }, mode: "toggle" } });
+    manager.handleKeyDown({ code: "ShiftLeft" });
+    manager.handleKeyDown({ code: "ControlLeft" });
+    manager.handleKeyUp({ code: "ControlLeft" });
+    manager.handleKeyUp({ code: "ShiftLeft" });
+    expect(sent).toEqual([]);
+  });
 });

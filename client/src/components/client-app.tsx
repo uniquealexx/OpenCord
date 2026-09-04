@@ -3105,6 +3105,7 @@ export function ChannelNotificationPopover({ channels, activeChannelId, preferen
               <NotificationRow title={t.notifications.mentions}><Switch aria-label={t.notifications.mentions} checked={settings.mentions} disabled={settings.enabled} onCheckedChange={(mentions) => updateSelected({ mentions })} /></NotificationRow>
             </div>
           )}
+          {settings?.enabled && <p className="mt-1.5 px-1 text-[10px] leading-4 text-slate-600">{t.notifications.lockedHint}</p>}
         </div>
       )}
     </div>
@@ -3274,6 +3275,13 @@ function ChannelIntro({ name, description, networked }: { name: string; descript
 }
 
 const QUICK_REACTION_EMOJIS = ["❤️", "👍", "😭"] as const;
+
+// Общие классы приглушённой пиши упоминания (неизвестный адресат маркера).
+const MENTION_PILL_CLASS = "inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] leading-none text-blue-200/80" as const;
+// @everyone повторяет вёрстку обычного упоминания (MessageMention): те же
+// trigger-классы пилюли и внутренний span ника, только без интерактивных
+// состояний (hover/focus) и с дефолтным шрифтом ника.
+const EVERYONE_PILL_CLASS = "inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] font-medium leading-none text-blue-200" as const;
 
 type PrivateMessageStackPosition = "single" | "first" | "middle" | "last";
 
@@ -3515,9 +3523,9 @@ export function Message({ message, replyToMessage, member, members, profile, com
               <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 select-text cursor-text">
                 {splitMessageContent(message.content).map((segment, index) => {
                   if (segment.kind === "text") return <span key={index}>{segment.text}</span>;
-                  // @everyone выглядит как обычное упоминание, но никуда не ведёт:
-                  // это plain span без клика и без превью профиля.
-                  if (segment.kind === "everyone") return <span key={index} aria-label="@everyone" className="inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] leading-none text-blue-200/80">@everyone</span>;
+                  // @everyone повторяет вёрстку упоминания участника (классы триггера
+                  // MessageMention), но это plain span: без клика, превью и hover.
+                  if (segment.kind === "everyone") return <span key={index} aria-label="@everyone" className={EVERYONE_PILL_CLASS}><span>@everyone</span></span>;
                   return <MessageMention key={index} userId={segment.userId} mentioned={Boolean(message.mentions?.includes(segment.userId))} members={members} />;
                 })}
                 {grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">{t.chat.edited}</span>}
@@ -3632,7 +3640,7 @@ function MessageReactionTrigger({ messageId, label, pickerLabel, pickLabel, onTo
 function MessageMention({ userId, mentioned, members }: { userId: string; mentioned: boolean; members: MockMember[] }): React.ReactElement {
   const { t } = useI18n();
   const member = members.find((candidate) => candidate.id === userId);
-  if (!mentioned || !member) return <span className="inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] leading-none text-blue-200/80">@{t.chat.unknownUser}</span>;
+  if (!mentioned || !member) return <span className={MENTION_PILL_CLASS}>@{t.chat.unknownUser}</span>;
   return (
     <ProfilePreview
       side="right"

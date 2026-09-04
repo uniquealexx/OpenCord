@@ -10,4 +10,5 @@ allowBuilds:
   esbuild: true
   sharp: true
   ssh2: false
+  uiohook-napi: false
   unrs-resolver: true
