@@ -224,3 +224,83 @@ describe("SettingsDialog microphone test", () => {
     expect(onIdentityReset).toHaveBeenCalledWith(expect.objectContaining({ discriminator: "9999" }));
   });
 });
+
+describe("SettingsDialog global keybinds", () => {
+  beforeEach(() => {
+    window.openCord = {
+      identity: {
+        getOrCreate: vi.fn(async () => ({ publicKey: "public-key", fingerprint: "fingerprint", discriminator: "1234" })),
+        signChallenge: vi.fn(async () => "signature"),
+        reset: vi.fn(async () => ({ publicKey: "new-public-key", fingerprint: "new-fingerprint", discriminator: "9999" })),
+      },
+      keybinds: {
+        apply: vi.fn(async () => undefined),
+        setCaptureMode: vi.fn(async () => undefined),
+        onAction: vi.fn(() => () => undefined),
+      },
+    } as unknown as NonNullable<typeof window.openCord>;
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    delete window.openCord;
+  });
+
+  function renderDialog(preferences = createDefaultState().preferences, onPreferences = vi.fn()) {
+    render(<SettingsDialog preferences={preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={onPreferences} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    return onPreferences;
+  }
+
+  it("assigns a keybind from the captured key press", () => {
+    const onPreferences = renderDialog();
+    const row = screen.getByTestId("keybind-row-mute");
+    fireEvent.click(within(row).getByRole("button", { name: "Назначить" }));
+    expect(window.openCord?.keybinds?.setCaptureMode).toHaveBeenCalledWith(true);
+    fireEvent.keyDown(window, { code: "KeyM", ctrlKey: true, altKey: false, shiftKey: false, metaKey: false });
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      keybinds: expect.objectContaining({
+        mute: { trigger: { code: "KeyM", control: true, alt: false, shift: false, meta: false }, mode: "toggle" },
+      }),
+    }));
+  });
+
+  it("Escape cancels capture and clear removes the bind", () => {
+    const preferences = createDefaultState().preferences;
+    preferences.keybinds = { mute: { trigger: { code: "KeyM", control: false, alt: false, shift: false, meta: false }, mode: "toggle" }, deafen: null };
+    const onPreferences = renderDialog(preferences);
+    const row = screen.getByTestId("keybind-row-mute");
+    fireEvent.click(within(row).getByRole("button", { name: "Назначить" }));
+    fireEvent.keyDown(window, { code: "Escape" });
+    expect(onPreferences).not.toHaveBeenCalled();
+    expect(screen.getByText("M")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Сбросить" }));
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({ keybinds: { mute: null, deafen: null } }));
+  });
+
+  it("switches the mode and updates the existing bind", () => {
+    const preferences = createDefaultState().preferences;
+    preferences.keybinds = { mute: { trigger: { code: "KeyM", control: true, alt: false, shift: false, meta: false }, mode: "toggle" }, deafen: null };
+    const onPreferences = renderDialog(preferences);
+    const row = screen.getByTestId("keybind-row-mute");
+    fireEvent.click(within(row).getByRole("button", { name: "Удержание" }));
+    expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      keybinds: expect.objectContaining({ mute: { trigger: { code: "KeyM", control: true, alt: false, shift: false, meta: false }, mode: "hold" } }),
+    }));
+  });
+
+  it("shows the conflict warning for duplicate triggers", () => {
+    const preferences = createDefaultState().preferences;
+    const trigger = { code: "KeyM", control: false, alt: false, shift: false, meta: false };
+    preferences.keybinds = { mute: { trigger, mode: "toggle" }, deafen: { trigger, mode: "hold" } };
+    renderDialog(preferences);
+    expect(screen.getAllByText("Эта комбинация уже занята другим действием")).toHaveLength(2);
+  });
+
+  it("renders both action rows in the default dialog", () => {
+    // Санити: обе строки присутствуют в дефолтном диалоге.
+    renderDialog();
+    expect(screen.getByTestId("keybind-row-mute")).toBeInTheDocument();
+    expect(screen.getByTestId("keybind-row-deafen")).toBeInTheDocument();
+  });
+});
