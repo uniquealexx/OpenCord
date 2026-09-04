@@ -1553,3 +1553,20 @@ describe("ChannelNotificationPopover", () => {
     }));
   });
 });
+
+describe("MessageEveryone", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders @everyone as a non-interactive pill", async () => {
+    const user = userEvent.setup();
+    const message = { id: "message-everyone", channelId: "welcome", authorId: "member", authorName: "Мира", authorColor: "#7c5cff", content: "Hi @everyone, look", createdAt: new Date().toISOString(), editedAt: null };
+    render(<Message message={message} members={[]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
+    const pill = screen.getByText("@everyone");
+    expect(pill.tagName).toBe("SPAN");
+    expect(pill.closest("button")).toBeNull();
+    await user.click(pill);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});

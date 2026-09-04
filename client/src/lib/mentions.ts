@@ -25,7 +25,9 @@ export interface MentionCandidate {
   nameFont?: NameFont | null;
 }
 
-export type ContentSegment = { kind: "text"; text: string } | { kind: "mention"; userId: string };
+export type ContentSegment = { kind: "text"; text: string } | { kind: "mention"; userId: string } | { kind: "everyone" };
+
+const EVERYONE_SPLIT_PATTERN = /(^|[\s"'“(«([{\]])@everyone(?![a-z0-9_.-])/giu;
 
 /**
  * @everyone — обращение ко всему каналу. Это обычная текстовая конвенция,
@@ -117,15 +119,26 @@ export function expandMentionsForEditing(content: string, members: MentionCandid
   });
 }
 
-/** Разбивает контент на текстовые сегменты и маркеры упоминаний для рендера. */
+/** Разбивает контент на текстовые сегменты, маркеры упоминаний и @everyone для рендера. */
 export function splitMessageContent(content: string): ContentSegment[] {
-  const segments: ContentSegment[] = [];
-  let lastIndex = 0;
+  const spans: { index: number; end: number; segment: ContentSegment }[] = [];
   for (const match of content.matchAll(MENTION_TOKEN_PATTERN)) {
     const index = match.index ?? 0;
-    if (index > lastIndex) segments.push({ kind: "text", text: content.slice(lastIndex, index) });
-    segments.push({ kind: "mention", userId: match[1]! });
-    lastIndex = index + match[0].length;
+    spans.push({ index, end: index + match[0].length, segment: { kind: "mention", userId: match[1]! } });
+  }
+  for (const match of content.matchAll(EVERYONE_SPLIT_PATTERN)) {
+    // match[1] — граничный символ перед @everyone, он остаётся текстом.
+    const index = (match.index ?? 0) + match[1]!.length;
+    spans.push({ index, end: index + EVERYONE_TOKEN.length, segment: { kind: "everyone" } });
+  }
+  spans.sort((left, right) => left.index - right.index);
+  const segments: ContentSegment[] = [];
+  let lastIndex = 0;
+  for (const span of spans) {
+    if (span.index < lastIndex) continue;
+    if (span.index > lastIndex) segments.push({ kind: "text", text: content.slice(lastIndex, span.index) });
+    segments.push(span.segment);
+    lastIndex = span.end;
   }
   if (lastIndex < content.length) segments.push({ kind: "text", text: content.slice(lastIndex) });
   return segments;

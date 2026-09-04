@@ -3471,7 +3471,13 @@ export function Message({ message, replyToMessage, member, members, profile, com
             {message.kind && message.kind !== "chat" && <p className="mb-0.5 text-[9px] font-bold uppercase tracking-[.14em] text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</p>}
             {message.content && (
               <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 select-text cursor-text">
-                {splitMessageContent(message.content).map((segment, index) => (segment.kind === "text" ? <span key={index}>{segment.text}</span> : <MessageMention key={index} userId={segment.userId} mentioned={Boolean(message.mentions?.includes(segment.userId))} members={members} />))}
+                {splitMessageContent(message.content).map((segment, index) => {
+                  if (segment.kind === "text") return <span key={index}>{segment.text}</span>;
+                  // @everyone выглядит как обычное упоминание, но никуда не ведёт:
+                  // это plain span без клика и без превью профиля.
+                  if (segment.kind === "everyone") return <span key={index} aria-label="@everyone" className="inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] leading-none text-blue-200/80">@everyone</span>;
+                  return <MessageMention key={index} userId={segment.userId} mentioned={Boolean(message.mentions?.includes(segment.userId))} members={members} />;
+                })}
                 {grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">{t.chat.edited}</span>}
               </p>
             )}

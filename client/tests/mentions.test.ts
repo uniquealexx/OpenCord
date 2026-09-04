@@ -91,6 +91,21 @@ describe("mentions", () => {
     expect(containsEveryoneMention("hello")).toBe(false);
   });
 
+  it("splits @everyone into no-op segments alongside markers", () => {
+    expect(splitMessageContent("Hi @everyone, look")).toEqual([
+      { kind: "text", text: "Hi " },
+      { kind: "everyone" },
+      { kind: "text", text: ", look" },
+    ]);
+    const mixed = `@everyone ${buildMentionToken("user-mark")}`;
+    expect(splitMessageContent(mixed)).toEqual([
+      { kind: "everyone" },
+      { kind: "text", text: " " },
+      { kind: "mention", userId: "user-mark" },
+    ]);
+    expect(splitMessageContent("mail@everyone.com")).toEqual([{ kind: "text", text: "mail@everyone.com" }]);
+  });
+
   it("recognizes /roll only as an exact command", () => {
     expect(parseSlashCommand("/roll", members)).toEqual({ type: "roll" });
     expect(parseSlashCommand("  /roll  ", members)).toEqual({ type: "roll" });
