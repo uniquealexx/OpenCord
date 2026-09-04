@@ -74,6 +74,21 @@ describe("persisted client state", () => {
     expect(restored.preferences).toMatchObject({ themeMode: "light", darkShade: "abyss" });
   });
 
+  it("fills keybinds defaults for v4 state saved before the field existed", () => {
+    const state = createDefaultState();
+    expect(state.preferences.keybinds).toEqual({});
+    const olderPreferences: Partial<typeof state.preferences> = { ...state.preferences };
+    delete olderPreferences.keybinds;
+    expect(parsePersistedState({ ...state, preferences: olderPreferences }).preferences.keybinds).toEqual({});
+  });
+
+  it("keeps a configured keybind through a round trip", () => {
+    const state = createDefaultState();
+    const restored = parsePersistedState({ ...state, preferences: { ...state.preferences, keybinds: { mute: { trigger: { code: "KeyM", control: true, alt: false, shift: false, meta: false }, mode: "toggle" }, deafen: null } } });
+    expect(restored.preferences.keybinds.mute?.trigger.code).toBe("KeyM");
+    expect(restored.preferences.keybinds.deafen).toBeNull();
+  });
+
   it("migrates v3 profiles by deriving a username and generating a discriminator", () => {
     const state = createDefaultState();
     const legacyProfile = { id: "local-user", displayName: "Лина", bio: "", avatar: null, createdAt: "2026-08-07T00:00:00.000Z" };

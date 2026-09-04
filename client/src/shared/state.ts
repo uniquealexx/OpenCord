@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, nameFontSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
+import { keybindMapSchema } from "./keybinds";
 import { savedDeploymentConfigurationSchema } from "./deployment";
 
 export const STATE_VERSION = 4 as const;
@@ -153,6 +154,8 @@ export const clientPreferencesSchema = z.object({
   automaticInputSensitivity: z.boolean().default(true),
   manualInputSensitivityDb: z.number().int().min(-80).max(-10).default(-45),
   voiceParticipantSettings: z.record(z.string().min(1).max(256), z.object({ muted: z.boolean(), volume: z.number().min(0).max(1) })).default({}),
+  // Глобальные бинды (mute/deafen); отсутствие поля или null-слот — бинда нет.
+  keybinds: keybindMapSchema,
 });
 const legacyClientPreferencesSchema = z.object({ compactMode: z.boolean(), showMemberList: z.boolean(), notifications: z.boolean() });
 
@@ -199,7 +202,7 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, notifications: true, notificationOverrides: {}, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {} },
+    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, notifications: true, notificationOverrides: {}, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {}, keybinds: {} },
   };
 }
 
@@ -221,7 +224,7 @@ export function parsePersistedState(input: unknown): PersistedClientState {
   // Профиль v1–v3: username выводится из отображаемого имени, дискриминатор генерируется
   // случайно; при первом подключении к серверу клиент сверит его с дискриминатором ключей.
   const profile = legacy.profile ? { ...legacy.profile, username: deriveUsername(legacy.profile.displayName), discriminator: randomDiscriminator() } : null;
-  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, profile, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {} } });
+  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, profile, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {}, keybinds: {} } });
 }
 
 function deriveUsername(displayName: string): string {
