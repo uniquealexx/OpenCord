@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { keybindMapSchema, keybindSchema, keybindTriggerSchema, sameTrigger } from "../src/shared/keybinds";
+import { formatKeyLabel, formatTrigger, isBindableKey } from "../src/lib/keybinds";
 
 describe("keybind schemas", () => {
   it("defaults modifiers and mode", () => {
@@ -21,5 +22,24 @@ describe("keybind schemas", () => {
     expect(sameTrigger(base, { ...base })).toBe(true);
     expect(sameTrigger(base, { ...base, control: true })).toBe(false);
     expect(sameTrigger(base, { ...base, code: "KeyN" })).toBe(false);
+  });
+});
+
+describe("keybind display helpers", () => {
+  it("formats key labels", () => {
+    expect(formatKeyLabel("KeyM")).toBe("M");
+    expect(formatKeyLabel("Digit1")).toBe("1");
+    expect(formatKeyLabel("F5")).toBe("F5");
+    expect(formatKeyLabel("Semicolon")).toBe(";");
+    expect(formatKeyLabel("Numpad3")).toBe("Num 3");
+    expect(formatKeyLabel("Space")).toBe("Space");
+  });
+  it("formats triggers with modifiers", () => {
+    expect(formatTrigger({ code: "KeyM", control: true, alt: false, shift: true, meta: false })).toBe("Ctrl + Shift + M");
+    expect(formatTrigger({ code: "F9", control: false, alt: false, shift: false, meta: false })).toBe("F9");
+  });
+  it("rejects modifiers as bindable keys", () => {
+    expect(isBindableKey({ code: "ControlLeft" })).toBe(false);
+    expect(isBindableKey({ code: "KeyM" })).toBe(true);
   });
 });
