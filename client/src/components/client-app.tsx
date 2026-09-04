@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { useMobileLayout } from "@/hooks/use-mobile-layout";
 import { useServerConnection, type ConnectionStatus } from "@/hooks/use-server-connection";
 import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type VoiceAuthorization, type VoiceSessionStatus } from "@/hooks/use-voice-session";
+import { useKeybindActions } from "@/hooks/use-keybind-actions";
 import { useVoiceRecorder, voiceFileName, type VoiceRecorderError } from "@/hooks/use-voice-recorder";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { nicknameStyle } from "@/lib/name-font";
@@ -399,6 +400,8 @@ export function ClientApp(): React.ReactElement {
   const hasConnectedVoicePresence = Boolean(connectedVoicePresence);
   const serverMuted = connectedVoicePresence?.serverMuted === true;
   const effectiveMuted = voice.muted || serverMuted;
+  // Глобальные бинды mute/deafen (работают вне окна, события приходят из main-процесса).
+  useKeybindActions(voice, serverMuted, state?.preferences.keybinds ?? null);
   const attachmentLatencySensitive = ["connecting", "connected", "reconnecting"].includes(voice.status);
 
   useEffect(() => {
