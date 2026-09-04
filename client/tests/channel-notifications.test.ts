@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getChannelNotificationSettings, shouldNotify } from "@/lib/channel-notifications";
+import { buildToastForMessage, getChannelNotificationSettings, shouldNotify } from "@/lib/channel-notifications";
 import { createDefaultState } from "@/shared/state";
 
 describe("channel notification settings", () => {
@@ -41,5 +41,52 @@ describe("shouldNotify", () => {
   it("never notifies for own messages or when globally muted", () => {
     expect(shouldNotify({ ...base, authorId: "user-alice" })).toBe(false);
     expect(shouldNotify({ ...base, globalEnabled: false })).toBe(false);
+  });
+});
+
+describe("buildToastForMessage", () => {
+  const all = { enabled: true, everyone: true, mentions: true };
+  const input = {
+    messageId: "msg-1",
+    channelId: "channel-1",
+    channelName: "общий",
+    authorId: "user-bob",
+    authorName: "Боб",
+    excerpt: "Привет",
+    mentionedUserIds: [] as string[],
+    contentHasEveryone: false,
+    selfUserId: "user-alice",
+    activeChannelId: "channel-2" as string | null,
+    windowFocused: true,
+    globalEnabled: true,
+    settings: all,
+  };
+
+  it("builds a message toast for background channels while the master is on", () => {
+    expect(buildToastForMessage(input)).toEqual({
+      id: "msg-1",
+      channelId: "channel-1",
+      channelName: "общий",
+      authorName: "Боб",
+      kind: "message",
+      excerpt: "Привет",
+    });
+  });
+
+  it("suppresses toasts for the open channel while the window is focused", () => {
+    expect(buildToastForMessage({ ...input, activeChannelId: "channel-1", windowFocused: true })).toBeNull();
+    expect(buildToastForMessage({ ...input, activeChannelId: "channel-1", windowFocused: false })).not.toBeNull();
+  });
+
+  it("prioritizes mentions over @everyone and honors child switches", () => {
+    const off = { enabled: false, everyone: true, mentions: true };
+    expect(buildToastForMessage({ ...input, settings: off, mentionedUserIds: ["user-alice"], contentHasEveryone: true })?.kind).toBe("mention");
+    expect(buildToastForMessage({ ...input, settings: off, contentHasEveryone: true })?.kind).toBe("everyone");
+    expect(buildToastForMessage({ ...input, settings: off })).toBeNull();
+  });
+
+  it("returns null for own messages and muted globals", () => {
+    expect(buildToastForMessage({ ...input, authorId: "user-alice" })).toBeNull();
+    expect(buildToastForMessage({ ...input, globalEnabled: false })).toBeNull();
   });
 });

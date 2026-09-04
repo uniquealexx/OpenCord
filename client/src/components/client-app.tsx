@@ -35,8 +35,9 @@ import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type
 import { useVoiceRecorder, voiceFileName, type VoiceRecorderError } from "@/hooks/use-voice-recorder";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { nicknameStyle } from "@/lib/name-font";
-import { commandQueryAtCursor, EVERYONE_MENTION, EVERYONE_TOKEN, everyoneCandidate, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
-import { getChannelNotificationSettings } from "@/lib/channel-notifications";
+import { commandQueryAtCursor, containsEveryoneMention, EVERYONE_MENTION, EVERYONE_TOKEN, everyoneCandidate, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
+import { buildToastForMessage, getChannelNotificationSettings } from "@/lib/channel-notifications";
+import { NotificationToasts, type NotificationToast } from "@/components/notification-toasts";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
 import { cn, createId, initials } from "@/lib/utils";
@@ -113,6 +114,7 @@ export function ClientApp(): React.ReactElement {
   const [replyingToId, setReplyingToId] = useState<string | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<NotificationToast[]>([]);
   const [managedChannel, setManagedChannel] = useState<MockChannel | null>(null);
   const [accessByServer, setAccessByServer] = useState<Record<string, CurrentAccess>>({});
   const [voiceCapabilityByServer, setVoiceCapabilityByServer] = useState<Record<string, VoiceCapability>>({});
@@ -191,7 +193,8 @@ export function ClientApp(): React.ReactElement {
           ...current,
           messages: [...current.messages.filter((message) => message.channelId !== channelId), ...messages.map(toLocalMessage)],
         })),
-      onMessage: (message) =>
+      onMessage: (message) => {
+        pushToastForMessage(message);
         commit((current) =>
           current.messages.some((item) => item.id === message.id)
             ? current
@@ -199,7 +202,8 @@ export function ClientApp(): React.ReactElement {
                 ...current,
                 messages: [...current.messages, toLocalMessage(message)],
               },
-        ),
+        );
+      },
       onMessageUpdated: (message) =>
         commit((current) => ({
           ...current,
@@ -714,6 +718,37 @@ export function ClientApp(): React.ReactElement {
     setMobilePanel(null);
     setServerSettingsOpen(false);
     resetComposer();
+  }
+
+  function pushToastForMessage(message: import("@opencord/shared").ChatMessage): void {
+    if (!state || !connectionServer || !currentAccess) return;
+    const channelName = connectionServer.channels.find((channel) => channel.id === message.channelId)?.name ?? t.chat.channelFallback;
+    const excerpt = expandMentionsForEditing(message.content, connectionServer.members.map((member) => ({ id: member.id, username: member.username }))).slice(0, 120);
+    const toast = buildToastForMessage({
+      messageId: message.id,
+      channelId: message.channelId,
+      channelName,
+      authorId: message.authorId,
+      authorName: message.authorName,
+      excerpt,
+      mentionedUserIds: message.mentions.map((mention) => mention.userId),
+      contentHasEveryone: containsEveryoneMention(message.content),
+      selfUserId: currentAccess.id,
+      activeChannelId: state.activeChannelId,
+      windowFocused: typeof document === "undefined" ? true : document.hasFocus(),
+      globalEnabled: state.preferences.notifications,
+      settings: getChannelNotificationSettings(state.preferences, message.channelId),
+    });
+    if (toast) setToasts((current) => (current.some((item) => item.id === toast.id) ? current : [...current, toast]));
+  }
+
+  function openToastChannel(channelId: string): void {
+    setToasts((current) => current.filter((item) => item.channelId !== channelId));
+    selectChannel(channelId);
+  }
+
+  function dismissToast(id: string): void {
+    setToasts((current) => current.filter((item) => item.id !== id));
   }
 
   function searchServer(filters: MessageSearchFilters): void {
@@ -1652,6 +1687,7 @@ export function ClientApp(): React.ReactElement {
           {notice}
         </div>
       )}
+      <NotificationToasts toasts={toasts} onOpen={openToastChannel} onDismiss={dismissToast} />
       <DeploymentDialog open={modal === "create"} onOpenChange={(open) => setModal(open ? "create" : null)} onDeployed={addDeployedServer} />
       {activeServer && updatePreset && <DeploymentDialog key={`update-${activeServer.id}`} open={modal === "update"} updateOnly preset={updatePreset} onOpenChange={(open) => setModal(open ? "update" : null)} onDeployed={updatedDeployedServer} />}
       <ServerDialog open={modal === "connect"} onOpenChange={(open) => setModal(open ? "connect" : null)} onAdd={addServer} />
