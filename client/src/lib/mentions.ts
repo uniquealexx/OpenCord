@@ -27,6 +27,27 @@ export interface MentionCandidate {
 
 export type ContentSegment = { kind: "text"; text: string } | { kind: "mention"; userId: string };
 
+/**
+ * @everyone — обращение ко всему каналу. Это обычная текстовая конвенция,
+ * а не маркер упоминания: в поле mentions оно не попадает, сервер его не
+ * проверяет, а протокол не меняется.
+ */
+export const EVERYONE_MENTION = "everyone" as const;
+export const EVERYONE_TOKEN = "@everyone" as const;
+
+const EVERYONE_TRIGGER_PATTERN = /(^|[\s"'“(«([{\]])@everyone(?![a-z0-9_.-])/iu;
+
+/** True when the content addresses the whole channel via @everyone. */
+export function containsEveryoneMention(content: string): boolean {
+  return EVERYONE_TRIGGER_PATTERN.test(content);
+}
+
+/** Synthetic autocomplete candidate for @everyone (not a server member). */
+export function everyoneCandidate(query: string, discriminator: string): MentionCandidate | null {
+  if (discriminator || !EVERYONE_MENTION.startsWith(query.toLowerCase())) return null;
+  return { id: EVERYONE_MENTION, username: EVERYONE_MENTION };
+}
+
 const MENTION_AT_PATTERN = /(^|[\s"'“(«([{])@([a-z0-9_.-]{2,32})(?:#([0-9]{4}))?/giu;
 const MENTION_BEFORE_CURSOR_PATTERN = /(^|[\s"'“(«([{])@([a-z0-9_.-]*)(?:#([0-9]*))?$/iu;
 
@@ -70,6 +91,9 @@ export function resolveDraftMentions(content: string, members: MentionCandidate[
   // Уже существующие маркеры (вставленный текст или нераскрытая правка) считаем упоминаниями.
   for (const userId of parseMentionTokens(content)) addMention(userId);
   const resolved = content.replace(MENTION_AT_PATTERN, (raw, prefix: string, name: string, tag: string | undefined) => {
+    // @everyone никогда не превращается в маркер — даже если на сервере
+    // есть участник с таким username.
+    if (name.toLowerCase() === EVERYONE_MENTION) return raw;
     const candidate = resolveMentionToken(name, tag, members);
     if (!candidate) return raw;
     addMention(candidate.id);

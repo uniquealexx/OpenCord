@@ -35,7 +35,7 @@ import { useVoiceSession, type ScreenShareSettings, type ScreenShareStream, type
 import { useVoiceRecorder, voiceFileName, type VoiceRecorderError } from "@/hooks/use-voice-recorder";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { nicknameStyle } from "@/lib/name-font";
-import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
+import { commandQueryAtCursor, EVERYONE_MENTION, EVERYONE_TOKEN, everyoneCandidate, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 import { getChannelNotificationSettings } from "@/lib/channel-notifications";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
 import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell";
@@ -3684,7 +3684,10 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
   // После выбора из автокомплита курсор стоит сразу за вставленным тегом @name#1234 —
   // подавляем повторное открытие списка, пока пользователь не начнёт печатать дальше.
   const insertedMentionRef = useRef<string | null>(null);
-  const suggestions = mentionQuery ? matchMentionCandidates(members, mentionQuery.query, mentionQuery.discriminator) : [];
+  const everyone = mentionQuery ? everyoneCandidate(mentionQuery.query, mentionQuery.discriminator) : null;
+  const suggestions = mentionQuery
+    ? [...(everyone ? [everyone] : []), ...matchMentionCandidates(members, mentionQuery.query, mentionQuery.discriminator).filter((candidate) => candidate.username.toLowerCase() !== EVERYONE_MENTION)]
+    : [];
   // Срок мута сторожим здесь: по его истечении поле разблокируется само, без нового
   // снапшота с сервера. Сам отсчёт рисует MuteCountdown — его часы стартуют в момент
   // появления мута, поэтому первый кадр не показывает устаревший остаток.
@@ -3786,7 +3789,10 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
     if (!mentionQuery) return;
     // Тег с дискриминатором подставляется только когда username неоднозначен на сервере.
     const ambiguous = members.filter((item) => item.username.toLowerCase() === candidate.username.toLowerCase()).length > 1;
-    const token = `@${candidate.username}${ambiguous && candidate.discriminator ? `#${candidate.discriminator}` : ""}`;
+    // @everyone вставляется буквальным текстом: в маркер он не резолвится.
+    const token = candidate.id === EVERYONE_MENTION
+      ? EVERYONE_TOKEN
+      : `@${candidate.username}${ambiguous && candidate.discriminator ? `#${candidate.discriminator}` : ""}`;
     const next = `${draft.slice(0, mentionQuery.start)}${token}${draft.slice(mentionQuery.end)}`;
     onDraft(next);
     insertedMentionRef.current = next;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildMentionToken } from "@opencord/shared";
-import { commandQueryAtCursor, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseCommandTarget, parseMuteDuration, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
+import { commandQueryAtCursor, containsEveryoneMention, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseCommandTarget, parseMuteDuration, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
 
 const members: MentionCandidate[] = [
   { id: "user-lina", username: "lina", discriminator: "1234", status: "online" },
@@ -71,6 +71,24 @@ describe("mentions", () => {
       { kind: "text", text: ", как дела?" },
     ]);
     expect(splitMessageContent("Без упоминаний")).toEqual([{ kind: "text", text: "Без упоминаний" }]);
+  });
+
+  it("leaves @everyone as plain text and never converts it into a marker", () => {
+    expect(resolveDraftMentions("Hi @everyone!", members)).toEqual({ content: "Hi @everyone!", mentions: [] });
+    const withEveryone: MentionCandidate[] = [...members, { id: "user-everyone", username: "everyone", discriminator: "0001", status: "online" }];
+    expect(resolveDraftMentions("Hi @everyone!", withEveryone)).toEqual({ content: "Hi @everyone!", mentions: [] });
+    expect(resolveDraftMentions("Hi @mark and @everyone!", members)).toEqual({
+      content: `Hi ${buildMentionToken("user-mark")} and @everyone!`,
+      mentions: ["user-mark"],
+    });
+  });
+
+  it("detects @everyone triggers with word boundaries", () => {
+    expect(containsEveryoneMention("@everyone, listen")).toBe(true);
+    expect(containsEveryoneMention("hi @Everyone!")).toBe(true);
+    expect(containsEveryoneMention("hi @everyone2")).toBe(false);
+    expect(containsEveryoneMention("mail@everyone.com")).toBe(false);
+    expect(containsEveryoneMention("hello")).toBe(false);
   });
 
   it("recognizes /roll only as an exact command", () => {
