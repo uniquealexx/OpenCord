@@ -140,7 +140,8 @@
         "zip"
       ],
       "category": "public.app-category.social-networking",
-      "artifactName": "OpenCord-${version}-${arch}.${ext}"
+      "artifactName": "OpenCord-${version}-${arch}.${ext}",
+      "x64ArchFiles": "**/node_modules/uiohook-napi/prebuilds/**/*.node"
     }
   }
 }
