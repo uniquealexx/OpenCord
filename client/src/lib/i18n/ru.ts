@@ -287,6 +287,18 @@ export const ru = {
     openSettings: "Открыть настройки сервера",
   },
 
+  help: {
+    open: "Открыть справку сервера",
+    pages: "Страницы справки",
+    dialogDescription: "Особые страницы, настроенные владельцем сервера.",
+    gateDescription: "Прочитайте и примите правила сервера, чтобы продолжить.",
+    empty: "Владелец сервера пока не настроил страницы справки.",
+    emptyPage: "Эта страница пуста.",
+    required: "Обязательно",
+    acceptSending: "Отправляем…",
+    acceptBlocked: "Сначала подтвердите обязательные пункты",
+  },
+
   serverSettings: {
     title: "Настройки сервера",
     close: "Закрыть настройки сервера",
@@ -329,6 +341,21 @@ export const ru = {
     banDurationLabel: "Срок бана",
     banDuration: (minutes: number) => (({ 10: "10 минут", 30: "30 минут", 60: "1 час", 360: "6 часов", 720: "12 часов", 1440: "1 день", 4320: "3 дня", 10080: "7 дней", 43200: "30 дней" } as Record<number, string>)[minutes] ?? `${minutes} мин.`),
     permanentBan: "Навсегда",
+    help: "Кнопка справки",
+    helpTitle: "Кнопка справки",
+    helpDescription: "Особые страницы за кнопкой ? в шапке канала: правила, FAQ — всё, что нужно серверу.",
+    helpEnabled: "Показывать кнопку справки",
+    helpEnabledHint: "Когда выключено, участники вообще не видят кнопку ?.",
+    helpSourceLabel: "Скрипт страниц",
+    helpSourceHint: "По одному вызову api.* на строку: api.gate, api.page, api.text, api.divider, api.button, api.checkbox, api.switch, api.select. api.gate(\"rules\") заставляет новичков сначала принять правила; accept-кнопка с requires блокирует писанину до help.accept. Скрипт выполняется только на этом устройстве для сборки предпросмотра — участники получают готовую страницу, а не скрипт.",
+    helpRun: "Собрать и предпросмотреть",
+    helpSave: "Сохранить страницы",
+    helpResetExample: "Сбросить к примеру",
+    helpApiDocs: "Справочник API",
+    helpPreviewTitle: "Предпросмотр",
+    helpPreviewAccepted: "Принято в предпросмотре — после help.accept участники увидят страницы для принявших.",
+    helpNeedsPage: "Добавьте хотя бы один api.page(id, title) перед включением.",
+    helpCompileError: (error: string) => `Не удалось собрать: ${error}`,
   },
 
   deployment: {
@@ -929,6 +956,7 @@ export const ru = {
     badProtocolResponse: "Ответ сервера не соответствует протоколу",
     signFailed: "Не удалось подписать запрос сервера",
     protocolMismatch: "Версия OpenCord Server несовместима. Сервер необходимо обновить через повторное развёртывание",
+    acceptRequired: "Сначала примите правила сервера",
     reconnectFailed: "Не удалось подключиться к серверу — повторяем попытку",
   },
 

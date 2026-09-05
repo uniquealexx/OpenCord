@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMIT_MAX_BYTES, isReactionEmoji, stripBidiControls, MEBIBYTE, PROTOCOL_VERSION, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, messageReactionSchema, parseMentionTokens, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, userAvatarSchema, userBannerSchema, userMemberBackgroundSchema, usernameSchema } from "../src";
+import { ATTACHMENT_LIMIT_MAX_BYTES, isReactionEmoji, stripBidiControls, MEBIBYTE, PROTOCOL_VERSION, SERVER_HELP_JSON_MAX_BYTES, USER_AVATAR_MAX_BYTES, USER_BANNER_MAX_BYTES, buildMentionToken, chatMessageSchema, clientEventSchema, discriminatorSchema, fingerprintSchema, helpAcceptControlsSchema, memberSchema, messageReactionSchema, parseMentionTokens, parseServerHelpPage, publicKeyFingerprint, publicProfileSchema, serverBannerSchema, serverEventSchema, serverHelpSchema, unmetHelpRequires, userAvatarSchema, userBannerSchema, userMemberBackgroundSchema, usernameSchema } from "../src";
 
 describe("OpenCord protocol", () => {
   it("accepts a valid ping", () => {
@@ -271,5 +271,123 @@ describe("OpenCord protocol", () => {
       expect(() => clientEventSchema.parse(react(junk))).toThrow();
       expect(isReactionEmoji(junk)).toBe(false);
     }
+  });
+
+  it("validates custom server help pages", () => {
+    const rules = {
+      enabled: true,
+      pages: [
+        {
+          id: "rules",
+          title: "Правила",
+          blocks: [
+            { kind: "text", text: "Не спамьте", size: "lg", weight: "bold", align: "left" },
+            { kind: "divider" },
+            { kind: "checkbox", id: "read", label: "Я прочитал правила" },
+            { kind: "switch", id: "notify", label: "Уведомлять" },
+            { kind: "select", id: "topic", label: "Тема", options: ["Роли", "Войс"], defaultValue: "Войс" },
+            { kind: "button", label: "FAQ", variant: "secondary", action: { kind: "page", pageId: "faq" } },
+            { kind: "button", label: "Понятно", variant: "primary", action: { kind: "close" } },
+          ],
+        },
+        { id: "faq", title: "FAQ", blocks: [{ kind: "text", text: "Вопросы и ответы" }] },
+      ],
+    };
+    expect(serverHelpSchema.parse(rules)).toMatchObject({ enabled: true });
+    // Пустая спека по умолчанию выключена.
+    expect(serverHelpSchema.parse({})).toEqual({ enabled: false, gate: { enabled: false, pageId: null }, pages: [] });
+    // Кнопка на несуществующую страницу, дубли страниц и контролов, плохой дефолт селекта.
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [{ kind: "button", label: "X", action: { kind: "page", pageId: "missing" } }] }] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [] }, { id: "a", title: "B", blocks: [] }] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [{ kind: "checkbox", id: "x", label: "X" }, { kind: "switch", id: "x", label: "Y" }] }] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [{ kind: "select", id: "s", label: "S", options: ["A"], defaultValue: "B" }] }] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [{ kind: "select", id: "s", label: "S", options: ["A", "A"] }] }] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "Bad Id!", title: "A", blocks: [] }] })).toThrow();
+    // Переполнение: слишком длинный текст и слишком большой JSON целиком.
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [{ kind: "text", text: "x".repeat(2001) }] }] })).toThrow();
+    const huge = { enabled: true, pages: Array.from({ length: 10 }, (_, i) => ({ id: `p-${i}`, title: "T", blocks: [{ kind: "text", text: "x".repeat(2000) }] })) };
+    expect(JSON.stringify(huge).length).toBeGreaterThan(SERVER_HELP_JSON_MAX_BYTES);
+    expect(() => serverHelpSchema.parse(huge)).toThrow();
+  });
+
+  it("falls back to a disabled help spec for stored junk", () => {
+    expect(parseServerHelpPage(null)).toEqual({ enabled: false, gate: { enabled: false, pageId: null }, pages: [] });
+    expect(parseServerHelpPage("not json")).toEqual({ enabled: false, gate: { enabled: false, pageId: null }, pages: [] });
+    expect(parseServerHelpPage(JSON.stringify({ enabled: true, pages: "junk" }))).toEqual({ enabled: false, gate: { enabled: false, pageId: null }, pages: [] });
+    expect(parseServerHelpPage(JSON.stringify({ enabled: true, pages: [] }))).toEqual({ enabled: true, gate: { enabled: false, pageId: null }, pages: [] });
+  });
+
+  it("carries the help spec inside server settings updates", () => {
+    const helpPage = { enabled: true, pages: [{ id: "rules", title: "Правила", blocks: [{ kind: "text", text: "Не спамьте" }] }] };
+    const base = { type: "server.settings.update", requestId: crypto.randomUUID(), name: "Сервер", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60, helpPage };
+    expect(clientEventSchema.parse(base)).toMatchObject({ helpPage: { enabled: true } });
+    // Старые клиенты поле не шлют: сервер сохраняет существующие страницы.
+    const { helpPage: _omitted, ...withoutHelp } = base;
+    void _omitted;
+    expect(clientEventSchema.parse(withoutHelp)).not.toHaveProperty("helpPage");
+    // Старые серверы поле не шлют: клиент видит выключенную страницу по умолчанию.
+    const snapshotServer = { id: crypto.randomUUID(), avatar: null, banner: null, name: "Сервер", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60, channels: [], members: [], currentUser: { id: "user-1", role: "owner", permissions: [] } };
+    expect(serverEventSchema.parse({ type: "server.snapshot", server: snapshotServer })).toMatchObject({ server: { helpPage: { enabled: false, pages: [] } } });
+    expect(serverEventSchema.parse({ type: "server.snapshot", server: { ...snapshotServer, helpPage } })).toMatchObject({ server: { helpPage: { enabled: true } } });
+  });
+
+  it("validates the help gate (v43)", () => {
+    const gatePage = { id: "rules", title: "Правила", blocks: [{ kind: "checkbox", id: "agree", label: "Прочитал" }, { kind: "button", label: "Принимаю", action: { kind: "accept" }, requires: ["agree"] }] };
+    const gated = { enabled: true, gate: { enabled: true, pageId: "rules" }, pages: [gatePage, { id: "news", title: "Новости", audience: "accepted", blocks: [{ kind: "text", text: "Новости" }] }] };
+    expect(serverHelpSchema.parse(gated)).toMatchObject({ gate: { enabled: true, pageId: "rules" } });
+    // Дефолты: гейт выключен, аудитория страниц — always, requires — пусто.
+    expect(serverHelpSchema.parse({ enabled: true, pages: [{ id: "a", title: "A", blocks: [] }] })).toMatchObject({ gate: { enabled: false, pageId: null }, pages: [{ audience: "always" }] });
+    // Гейт при выключенной справке валиден, но инертен: isHelpGateBlocked
+    // требует оба флага. Остальное — без страницы, на несуществующую страницу
+    // и без accept-кнопки — отклоняется.
+    expect(serverHelpSchema.parse({ enabled: false, gate: { enabled: true, pageId: "rules" }, pages: [gatePage] })).toMatchObject({ gate: { enabled: true } });
+    expect(() => serverHelpSchema.parse({ enabled: true, gate: { enabled: true, pageId: null }, pages: [gatePage] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, gate: { enabled: true, pageId: "missing" }, pages: [gatePage] })).toThrow();
+    expect(() => serverHelpSchema.parse({ enabled: true, gate: { enabled: true, pageId: "rules" }, pages: [{ id: "rules", title: "R", blocks: [{ kind: "text", text: "hi" }] }] })).toThrow();
+    // requires только на accept-кнопках и только на контролы той же страницы.
+    const closeRequires = { id: "a", title: "A", blocks: [{ kind: "checkbox", id: "x", label: "X" }, { kind: "button", label: "B", action: { kind: "close" }, requires: ["x"] }] };
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [closeRequires] })).toThrow();
+    const foreignRequires = { id: "a", title: "A", blocks: [{ kind: "button", label: "B", action: { kind: "accept" }, requires: ["ghost"] }] };
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [foreignRequires] })).toThrow();
+    const dupRequires = { id: "a", title: "A", blocks: [{ kind: "checkbox", id: "x", label: "X" }, { kind: "button", label: "B", action: { kind: "accept" }, requires: ["x", "x"] }] };
+    expect(() => serverHelpSchema.parse({ enabled: true, pages: [dupRequires] })).toThrow();
+    // Старые спеки без новых полей парсятся с дефолтами.
+    expect(parseServerHelpPage(JSON.stringify({ enabled: true, pages: [{ id: "rules", title: "R", blocks: [{ kind: "text", text: "hi" }] }] }))).toMatchObject({ gate: { enabled: false } });
+  });
+
+  it("carries help acceptance in members and events (v43)", () => {
+    // Флаг принятия по умолчанию false — старые снапшоты остаются валидными.
+    const member = { id: "u1", username: "lina", discriminator: "1234", fingerprint: "aaaa-bbbb-cccc-dddd", bio: "", avatar: null, banner: null, status: "online", role: "member" };
+    expect(memberSchema.parse(member)).toMatchObject({ helpAccepted: false });
+    expect(memberSchema.parse({ ...member, helpAccepted: true })).toMatchObject({ helpAccepted: true });
+    // help.accept с состояниями контролов и без них.
+    expect(clientEventSchema.parse({ type: "help.accept", requestId: crypto.randomUUID(), controls: { agree: true, topic: "Voice" } })).toMatchObject({ type: "help.accept" });
+    expect(clientEventSchema.parse({ type: "help.accept", requestId: crypto.randomUUID() })).toMatchObject({ controls: {} });
+    expect(() => clientEventSchema.parse({ type: "help.accept", requestId: crypto.randomUUID(), controls: { ["x".repeat(41)]: true } })).toThrow();
+    expect(helpAcceptControlsSchema.parse({})).toEqual({});
+    // Новый код ошибки гейта.
+    expect(serverEventSchema.parse({ type: "error", requestId: crypto.randomUUID(), code: "ACCEPT_REQUIRED", message: "Примите правила" })).toMatchObject({ code: "ACCEPT_REQUIRED" });
+  });
+
+  it("computes unmet required controls for help.accept (v43)", () => {
+    const page = serverHelpSchema.parse({
+      enabled: true,
+      pages: [{
+        id: "rules",
+        title: "R",
+        blocks: [
+          { kind: "checkbox", id: "agree", label: "Прочитал" },
+          { kind: "switch", id: "notify", label: "Уведомлять" },
+          { kind: "select", id: "topic", label: "Тема", options: ["A", "B"] },
+          { kind: "button", label: "Принимаю", action: { kind: "accept" }, requires: ["agree", "topic"] },
+        ],
+      }],
+    }).pages[0]!;
+    expect(unmetHelpRequires(page, { agree: true, topic: "A" })).toEqual([]);
+    expect(unmetHelpRequires(page, { agree: false, topic: "A" })).toEqual(["agree"]);
+    expect(unmetHelpRequires(page, { agree: true })).toEqual(["topic"]);
+    expect(unmetHelpRequires(page, { agree: true, topic: "C" })).toEqual(["topic"]);
+    // Необязательный switch на проверку не влияет.
+    expect(unmetHelpRequires(page, { agree: true, topic: "B", notify: false })).toEqual([]);
   });
 });

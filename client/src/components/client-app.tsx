@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, DEFAULT_SERVER_HELP_PAGE, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type
 BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
 PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type
 UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
@@ -16,6 +16,7 @@ import { Onboarding } from "@/components/onboarding";
 import { ProfileDialog } from "@/components/profile-dialog";
 import { ProfilePreview } from "@/components/profile-preview";
 import { ServerDialog } from "@/components/server-dialog";
+import { ServerHelpDialog } from "@/components/server-help/server-help-dialog";
 import { ServerAvatarDialog } from "@/components/server-avatar-dialog";
 import { ServerBannerDialog } from "@/components/server-banner-dialog";
 import { ServerPreviewDialog } from "@/components/server-preview-dialog";
@@ -129,6 +130,10 @@ export function ClientApp(): React.ReactElement {
   const [viewingScreenShareId, setViewingScreenShareId] = useState<string | null>(null);
   const [mobilePanel, setMobilePanel] = useState<"channels" | "members" | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpAcceptPending, setHelpAcceptPending] = useState(false);
+  const [helpAcceptError, setHelpAcceptError] = useState<string | null>(null);
+  const helpAcceptPendingRef = useRef(false);
   const [selfIdentity, setSelfIdentity] = useState<{
     publicKey: string;
     fingerprint: string;
@@ -199,6 +204,13 @@ export function ClientApp(): React.ReactElement {
             }));
         }
         commit((current) => applyServerSnapshot(current, snapshot));
+        // Снапшот после переподключения уже может нести принятые правила.
+        const snapshotSelf = snapshot.members.find((item) => item.id === snapshot.currentUser.id);
+        if (snapshotSelf?.helpAccepted === true) {
+          helpAcceptPendingRef.current = false;
+          setHelpAcceptPending(false);
+          setHelpAcceptError(null);
+        }
       },
       onServerAvatarUpdated: (_serverId, avatar) => {
         if (!connectionServer) return;
@@ -264,7 +276,12 @@ export function ClientApp(): React.ReactElement {
           messages: [...current.messages.filter((message) => !result.messages.some((found) => found.id === message.id)), ...result.messages.map(toLocalMessage)],
         }));
       },
-      onMember: (member) =>
+      onMember: (member) => {
+        if (member.id === currentAccess?.id && member.helpAccepted === true) {
+          helpAcceptPendingRef.current = false;
+          setHelpAcceptPending(false);
+          setHelpAcceptError(null);
+        }
         commit((current) => ({
           ...current,
           // Тег username#1234 закрепляет за идентичностью сервер, поэтому подтверждённый
@@ -300,6 +317,7 @@ export function ClientApp(): React.ReactElement {
                       memberBackground: member.memberBackground ?? null,
                       chatMuted: member.chatMuted,
                       chatMutedUntil: member.chatMutedUntil,
+                      helpAccepted: member.helpAccepted,
                     },
                   ],
                 },
@@ -313,7 +331,8 @@ export function ClientApp(): React.ReactElement {
                 }
               : message,
           ),
-        })),
+        }));
+      },
       onMemberRemoved: (userId) => {
         if (connectionServer && userId === currentAccess?.id) {
           const removedServerId = connectionServer.id;
@@ -381,7 +400,16 @@ export function ClientApp(): React.ReactElement {
       },
       onError: (message) => {
         setSearchLoading(false);
+        if (helpAcceptPendingRef.current) {
+          helpAcceptPendingRef.current = false;
+          setHelpAcceptPending(false);
+          setHelpAcceptError(message);
+        }
         setNotice(message);
+      },
+      onAcceptRequired: () => {
+        setHelpAcceptError(currentDictionary().connectionErrors.acceptRequired);
+        setHelpOpen(true);
       },
     },
     connectionRevision,
@@ -715,6 +743,39 @@ export function ClientApp(): React.ReactElement {
   const selfMember = searchMembers.find((member) => member.id === (currentAccess?.id ?? profile.id));
   const selfChatMuted = isChatMutedNow(selfMember);
   const selfChatMutedUntil = selfMember?.chatMutedUntil ?? null;
+  // Гейт правил (протокол v43): новичку при входе принудительно показывается
+  // одна страница, писанина заблокирована сервером до help.accept. Аудитория
+  // остальных страниц — только UI-фильтр, спека приходит целиком.
+  const selfAccepted = selfMember?.helpAccepted === true;
+  const helpSpec = activeServer?.helpPage;
+  const helpGatePageId = helpSpec?.enabled === true && helpSpec.gate.enabled && helpSpec.gate.pageId ? helpSpec.gate.pageId : null;
+  const helpGatePage = helpGatePageId ? (helpSpec?.pages.find((page) => page.id === helpGatePageId) ?? null) : null;
+  const helpGateActive = Boolean(activeServer?.address && connection.status === "connected" && helpGatePage && !selfAccepted);
+  // Гейт не хранит своё состояние: модалка открыта, пока правила не приняты.
+  // Отдельного флага «открыто гейтом» не нужно — закрытие блокирует changeHelpOpen.
+  const helpDialogOpen = helpOpen || helpGateActive;
+
+  function changeHelpOpen(next: boolean): void {
+    // Гейт-модалку нельзя закрыть, не приняв правила.
+    if (!next && helpGateActive) return;
+    setHelpOpen(next);
+  }
+
+  function openHelpManually(): void {
+    setHelpAcceptError(null);
+    setHelpOpen(true);
+  }
+
+  function acceptHelpRules(controls: Record<string, boolean | string>): void {
+    setHelpAcceptError(null);
+    setHelpAcceptPending(true);
+    helpAcceptPendingRef.current = true;
+    if (!connection.acceptHelp(controls)) {
+      helpAcceptPendingRef.current = false;
+      setHelpAcceptPending(false);
+      setHelpAcceptError(currentDictionary().connectionErrors.reconnectFailed);
+    }
+  }
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
     commit((current) => ({
@@ -1629,6 +1690,8 @@ export function ClientApp(): React.ReactElement {
                 onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))}
                 onMenu={() => setMobilePanel(mobilePanel === "channels" ? null : "channels")}
                 onSearch={() => setSearchOpen(true)}
+                helpAvailable={Boolean(activeServer.helpPage?.enabled && activeServer.helpPage.pages.length > 0)}
+                onOpenHelp={openHelpManually}
                 onToggleMembers={() => {
                   if (mobile) setMobilePanel(mobilePanel === "members" ? null : "members");
                   else
@@ -1653,6 +1716,7 @@ export function ClientApp(): React.ReactElement {
                 {!mobile && state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} />}
               </div>
               <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => resetSearch()} onReset={resetSearchSession} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
+              <ServerHelpDialog open={helpDialogOpen} onOpenChange={changeHelpOpen} spec={activeServer.helpPage} serverName={activeServer.name} viewerAccepted={selfAccepted} gatePageId={helpGateActive ? helpGatePageId : null} onAccept={acceptHelpRules} acceptPending={helpAcceptPending} acceptError={helpAcceptError} />
               {draggingFiles && (
                 <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-black/40">
                   <div className="rounded-2xl border-2 border-dashed border-violet-400/80 bg-canvas/95 px-8 py-5 text-sm font-semibold text-violet-100 shadow-2xl">{t.chat.dropFiles}</div>
@@ -2817,6 +2881,7 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
         maxAttachmentBytes: unlimited ? null : parsedLimit * MEBIBYTE,
         screenShareMaxResolution: maxResolution,
         screenShareMaxFrameRate: maxFrameRate,
+        helpPage: server.helpPage ?? DEFAULT_SERVER_HELP_PAGE,
       })
     )
       onOpenChange(false);
@@ -3116,7 +3181,7 @@ function NotificationRow({ title, children }: { title: string; children: React.R
   return <div className="flex min-h-12 items-center justify-between gap-4 px-3 py-2"><p className="text-xs font-medium text-slate-200">{title}</p>{children}</div>;
 }
 
-function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, channels, activeChannelId, preferences, onPreferences, onMenu, onSearch, onToggleMembers }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; channels: MockChannel[]; activeChannelId: string | null; preferences: ClientPreferences; onPreferences: (preferences: ClientPreferences) => void; onMenu?: () => void; onSearch: () => void; onToggleMembers: () => void }): React.ReactElement {
+function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, channels, activeChannelId, preferences, onPreferences, onMenu, onSearch, onToggleMembers, helpAvailable = false, onOpenHelp }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; channels: MockChannel[]; activeChannelId: string | null; preferences: ClientPreferences; onPreferences: (preferences: ClientPreferences) => void; onMenu?: () => void; onSearch: () => void; onToggleMembers: () => void; helpAvailable?: boolean; onOpenHelp?: () => void }): React.ReactElement {
   const { t } = useI18n();
   const statusLabel = connectionLabel(connectionStatus, t);
   const statusTone = connectionStatus === "connected"
@@ -3168,7 +3233,11 @@ function ChatHeader({ mobile = false, channelName, description, connectionStatus
         : cn("shrink-0 text-slate-500 hover:text-slate-200", memberList && "text-violet-300")}>
         <Users className="size-5" />
       </button>
-      {!mobile && <HelpCircle className="size-4 text-slate-600" />}
+      {!mobile && helpAvailable && onOpenHelp && (
+        <button type="button" aria-label={t.help.open} title={t.help.open} onClick={onOpenHelp} className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white/6 hover:text-slate-200">
+          <HelpCircle className="size-4" />
+        </button>
+      )}
     </header>
   );
 }
@@ -4515,6 +4584,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     memberBackground: member.memberBackground ?? null,
     chatMuted: member.chatMuted,
     chatMutedUntil: member.chatMutedUntil,
+    helpAccepted: member.helpAccepted,
   }));
   const self = members.find((member) => member.id === snapshot.currentUser.id);
   return {
@@ -4533,6 +4603,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
             maxAttachmentBytes: snapshot.maxAttachmentBytes,
             screenShareMaxResolution: snapshot.screenShareMaxResolution,
             screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate,
+            helpPage: snapshot.helpPage,
             channels,
             members,
             bannedMembers: snapshot.bannedMembers ?? [],

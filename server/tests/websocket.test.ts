@@ -62,6 +62,83 @@ describe("WebSocket chat flow", () => {
     await Promise.all(closed);
   }, 15_000);
 
+  it("gates writing behind help.accept until the rules are accepted", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo, allowInsecureFirstUserOwner: true });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const owner = await connectAndAuthenticate(url, "Owner");
+    const newcomer = await connectAndAuthenticate(url, "Newcomer");
+    const channel = newcomer.snapshot.server.channels.find((item) => item.kind === "text");
+    expect(channel).toBeDefined();
+
+    const gateSpec = {
+      enabled: true,
+      gate: { enabled: true, pageId: "rules" },
+      pages: [
+        {
+          id: "rules",
+          title: "Правила",
+          audience: "pending",
+          blocks: [
+            { kind: "text", text: "Правила сервера", size: "sm", weight: "normal", align: "left" },
+            { kind: "checkbox", id: "agree", label: "Прочитал", defaultChecked: false },
+            { kind: "button", label: "Принимаю", variant: "primary", action: { kind: "accept" }, requires: ["agree"] },
+          ],
+        },
+        {
+          id: "news",
+          title: "Новости",
+          audience: "accepted",
+          blocks: [{ kind: "text", text: "Новости", size: "sm", weight: "normal", align: "left" }],
+        },
+      ],
+    };
+    const gated = waitForEventMatching(newcomer.socket, "server.snapshot", (snapshot) => snapshot.server.helpPage.gate.enabled === true);
+    owner.socket.send(JSON.stringify({ type: "server.settings.update", requestId: randomUUID(), name: "Сервер", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60, helpPage: gateSpec }));
+    const gatedSnapshot = await gated;
+    // Спека отдаётся целиком даже непринявшему: audience фильтрует клиент.
+    expect(gatedSnapshot.server.helpPage.pages.map((page) => page.id).sort()).toEqual(["news", "rules"]);
+
+    // Писанина заблокирована, чтение открыто.
+    const blocked = waitForEvent(newcomer.socket, "error");
+    newcomer.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Привет" }));
+    expect((await blocked).code).toBe("ACCEPT_REQUIRED");
+
+    const history = waitForEvent(newcomer.socket, "history.result");
+    newcomer.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel!.id, limit: 10 }));
+    expect((await history).type).toBe("history.result");
+
+    // Accept без обязательного чекбокса — отказ.
+    const refused = waitForEvent(newcomer.socket, "error");
+    newcomer.socket.send(JSON.stringify({ type: "help.accept", requestId: randomUUID(), controls: {} }));
+    expect((await refused).code).toBe("FORBIDDEN");
+
+    // Accept с чекбоксом — member.updated с флагом, писанина работает.
+    const accepted = waitForMemberUpdated(newcomer.socket, (member) => member.id === newcomer.userId && member.helpAccepted === true);
+    newcomer.socket.send(JSON.stringify({ type: "help.accept", requestId: randomUUID(), controls: { agree: true } }));
+    await accepted;
+
+    const created = waitForEvent(newcomer.socket, "message.created");
+    newcomer.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Принял правила, всем привет" }));
+    const delivered = await created;
+    expect(delivered.type === "message.created" && delivered.message.content).toBe("Принял правила, всем привет");
+
+    // Повторный accept — тихий no-op: принятие держится, писанина идёт.
+    newcomer.socket.send(JSON.stringify({ type: "help.accept", requestId: randomUUID(), controls: {} }));
+    const again = waitForEvent(newcomer.socket, "message.created");
+    newcomer.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel!.id, content: "Всё ещё внутри" }));
+    expect((await again).type).toBe("message.created");
+
+    const closed = [once(owner.socket, "close"), once(newcomer.socket, "close")];
+    owner.socket.close();
+    newcomer.socket.close();
+    await Promise.all(closed);
+  }, 20_000);
+
   it("toggles message reactions and broadcasts the updated reaction list", async () => {
     const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
     openApps.push(app);

@@ -181,10 +181,11 @@ describe("server connection", () => {
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
       expect(result.current.updateServerBanner("data:image/webp;base64,AQ==")).toBe(true);
-      expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30 })).toBe(true);
+      expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] } })).toBe(true);
       expect(result.current.updateVoiceState(true, false, "screen-owner")).toBe(true);
       expect(result.current.disconnectVoiceMember("voice-member")).toBe(true);
       expect(result.current.setVoiceMemberMuted("voice-member", true)).toBe(true);
+      expect(result.current.acceptHelp({ agree: true })).toBe(true);
       expect(result.current.kickMember("server-member")).toBe(true);
       expect(result.current.banMember("banned-member", 30)).toBe(true);
       expect(result.current.unbanMember("unbanned-member")).toBe(true);
@@ -210,6 +211,7 @@ describe("server connection", () => {
     expect(sentEvents.find((event) => event.type === "member.ban")?.durationMinutes).toBe(30);
     expect(sentEvents.find((event) => event.type === "member.unban")?.userId).toBe("unbanned-member");
     expect(sentEvents.some((event) => event.type === "message.search")).toBe(true);
+    expect(sentEvents.find((event) => event.type === "help.accept")).toMatchObject({ controls: { agree: true } });
 
     const searchResult = { messages: [], total: 0, offset: 0, hasMore: false };
     act(() => first?.receive({ type: "message.search.result", requestId: searchRequestId, result: searchResult }));

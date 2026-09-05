@@ -14,7 +14,7 @@ export const DialogClose = DialogPrimitive.Close;
 /** Насколько нужно утянуть лист вниз, чтобы он закрылся. */
 const SHEET_DISMISS_DISTANCE = 96;
 
-export function DialogContent({ className, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>): React.ReactElement {
+export function DialogContent({ className, hideClose = false, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content> & { hideClose?: boolean }): React.ReactElement {
   const { t } = useI18n();
   const contentRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
@@ -102,7 +102,7 @@ export function DialogContent({ className, children, ...props }: React.Component
           <span aria-hidden="true" className="mx-auto mb-4 hidden h-1 w-10 rounded-full bg-white/20 max-md:block" />
           {children}
         </div>
-        <DialogPrimitive.Close ref={closeRef} aria-label={t.common.close} className="absolute right-4 top-4 grid size-9 place-items-center rounded-md text-slate-500 transition hover:bg-white/10 hover:text-white max-md:right-2 max-md:top-3 max-md:size-11"><X className="size-4 max-md:size-5" /></DialogPrimitive.Close>
+        <DialogPrimitive.Close ref={closeRef} aria-label={t.common.close} className={hideClose ? "hidden" : "absolute right-4 top-4 grid size-9 place-items-center rounded-md text-slate-500 transition hover:bg-white/10 hover:text-white max-md:right-2 max-md:top-3 max-md:size-11"}><X className="size-4 max-md:size-5" /></DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );

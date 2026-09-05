@@ -287,6 +287,18 @@ export const zh = {
     openSettings: "打开服务器设置",
   },
 
+  help: {
+    open: "打开服务器帮助",
+    pages: "帮助页面",
+    dialogDescription: "由服务器所有者自定义的页面。",
+    gateDescription: "请阅读并接受服务器规则以继续。",
+    empty: "服务器所有者尚未设置帮助页面。",
+    emptyPage: "此页面为空。",
+    required: "必填",
+    acceptSending: "发送中…",
+    acceptBlocked: "请先确认必填项",
+  },
+
   serverSettings: {
     title: "服务器设置",
     close: "关闭服务器设置",
@@ -329,6 +341,21 @@ export const zh = {
     banDurationLabel: "封禁时长",
     banDuration: (minutes: number) => (({ 10: "10 分钟", 30: "30 分钟", 60: "1 小时", 360: "6 小时", 720: "12 小时", 1440: "1 天", 4320: "3 天", 10080: "7 天", 43200: "30 天" } as Record<number, string>)[minutes] ?? `${minutes} 分钟`),
     permanentBan: "永久",
+    help: "帮助按钮",
+    helpTitle: "帮助按钮",
+    helpDescription: "频道标题栏 ? 按钮背后的自定义页面：规则、常见问题、服务器需要的任何内容。",
+    helpEnabled: "显示帮助按钮",
+    helpEnabledHint: "关闭后，成员将完全看不到 ? 按钮。",
+    helpSourceLabel: "页面脚本",
+    helpSourceHint: "每行一个 api.* 调用：api.gate、api.page、api.text、api.divider、api.button、api.checkbox、api.switch、api.select。api.gate(\"rules\") 会强制新成员先接受规则；带 requires 的 accept 按钮会在 help.accept 之前阻止发言。脚本仅在此设备上运行以生成预览——成员收到的是编译好的页面，而不是脚本。",
+    helpRun: "编译并预览",
+    helpSave: "保存帮助页面",
+    helpResetExample: "恢复示例",
+    helpApiDocs: "API 参考",
+    helpPreviewTitle: "预览",
+    helpPreviewAccepted: "已在预览中接受——help.accept 之后成员将看到已接受页面。",
+    helpNeedsPage: "启用前请至少添加一个 api.page(id, title)。",
+    helpCompileError: (error: string) => `编译失败：${error}`,
   },
 
   deployment: {
@@ -929,6 +956,7 @@ export const zh = {
     badProtocolResponse: "服务器响应不符合协议",
     signFailed: "无法签署服务器请求",
     protocolMismatch: "OpenCord Server 版本不兼容。必须通过重新部署来更新服务器",
+    acceptRequired: "请先接受服务器规则",
     reconnectFailed: "无法连接到服务器——正在重试",
   },
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 41 as const;
+export const PROTOCOL_VERSION = 43 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -34,12 +34,260 @@ export const CUSTOM_STATUS_MAX_LENGTH = 32 as const;
 // Эмодзи своего статуса — как в Discord: один графемный кластер слева от текста.
 export const CUSTOM_STATUS_EMOJI_MAX_LENGTH = 16 as const;
 export const customStatusEmojiSchema = z.string().trim().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH);
+/**
+ * Custom help pages behind the `?` button in the channel header.
+ *
+ * The admin authors the pages as JS against a tiny builder API
+ * (`api.page/text/button/checkbox/switch/select`), but that code runs only
+ * locally in the admin's own settings editor. The server stores and
+ * distributes the compiled JSON spec below — viewing clients never execute
+ * code, they render these blocks with the existing UI primitives. Control
+ * state (checkbox/switch/select) is local-only and never sent back.
+ */
+export const SERVER_HELP_PAGES_MAX = 10 as const;
+export const SERVER_HELP_BLOCKS_MAX = 30 as const;
+export const SERVER_HELP_TEXT_MAX_LENGTH = 2_000 as const;
+export const SERVER_HELP_LABEL_MAX_LENGTH = 80 as const;
+export const SERVER_HELP_OPTIONS_MAX = 20 as const;
+export const SERVER_HELP_JSON_MAX_BYTES = 16384 as const;
+/** Cap for the admin-authored builder source; it never leaves the admin device. */
+export const SERVER_HELP_SOURCE_MAX_LENGTH = 20_000 as const;
+
+const serverHelpControlIdSchema = z.string().regex(/^[a-z0-9-]{1,40}$/u);
+export const serverHelpTextSizeSchema = z.enum(["xs", "sm", "md", "lg"]);
+export const serverHelpTextWeightSchema = z.enum(["normal", "medium", "bold"]);
+export const serverHelpTextAlignSchema = z.enum(["left", "center"]);
+export const serverHelpButtonVariantSchema = z.enum(["primary", "secondary"]);
+
+/**
+ * Кто видит страницу в справке. Это только UI-маршрутизация на клиенте:
+ * текст правил не секретный, настоящее принуждение — серверный блок писанины
+ * (`help.accept` + `ACCEPT_REQUIRED`), а не скрытие страниц.
+ */
+export const serverHelpAudienceSchema = z.enum(["always", "pending", "accepted"]);
+export type ServerHelpAudience = z.infer<typeof serverHelpAudienceSchema>;
+
+/** Сколько контролов одна accept-кнопка может требовать подтвердить. */
+export const SERVER_HELP_REQUIRES_MAX = 30 as const;
+
+export const serverHelpBlockSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("text"),
+    text: z.string().trim().min(1).max(SERVER_HELP_TEXT_MAX_LENGTH),
+    size: serverHelpTextSizeSchema.default("sm"),
+    weight: serverHelpTextWeightSchema.default("normal"),
+    align: serverHelpTextAlignSchema.default("left"),
+  }),
+  z.object({ kind: z.literal("divider") }),
+  z.object({
+    kind: z.literal("button"),
+    label: z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH),
+    variant: serverHelpButtonVariantSchema.default("secondary"),
+    action: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("close") }),
+      z.object({ kind: z.literal("page"), pageId: serverHelpControlIdSchema }),
+      // accept записывает принятие правил через `help.accept` и закрывает гейт.
+      // Совместимость: старые спеки без accept парсятся как раньше.
+      z.object({ kind: z.literal("accept") }),
+    ]),
+    // Контролы этой же страницы, которые должны быть подтверждены перед accept.
+    // Имеет смысл только на accept-кнопках; проверяется в refine ниже.
+    requires: z.array(serverHelpControlIdSchema).max(SERVER_HELP_REQUIRES_MAX).default([]),
+  }),
+  z.object({
+    kind: z.literal("checkbox"),
+    id: serverHelpControlIdSchema,
+    label: z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH),
+    defaultChecked: z.boolean().default(false),
+  }),
+  z.object({
+    kind: z.literal("switch"),
+    id: serverHelpControlIdSchema,
+    label: z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH),
+    defaultChecked: z.boolean().default(false),
+  }),
+  z.object({
+    kind: z.literal("select"),
+    id: serverHelpControlIdSchema,
+    label: z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH),
+    options: z
+      .array(z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH))
+      .min(1)
+      .max(SERVER_HELP_OPTIONS_MAX)
+      .refine((options) => new Set(options).size === options.length, "Select options must be unique"),
+    defaultValue: z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH).optional(),
+  }),
+]);
+
+const serverHelpPageSchema = z
+  .object({
+    id: serverHelpControlIdSchema,
+    title: z.string().trim().min(1).max(SERVER_HELP_LABEL_MAX_LENGTH),
+    audience: serverHelpAudienceSchema.default("always"),
+    blocks: z.array(serverHelpBlockSchema).max(SERVER_HELP_BLOCKS_MAX),
+  })
+  .superRefine((page, context) => {
+    const controlIds = new Set<string>();
+    for (const block of page.blocks) {
+      if (block.kind !== "checkbox" && block.kind !== "switch" && block.kind !== "select") continue;
+      if (controlIds.has(block.id)) {
+        context.addIssue({ code: "custom", path: ["blocks"], message: "Control ids must be unique within a page" });
+        break;
+      }
+      controlIds.add(block.id);
+      if (block.kind === "select" && block.defaultValue !== undefined && !block.options.includes(block.defaultValue)) {
+        context.addIssue({ code: "custom", path: ["blocks"], message: "Select default value must be one of its options" });
+      }
+    }
+  });
+
+/**
+ * Гейт правил: новым (и ещё не принявшим) участникам при входе принудительно
+ * показывается одна страница, а писанина блокируется сервером до `help.accept`.
+ * Задаётся строкой `api.gate("rules")` в скрипте; отсутствие строки — гейт выключен.
+ */
+export const serverHelpGateSchema = z.object({
+  enabled: z.boolean().default(false),
+  pageId: serverHelpControlIdSchema.nullable().default(null),
+});
+export type ServerHelpGate = z.infer<typeof serverHelpGateSchema>;
+
+export const serverHelpSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    gate: serverHelpGateSchema.default({ enabled: false, pageId: null }),
+    pages: z.array(serverHelpPageSchema).max(SERVER_HELP_PAGES_MAX).default([]),
+  })
+  .superRefine((spec, context) => {
+    const pageIds = new Set<string>();
+    for (const page of spec.pages) {
+      if (pageIds.has(page.id)) {
+        context.addIssue({ code: "custom", path: ["pages"], message: "Page ids must be unique" });
+        break;
+      }
+      pageIds.add(page.id);
+    }
+    for (const page of spec.pages) {
+      const controlKinds = new Map<string, string>();
+      for (const block of page.blocks) {
+        if (block.kind === "checkbox" || block.kind === "switch" || block.kind === "select") {
+          controlKinds.set(block.id, block.kind);
+        }
+      }
+      for (const block of page.blocks) {
+        if (block.kind === "button" && block.action.kind === "page" && !pageIds.has(block.action.pageId)) {
+          context.addIssue({ code: "custom", path: ["pages"], message: "Button target page does not exist" });
+          return;
+        }
+        if (block.kind === "button" && block.requires.length > 0 && block.action.kind !== "accept") {
+          context.addIssue({ code: "custom", path: ["pages"], message: "Only accept buttons may require controls" });
+          return;
+        }
+        if (block.kind === "button") {
+          for (const requiredId of block.requires) {
+            if (!controlKinds.has(requiredId)) {
+              context.addIssue({ code: "custom", path: ["pages"], message: "Required control does not exist on this page" });
+              return;
+            }
+          }
+          if (new Set(block.requires).size !== block.requires.length) {
+            context.addIssue({ code: "custom", path: ["pages"], message: "Required controls must be unique" });
+            return;
+          }
+        }
+      }
+    }
+    if (spec.gate.enabled) {
+      // Гейт активен только вместе со включённой справкой (см. isHelpGateBlocked),
+      // но сама строка api.gate обязана быть валидной всегда — иначе владелец
+      // сохранит битую конфигурацию, не заметив её за выключенным тумблером.
+      if (!spec.gate.pageId) {
+        context.addIssue({ code: "custom", path: ["gate"], message: "Gate needs a page" });
+        return;
+      }
+      const gatePage = spec.pages.find((page) => page.id === spec.gate.pageId);
+      if (!gatePage) {
+        context.addIssue({ code: "custom", path: ["gate"], message: "Gate page does not exist" });
+        return;
+      }
+      const hasAccept = gatePage.blocks.some((block) => block.kind === "button" && block.action.kind === "accept");
+      if (!hasAccept) {
+        context.addIssue({ code: "custom", path: ["gate"], message: "Gate page needs an accept button" });
+        return;
+      }
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(spec)).length;
+    if (bytes > SERVER_HELP_JSON_MAX_BYTES) {
+      context.addIssue({ code: "custom", path: ["pages"], message: "Help pages exceed the size limit" });
+    }
+  });
+
+export type ServerHelp = z.infer<typeof serverHelpSchema>;
+export type ServerHelpPage = z.infer<typeof serverHelpPageSchema>;
+export type ServerHelpBlock = z.infer<typeof serverHelpBlockSchema>;
+export type ServerHelpTextSize = z.infer<typeof serverHelpTextSizeSchema>;
+
+/** Empty (disabled) help spec used as the default everywhere. */
+export const DEFAULT_SERVER_HELP_PAGE: ServerHelp = { enabled: false, gate: { enabled: false, pageId: null }, pages: [] };
+
+/**
+ * Parse stored help JSON defensively: any invalid or oversized value falls
+ * back to the disabled default so one bad row can never break a snapshot.
+ */
+export function parseServerHelpPage(input: unknown): ServerHelp {
+  if (typeof input === "string") {
+    try {
+      const parsed: unknown = JSON.parse(input);
+      const result = serverHelpSchema.safeParse(parsed);
+      if (result.success) return result.data;
+    } catch {
+      // Fall through to the default below.
+    }
+    return { enabled: false, gate: { enabled: false, pageId: null }, pages: [] };
+  }
+  const result = serverHelpSchema.safeParse(input ?? { enabled: false, pages: [] });
+  return result.success ? result.data : { enabled: false, gate: { enabled: false, pageId: null }, pages: [] };
+}
+
+/**
+ * Неподтверждённые обязательные контролы страницы для `help.accept`.
+ *
+ * Собирает объединение `requires` всех accept-кнопок страницы и проверяет
+ * присланные состояния: checkbox/switch должны быть `true`, у select должно
+ * быть выбрано значение из его опций. Возвращает id невыполненных.
+ * Используется сервером (авторитетная проверка) и клиентом (блокировка кнопки).
+ */
+export function unmetHelpRequires(page: ServerHelpPage, controls: Record<string, boolean | string>): string[] {
+  const required = new Set<string>();
+  for (const block of page.blocks) {
+    if (block.kind === "button" && block.action.kind === "accept") {
+      for (const id of block.requires) required.add(id);
+    }
+  }
+  const unmet: string[] = [];
+  for (const id of required) {
+    const control = page.blocks.find((block) => (block.kind === "checkbox" || block.kind === "switch" || block.kind === "select") && block.id === id);
+    if (!control) {
+      unmet.push(id);
+      continue;
+    }
+    const value = controls[id];
+    if (control.kind === "select") {
+      if (typeof value !== "string" || !control.options.includes(value)) unmet.push(id);
+    } else if (value !== true) {
+      unmet.push(id);
+    }
+  }
+  return unmet;
+}
+
 export const serverSettingsSchema = z.object({
   name: serverNameSchema,
   description: z.string().trim().max(SERVER_DESCRIPTION_MAX_LENGTH).optional(),
   maxAttachmentBytes: attachmentUploadLimitSchema,
   screenShareMaxResolution: screenShareResolutionSchema,
   screenShareMaxFrameRate: screenShareFrameRateSchema,
+  helpPage: serverHelpSchema.default({ enabled: false, gate: { enabled: false, pageId: null }, pages: [] }),
 });
 
 export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
@@ -194,6 +442,9 @@ export const memberSchema = z.object({
   role: memberRoleSchema,
   chatMuted: z.boolean().default(false),
   chatMutedUntil: z.string().datetime().nullable().default(null),
+  // Принял ли участник правила через гейт справки (`help.accept`).
+  // Виден всем участникам — как и chatMuted, это модерационно значимый флаг.
+  helpAccepted: z.boolean().default(false),
 });
 
 export const bannedMemberSchema = z.object({
@@ -307,6 +558,17 @@ export const messageSearchResultSchema = z.object({
 const requestIdSchema = z.string().uuid();
 const attachmentIdsSchema = z.array(z.string().uuid()).max(5).refine((ids) => new Set(ids).size === ids.length, "Attachment IDs must be unique");
 
+/**
+ * Состояния контролов гейт-страницы, присланные вместе с `help.accept`.
+ * Ключ — id контрола, значение — отмеченность (checkbox/switch) или выбранная
+ * опция (select). Сервер проверяет только `requires` accept-кнопок гейт-страницы,
+ * остальное игнорирует. Лимит защищает от спама раздутым объектом.
+ */
+export const helpAcceptControlsSchema = z
+  .record(z.string().min(1).max(40), z.union([z.boolean(), z.string().max(SERVER_HELP_LABEL_MAX_LENGTH)]))
+  .refine((controls) => Object.keys(controls).length <= SERVER_HELP_REQUIRES_MAX, "Too many controls")
+  .default({});
+
 export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("auth.respond"),
@@ -326,6 +588,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.delete"), requestId: requestIdSchema, messageId: z.string().uuid() }),
   z.object({ type: z.literal("message.react"), requestId: requestIdSchema, messageId: z.string().uuid(), emoji: reactionEmojiSchema }),
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
+  z.object({ type: z.literal("help.accept"), requestId: requestIdSchema, controls: helpAcceptControlsSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
   // participantLimit опционален ради старых клиентов: отсутствует — сервер ставит
   // лимит по умолчанию (25 для голосовых, null для текстовых).
@@ -340,7 +603,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member.unban"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.banner.update"), requestId: requestIdSchema, banner: serverBannerSchema }),
-  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape }),
+  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape, helpPage: serverHelpSchema.optional() }),
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
   z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
@@ -376,7 +639,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),
   // banExpiresAt сопровождает только код BANNED: ISO-дата снятия бана либо null для
   // перманентного. Поле необязательное, чтобы сервер прошлой версии оставался совместимым.
-  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "RATE_LIMITED", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string(), banExpiresAt: z.string().datetime().nullable().optional(), retryAfterMs: z.number().int().min(0).optional() }),
+  z.object({ type: z.literal("error"), requestId: requestIdSchema.nullable(), code: z.enum(["INVALID_EVENT", "AUTH_REQUIRED", "AUTH_FAILED", "BANNED", "PROTOCOL_MISMATCH", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "RATE_LIMITED", "ACCEPT_REQUIRED", "VOICE_UNAVAILABLE", "VOICE_ROOM_FULL", "INTERNAL_ERROR"]), message: z.string(), banExpiresAt: z.string().datetime().nullable().optional(), retryAfterMs: z.number().int().min(0).optional() }),
 ]);
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;

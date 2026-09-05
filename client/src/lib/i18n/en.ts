@@ -286,6 +286,18 @@ export const en = {
     openSettings: "Open server settings",
   },
 
+  help: {
+    open: "Open server help",
+    pages: "Help pages",
+    dialogDescription: "Custom pages set up by the server owner.",
+    gateDescription: "Read and accept the server rules to continue.",
+    empty: "The server owner has not set up help pages yet.",
+    emptyPage: "This page is empty.",
+    required: "Required",
+    acceptSending: "Sending…",
+    acceptBlocked: "Confirm the required items first",
+  },
+
   serverSettings: {
     title: "Server settings",
     close: "Close server settings",
@@ -328,6 +340,21 @@ export const en = {
     banDurationLabel: "Ban duration",
     banDuration: (minutes: number) => (({ 10: "10 minutes", 30: "30 minutes", 60: "1 hour", 360: "6 hours", 720: "12 hours", 1440: "1 day", 4320: "3 days", 10080: "7 days", 43200: "30 days" } as Record<number, string>)[minutes] ?? `${minutes} min`),
     permanentBan: "Permanent",
+    help: "Help button",
+    helpTitle: "Help button",
+    helpDescription: "Custom pages behind the ? button in the channel header: rules, FAQ, anything the server needs.",
+    helpEnabled: "Show the help button",
+    helpEnabledHint: "When off, members do not see the ? button at all.",
+    helpSourceLabel: "Page script",
+    helpSourceHint: "One api.* call per line: api.gate, api.page, api.text, api.divider, api.button, api.checkbox, api.switch, api.select. api.gate(\"rules\") forces newcomers to accept the rules first; an accept button with requires blocks writing until help.accept. The script runs only on this device to build a preview — members receive the compiled page, never the script.",
+    helpRun: "Compile & preview",
+    helpSave: "Save help pages",
+    helpResetExample: "Reset to example",
+    helpApiDocs: "API reference",
+    helpPreviewTitle: "Preview",
+    helpPreviewAccepted: "Accepted in the preview — members will see the accepted pages after help.accept.",
+    helpNeedsPage: "Add at least one api.page(id, title) before enabling.",
+    helpCompileError: (error: string) => `Could not compile: ${error}`,
   },
 
   deployment: {
@@ -928,6 +955,7 @@ export const en = {
     badProtocolResponse: "The server response does not match the protocol",
     signFailed: "Could not sign the server request",
     protocolMismatch: "The OpenCord Server version is incompatible. The server must be updated via redeployment",
+    acceptRequired: "Accept the server rules to continue",
     reconnectFailed: "Could not connect to the server — retrying",
   },
 

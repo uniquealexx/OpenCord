@@ -328,7 +328,7 @@ describe("ClientApp", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Максимальная частота кадров демонстрации экрана" }), { target: { value: "0" } });
     expect(screen.getAllByText("∞")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", description: "", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15 });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", description: "", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] } });
   });
 
   it("saves a manually entered bounded attachment limit", async () => {
@@ -341,7 +341,7 @@ describe("ClientApp", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Максимальное качество демонстрации экрана" }), { target: { value: "3" } });
     expect(screen.getAllByText("Источник")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", description: "", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", description: "", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] } });
   });
 
   it("shows server settings read-only to an administrator", () => {
@@ -757,8 +757,9 @@ describe("ClientApp", () => {
       maxAttachmentBytes: 25 * 1024 * 1024,
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
+      helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null, slowmodeSeconds: 0 }],
-      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", memberBackground: "data:image/webp;base64,Ag==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null, nameFont: "none" }],
+      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", memberBackground: "data:image/webp;base64,Ag==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
@@ -791,11 +792,12 @@ describe("ClientApp", () => {
       maxAttachmentBytes: null,
       screenShareMaxResolution: 1080,
       screenShareMaxFrameRate: 60,
+      helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
       channels: state.servers[0]!.channels.map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
       // Тег 4242 уже занят другой идентичностью, поэтому сервер выдал локальному профилю свой.
       members: [
-        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "member", chatMuted: false, chatMutedUntil: null, nameFont: "none" },
-        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "owner", chatMuted: false, chatMutedUntil: null, nameFont: "none" },
+        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "member", chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false },
+        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "owner", chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false },
       ],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -814,6 +816,7 @@ describe("ClientApp", () => {
       maxAttachmentBytes: null,
       screenShareMaxResolution: 1080,
       screenShareMaxFrameRate: 60,
+      helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
       channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
       members: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },

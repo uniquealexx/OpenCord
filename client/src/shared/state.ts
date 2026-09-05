@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, nameFontSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, nameFontSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, serverHelpSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { keybindMapSchema } from "./keybinds";
 import { savedDeploymentConfigurationSchema } from "./deployment";
@@ -69,6 +69,8 @@ export const mockMemberSchema = z.object({
   memberBackground: z.string().max(500_000).nullable().optional(),
   chatMuted: z.boolean().optional(),
   chatMutedUntil: z.string().datetime().nullable().optional(),
+  // Принял ли правила через гейт справки; отсутствует у старых состояний.
+  helpAccepted: z.boolean().optional(),
 });
 
 export const mockServerSchema = z.object({
@@ -82,6 +84,8 @@ export const mockServerSchema = z.object({
   maxAttachmentBytes: attachmentUploadLimitSchema.default(DEFAULT_ATTACHMENT_LIMIT_BYTES),
   screenShareMaxResolution: screenShareResolutionSchema.optional(),
   screenShareMaxFrameRate: screenShareFrameRateSchema.optional(),
+  // Справочные страницы кнопки `?`: приходят со снапшотом, отсутствуют у демо-серверов.
+  helpPage: serverHelpSchema.optional(),
   channels: z.array(mockChannelSchema),
   members: z.array(mockMemberSchema),
   bannedMembers: z.array(bannedMemberSchema).optional(),

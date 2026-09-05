@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerPreviewDialog } from "@/components/server-preview-dialog";
@@ -102,5 +102,82 @@ describe("server settings experience", () => {
     const updatedAdministrators = screen.getByRole("heading", { name: "Администраторы" }).closest("section");
     expect(updatedAdministrators && within(updatedAdministrators).getByText("member")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Снять роль администратора" })).toBeInTheDocument();
+  });
+
+  it("edits help pages from a script and saves the compiled spec", async () => {
+    const user = userEvent.setup();
+    const onSaveSettings = vi.fn(() => true);
+    render(<ServerSettingsPage server={server} profile={profile} access={{ id: "owner", role: "owner", permissions: ["MANAGE_SERVER", "MANAGE_ROLES", "KICK_MEMBERS"] }} onClose={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onSaveSettings={onSaveSettings} onSetRole={vi.fn()} onKick={vi.fn()} onBan={vi.fn()} onUnban={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Кнопка справки" }));
+    expect(screen.getByRole("heading", { name: "Кнопка справки" })).toBeInTheDocument();
+    const source = screen.getByLabelText("Скрипт страниц");
+    await user.clear(source);
+    await user.type(source, 'api.page("rules", "Rules");\napi.text("No spam");\n');
+    await user.click(screen.getByRole("switch", { name: "Показывать кнопку справки" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить страницы" }));
+    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Команда",
+      helpPage: { enabled: true, gate: { enabled: false, pageId: null }, pages: [{ id: "rules", title: "Rules", audience: "always", blocks: [{ kind: "text", text: "No spam", size: "sm", weight: "normal", align: "left" }] }] },
+    }));
+  });
+
+  it("saves a rules gate with required controls from the script", async () => {
+    const user = userEvent.setup();
+    const onSaveSettings = vi.fn(() => true);
+    render(<ServerSettingsPage server={server} profile={profile} access={{ id: "owner", role: "owner", permissions: ["MANAGE_SERVER", "MANAGE_ROLES", "KICK_MEMBERS"] }} onClose={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onSaveSettings={onSaveSettings} onSetRole={vi.fn()} onKick={vi.fn()} onBan={vi.fn()} onUnban={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Кнопка справки" }));
+    const source = screen.getByLabelText("Скрипт страниц");
+    await user.clear(source);
+    // Фигурные скобки user.type не переваривает (синтаксис клавиш), поэтому вставка напрямую.
+    fireEvent.change(source, { target: { value: 'api.gate("rules");\napi.page("rules", "Rules", { audience: "pending" });\napi.checkbox("agree", "Agree");\napi.button("Accept", { accept: true, requires: ["agree"] });\n' } });
+    await user.click(screen.getByRole("switch", { name: "Показывать кнопку справки" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить страницы" }));
+    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      helpPage: {
+        enabled: true,
+        gate: { enabled: true, pageId: "rules" },
+        pages: [{
+          id: "rules",
+          title: "Rules",
+          audience: "pending",
+          blocks: [
+            { kind: "checkbox", id: "agree", label: "Agree", defaultChecked: false },
+            { kind: "button", label: "Accept", variant: "secondary", action: { kind: "accept" }, requires: ["agree"] },
+          ],
+        }],
+      },
+    }));
+  });
+
+  it("shows the Help Pages API reference link next to the save buttons on desktop", async () => {
+    const user = userEvent.setup();
+    window.openCord = { window: {} } as unknown as NonNullable<Window["openCord"]>;
+    try {
+      render(<ServerSettingsPage server={server} profile={profile} access={{ id: "owner", role: "owner", permissions: ["MANAGE_SERVER", "MANAGE_ROLES", "KICK_MEMBERS"] }} onClose={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onSaveSettings={vi.fn(() => true)} onSetRole={vi.fn()} onKick={vi.fn()} onBan={vi.fn()} onUnban={vi.fn()} />);
+
+      await user.click(screen.getByRole("button", { name: "Кнопка справки" }));
+      const link = screen.getByRole("link", { name: /Справочник API/ });
+      expect(link).toHaveAttribute("href", "https://uniquealexx.github.io/OpenCord/");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noreferrer");
+    } finally {
+      delete (window as unknown as { openCord?: unknown }).openCord;
+    }
+  });
+
+  it("hides the API reference link where external pages cannot be opened", async () => {
+    const user = userEvent.setup();
+    // Мобильный мост без desktop-поверхности window: уводить WebView нельзя.
+    window.openCord = {} as unknown as NonNullable<Window["openCord"]>;
+    try {
+      render(<ServerSettingsPage server={server} profile={profile} access={{ id: "owner", role: "owner", permissions: ["MANAGE_SERVER", "MANAGE_ROLES", "KICK_MEMBERS"] }} onClose={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onSaveSettings={vi.fn(() => true)} onSetRole={vi.fn()} onKick={vi.fn()} onBan={vi.fn()} onUnban={vi.fn()} />);
+
+      await user.click(screen.getByRole("button", { name: "Кнопка справки" }));
+      expect(screen.queryByRole("link", { name: /Справочник API/ })).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { openCord?: unknown }).openCord;
+    }
   });
 });

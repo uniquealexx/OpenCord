@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, VOICE_PARTICIPANT_LIMIT_MAX, clientEventSchema, serverHealthSchema, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
+import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, VOICE_PARTICIPANT_LIMIT_MAX, clientEventSchema, serverHealthSchema, unmetHelpRequires, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
@@ -221,6 +221,23 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await broadcastMember(connection.userId, publicStatus(event.profile.status));
       return;
     }
+    if (event.type === "help.accept") {
+      // Принятие правил гейта (протокол v43). Идемпотентно: повторный accept
+      // после записи — тихий no-op без рассылки, чтобы событием нельзя было
+      // спамить всех участников. Подтверждение клиент видит как member.updated
+      // с helpAccepted: true; snapshot.helpPage при этом не меняется — спека
+      // отдаётся целиком, audience фильтрует сам клиент.
+      const server = await repository.getServer();
+      const gate = server.helpPage.gate;
+      if (!server.helpPage.enabled || !gate.enabled || !gate.pageId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Гейт правил выключен");
+      const gatePage = server.helpPage.pages.find((page) => page.id === gate.pageId);
+      if (!gatePage) return sendError(connection.socket, event.requestId, "INVALID_EVENT", "Страница правил не настроена");
+      if (await repository.isHelpAccepted(connection.userId)) return;
+      if (unmetHelpRequires(gatePage, event.controls).length > 0) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Подтвердите все обязательные пункты");
+      if (!(await repository.setHelpAccepted(connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник сервера не найден");
+      await broadcastMember(connection.userId, publicUserStatuses().get(connection.userId) ?? "offline");
+      return;
+    }
     if (event.type === "server.leave") {
       const userId = connection.userId;
       const voicePresence = await voice.leave(userId);
@@ -245,6 +262,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return send(connection.socket, { type: "message.search.result", requestId: event.requestId, result });
     }
     if (event.type === "chat.send") {
+      if (await blockedByHelpGate(connection, event.requestId)) return;
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       const waitMs = await slowmodeDelay(connection.userId, event.channelId);
       if (waitMs > 0) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Медленный режим канала: следующее сообщение можно отправить через ${formatDelay(waitMs)}`, waitMs);
@@ -255,6 +273,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "chat.pm" || event.type === "chat.apm") {
+      if (await blockedByHelpGate(connection, event.requestId)) return;
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       if (event.targetUserId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя отправить личное сообщение самому себе");
       if (event.replyToMessageId && !(await repository.canReplyToMessage(event.replyToMessageId, event.channelId, connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Исходное сообщение для ответа не найдено или недоступно");
@@ -277,6 +296,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "message.update") {
+      if (await blockedByHelpGate(connection, event.requestId)) return;
       const existing = await repository.getMessageAccess(event.messageId);
       if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       if (existing.authorId !== connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Редактировать можно только собственные сообщения");
@@ -299,6 +319,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return;
     }
     if (event.type === "message.react") {
+      if (await blockedByHelpGate(connection, event.requestId)) return;
       const access = await repository.getMessageAccess(event.messageId);
       if (!access) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       // Реагировать можно только на видимое сообщение: посторонний с чужим идентификатором
@@ -425,7 +446,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (event.type === "server.settings.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения настроек сервера");
-      await repository.updateServerSettings({ name: event.name, description: event.description, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate });
+      await repository.updateServerSettings({ name: event.name, description: event.description, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate, helpPage: event.helpPage });
       await broadcastSnapshots();
       return;
     }
@@ -434,6 +455,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       // до дорогой части не доходило вообще ничего.
       const flood = voiceJoinLimiter.consume(`voice.join:${connection.userId}`);
       if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком частые подключения к голосовым каналам, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
+      if (await blockedByHelpGate(connection, event.requestId)) return;
       if (!(await hasPermission(connection.userId, "VOICE_CONNECT")) || !(await hasPermission(connection.userId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для подключения к голосовому каналу");
       const channel = await repository.getChannel(event.channelId);
       if (!channel || channel.kind !== "voice") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Голосовой канал не найден");
@@ -552,6 +574,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   async function hasPermission(userId: string, permission: Permission): Promise<boolean> {
     return permissionsForRole(await repository.getMemberRole(userId)).includes(permission);
+  }
+
+  /**
+   * Блок писанины гейтом правил (протокол v43): пока участник не принял правила
+   * через `help.accept`, запрещены chat.send/pm/apm, message.update, message.react
+   * и voice.join. Чтение (история, поиск, профиль, настройки) остаётся открытым,
+   * иначе новичок не увидел бы даже сами правила.
+   */
+  async function blockedByHelpGate(connection: ConnectionState, requestId: string): Promise<boolean> {
+    if (!connection.userId) return false;
+    if (await repository.isHelpGateBlocked(connection.userId)) {
+      sendError(connection.socket, requestId, "ACCEPT_REQUIRED", "Сначала примите правила сервера");
+      return true;
+    }
+    return false;
   }
 
   /**

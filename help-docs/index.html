@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenCord Help Pages API — custom ? pages for your server</title>
+  <meta name="description" content="Builder API reference (api.gate/page/text/divider/button/checkbox/switch/select) + live playground for OpenCord server help pages. Protocol v43." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body data-lang="en">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">OpenCord Help API</span>
+      <span class="badge">protocol v43</span>
+      <nav>
+        <a href="#start">Start</a>
+        <a href="#reference">Reference</a>
+        <a href="#limits">Limits</a>
+        <a href="#playground">Playground</a>
+        <a href="#notes">Notes</a>
+      </nav>
+      <div class="lang" role="group" aria-label="Language">
+        <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" data-set-lang="ru" aria-pressed="false">RU</button>
+        <button type="button" data-set-lang="zh" aria-pressed="false">ZH</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="hero">
+      <h1>
+        <span class="only-en">Beautiful help window for your server, in 10 lines.</span>
+        <span class="only-ru">Красивое окно справки для твоего сервера — за 10 строк.</span>
+        <span class="only-zh">用 10 行代码，为你的服务器做出漂亮的帮助窗口。</span>
+      </h1>
+      <p class="only-en">Server owners write <code class="inline">api.*</code> calls in Settings → Help button. The client compiles them locally into a JSON spec; members only ever see the rendered pages — your script never leaves your device and never runs on anyone else's.</p>
+      <p class="only-ru">Владелец сервера пишет вызовы <code class="inline">api.*</code> в «Настройки → Кнопка справки». Клиент локально компилирует их в JSON-спеку; участники видят только готовые страницы — твой скрипт никуда не уходит и ни у кого не выполняется.</p>
+      <p class="only-zh">服主在「设置 → 帮助按钮」里写 <code class="inline">api.*</code> 调用。客户端在本地把它编译成 JSON 规范；成员只能看到渲染好的页面——你的脚本不会离开你的设备，也不会在别人那里执行。</p>
+      <div class="links">
+        <a class="btn btn-primary" href="#playground">Open playground</a>
+        <a class="btn" href="#reference">API reference</a>
+        <a class="btn btn-ghost" href="https://github.com/uniquealexx/OpenCord" target="_blank" rel="noreferrer">GitHub repo</a>
+      </div>
+    </div>
+
+    <section class="card" id="start">
+      <h2>
+        <span class="only-en">Quick start</span>
+        <span class="only-ru">Быстрый старт</span>
+        <span class="only-zh">快速开始</span>
+      </h2>
+      <p class="only-en">One <code class="inline">api.*</code> call per line. <code class="inline">//</code> comments and blank lines are ignored. Anything else (loops, variables, real JS) is rejected — this keeps the editor CSP-safe and every error points at a line number. <code class="inline">api.gate("rules")</code> turns on the rules gate: newcomers see that page on join and cannot write until they accept.</p>
+      <p class="only-ru">Один вызов <code class="inline">api.*</code> на строку. Комментарии <code class="inline">//</code> и пустые строки игнорируются. Всё остальное (циклы, переменные, настоящий JS) отклоняется — так редактор остаётся CSP-безопасным, а каждая ошибка указывает на номер строки. <code class="inline">api.gate("rules")</code> включает гейт правил: новички видят эту страницу при входе и не могут писать, пока не примут.</p>
+      <p class="only-zh">每行一个 <code class="inline">api.*</code> 调用。<code class="inline">//</code> 注释和空行会被忽略。其他写法（循环、变量、真正的 JS）都会被拒绝——这样编辑器保持 CSP 安全，每个报错都会指出行号。<code class="inline">api.gate("rules")</code> 开启规则门禁：新成员进入时只看到该页面，接受之前不能发言。</p>
+<pre><span class="c">// Rules + FAQ behind the ? button.</span>
+api.page("rules", "Rules");
+api.text("Server rules", { size: "lg", weight: "bold", align: "center" });
+api.text("1. No spam or flooding the chat.");
+api.checkbox("read", "I have read the rules");
+api.button("Open FAQ", { toPage: "faq" });
+
+api.page("faq", "FAQ");
+api.text("How do I get a role? Ask an administrator in the chat.");
+api.button("Back to rules", { toPage: "rules" });</pre>
+      <p class="muted">
+        <span class="only-en">Flow: Settings → enable “Help button” → paste script → “Compile &amp; preview” → Save. The server stores the compiled JSON (<code class="inline">server.settings.update.helpPage</code>), clients read it from <code class="inline">server.snapshot.helpPage</code>. Until <code class="inline">help.accept</code>, writing answers <code class="inline">ACCEPT_REQUIRED</code>; reading stays open.</span>
+        <span class="only-ru">Путь: Настройки → включить «Кнопку справки» → вставить скрипт → «Собрать и предпросмотреть» → Сохранить. Сервер хранит скомпилированный JSON (<code class="inline">server.settings.update.helpPage</code>), клиенты читают его из <code class="inline">server.snapshot.helpPage</code>. До <code class="inline">help.accept</code> писанина отвечает <code class="inline">ACCEPT_REQUIRED</code>; чтение открыто.</span>
+        <span class="only-zh">流程：设置 → 打开「帮助按钮」→ 粘贴脚本 →「编译并预览」→ 保存。服务器保存编译好的 JSON（<code class="inline">server.settings.update.helpPage</code>），客户端从 <code class="inline">server.snapshot.helpPage</code> 读取。在 <code class="inline">help.accept</code> 之前发言会返回 <code class="inline">ACCEPT_REQUIRED</code>；阅读保持开放。</span>
+      </p>
+    </section>
+
+    <section class="card" id="reference">
+      <h2>
+        <span class="only-en">API reference</span>
+        <span class="only-ru">Справочник API</span>
+        <span class="only-zh">API 参考</span>
+      </h2>
+      <p class="muted">
+        <span class="only-en">Call <code class="inline">api.page(id, title)</code> first, then add blocks to it. Strings accept <code class="inline">"…"</code> or <code class="inline">'…'</code> with <code class="inline">\n</code> / <code class="inline">\t</code> / <code class="inline">\\</code> escapes.</span>
+        <span class="only-ru">Сначала вызови <code class="inline">api.page(id, title)</code>, затем добавляй в неё блоки. Строки — в <code class="inline">"…"</code> или <code class="inline">'…'</code>, работают <code class="inline">\n</code> / <code class="inline">\t</code> / <code class="inline">\\</code>.</span>
+        <span class="only-zh">先调用 <code class="inline">api.page(id, title)</code>，再往里加 block。字符串可用 <code class="inline">"…"</code> 或 <code class="inline">'…'</code>，支持 <code class="inline">\n</code> / <code class="inline">\t</code> / <code class="inline">\\</code> 转义。</span>
+      </p>
+
+      <div class="grid two">
+        <div class="method">
+          <h3><code>api.gate(pageId)</code></h3>
+          <p class="only-en">Enables the rules gate on that page (one line, anywhere). The gate page must contain an accept button. Newcomers see it on join and cannot write until <code class="inline">help.accept</code>; leaving resets acceptance.</p>
+          <p class="only-ru">Включает гейт правил на этой странице (одна строка в любом месте). На гейт-странице обязана быть accept-кнопка. Новички видят её при входе и не могут писать до <code class="inline">help.accept</code>; выход сбрасывает принятие.</p>
+          <p class="only-zh">在该页面开启规则门禁（任意位置写一行即可）。门禁页必须包含 accept 按钮。新成员进入时看到它，在 <code class="inline">help.accept</code> 之前不能发言；退出即清零接受状态。</p>
+          <div class="sig">api.gate("rules");</div>
+        </div>
+        <div class="method">
+          <h3><code>api.page(id, title, options?)</code></h3>
+          <p class="only-en">Starts a new page (tab). <code class="inline">id</code> is <code class="inline">[a-z0-9-]{1,40}</code> and must be unique; <code class="inline">title</code> is 1–80 chars. <code class="inline">{ audience: "pending" }</code> shows the page only to not-yet-accepted viewers, <code class="inline">"accepted"</code> only to accepted ones (display routing; the snapshot carries everything).</p>
+          <p class="only-ru">Начинает новую страницу (вкладку). <code class="inline">id</code> — <code class="inline">[a-z0-9-]{1,40}</code>, уникален; <code class="inline">title</code> — 1–80 символов. <code class="inline">{ audience: "pending" }</code> показывает страницу только непринявшим, <code class="inline">"accepted"</code> — только принявшим (маршрутизация показа; snapshot несёт всё).</p>
+          <p class="only-zh">开始一个新页面（选项卡）。<code class="inline">id</code> 为 <code class="inline">[a-z0-9-]{1,40}</code> 且必须唯一；<code class="inline">title</code> 为 1–80 字符。<code class="inline">{ audience: "pending" }</code> 只给未接受者看，<code class="inline">"accepted"</code> 只给已接受者看（展示路由；snapshot 携带全部内容）。</p>
+          <div class="sig">api.page("rules", "Rules", { audience: "pending" });</div>
+        </div>
+        <div class="method">
+          <h3><code>api.text(content, options?)</code></h3>
+          <p class="only-en">Plain text paragraph (no HTML). Options: <code class="inline">size: xs|sm|md|lg</code> (default <code class="inline">sm</code>), <code class="inline">weight: normal|medium|bold</code>, <code class="inline">align: left|center</code>. Content is 1–2000 chars.</p>
+          <p class="only-ru">Обычный текстовый абзац (без HTML). Опции: <code class="inline">size: xs|sm|md|lg</code> (по умолчанию <code class="inline">sm</code>), <code class="inline">weight: normal|medium|bold</code>, <code class="inline">align: left|center</code>. Текст 1–2000 символов.</p>
+          <p class="only-zh">纯文本段落（不支持 HTML）。选项：<code class="inline">size: xs|sm|md|lg</code>（默认 <code class="inline">sm</code>）、<code class="inline">weight: normal|medium|bold</code>、<code class="inline">align: left|center</code>。内容 1–2000 字符。</p>
+          <div class="sig">api.text("Be kind.", { size: "lg", weight: "bold", align: "center" });</div>
+        </div>
+        <div class="method">
+          <h3><code>api.divider()</code></h3>
+          <p class="only-en">Thin horizontal separator. Takes no arguments.</p>
+          <p class="only-ru">Тонкий горизонтальный разделитель. Без аргументов.</p>
+          <p class="only-zh">细水平分隔线。无参数。</p>
+          <div class="sig">api.divider();</div>
+        </div>
+        <div class="method">
+          <h3><code>api.button(label, options?)</code></h3>
+          <p class="only-en">Full-width button. <code class="inline">variant: secondary|primary</code>; navigation: <code class="inline">{ toPage: "faq" }</code> opens another page, otherwise the button closes the dialog; <code class="inline">{ close: true }</code> is an explicit close. <code class="inline">{ accept: true }</code> sends <code class="inline">help.accept</code> with the page's control states (and closes the gate); it cannot be combined with <code class="inline">toPage</code>/<code class="inline">close</code>. <code class="inline">{ requires: ["agree"] }</code> (accept buttons only) disables the button until those same-page controls are confirmed, and the server re-checks them.</p>
+          <p class="only-ru">Кнопка на всю ширину. <code class="inline">variant: secondary|primary</code>; навигация: <code class="inline">{ toPage: "faq" }</code> открывает другую страницу, иначе кнопка закрывает диалог; <code class="inline">{ close: true }</code> — явное закрытие. <code class="inline">{ accept: true }</code> отправляет <code class="inline">help.accept</code> с состояниями контролов страницы (и закрывает гейт); несовместим с <code class="inline">toPage</code>/<code class="inline">close</code>. <code class="inline">{ requires: ["agree"] }</code> (только accept-кнопки) блокирует кнопку, пока контролы той же страницы не подтверждены; сервер перепроверяет их.</p>
+          <p class="only-zh">全宽按钮。<code class="inline">variant: secondary|primary</code>；导航：<code class="inline">{ toPage: "faq" }</code> 打开另一页，否则关闭对话框；<code class="inline">{ close: true }</code> 为显式关闭。<code class="inline">{ accept: true }</code> 发送带本页控件状态的 <code class="inline">help.accept</code>（并关闭门禁）；不可与 <code class="inline">toPage</code>/<code class="inline">close</code> 同用。<code class="inline">{ requires: ["agree"] }</code>（仅 accept 按钮）在同页控件确认前禁用按钮，服务器会再次校验。</p>
+          <div class="sig">api.button("Accept", { variant: "primary", accept: true, requires: ["agree"] });</div>
+        </div>
+        <div class="method">
+          <h3><code>api.checkbox(id, label, defaultChecked?)</code></h3>
+          <p class="only-en">Tick box (e.g. “I read the rules”). State is local-only and never sent to the server. <code class="inline">id</code> is unique within the page.</p>
+          <p class="only-ru">Галочка (например, «Я прочитал правила»). Состояние локальное и никогда не отправляется на сервер. <code class="inline">id</code> уникален в пределах страницы.</p>
+          <p class="only-zh">复选框（例如“我已阅读规则”）。状态仅保存在本地，绝不会发送到服务器。<code class="inline">id</code> 在本页内必须唯一。</p>
+          <div class="sig">api.checkbox("read", "I have read the rules");</div>
+        </div>
+        <div class="method">
+          <h3><code>api.switch(id, label, defaultChecked?)</code></h3>
+          <p class="only-en">Toggle switch, same rules as checkbox — local-only state for personal reminders, not server data.</p>
+          <p class="only-ru">Переключатель, те же правила, что у checkbox — локальное состояние для личных пометок, а не данные сервера.</p>
+          <p class="only-zh">开关，与 checkbox 规则相同——本地状态，用于个人标记，不是服务器数据。</p>
+          <div class="sig">api.switch("notify", "Notify me about events");</div>
+        </div>
+        <div class="method">
+          <h3><code>api.select(id, label, options, defaultValue?)</code></h3>
+          <p class="only-en">Dropdown with 1–20 unique options (1–80 chars each). <code class="inline">defaultValue</code>, if given, must be one of the options. Local-only, like checkbox. Alias: <code class="inline">api.combobox(...)</code>.</p>
+          <p class="only-ru">Выпадающий список: 1–20 уникальных опций (каждая 1–80 символов). <code class="inline">defaultValue</code>, если задан, обязан совпадать с одной из опций. Локальный, как checkbox. Алиас: <code class="inline">api.combobox(...)</code>.</p>
+          <p class="only-zh">下拉框：1–20 个唯一选项（每个 1–80 字符）。<code class="inline">defaultValue</code> 若填写，必须是其中之一。和 checkbox 一样只保存在本地。别名：<code class="inline">api.combobox(...)</code>。</p>
+          <div class="sig">api.select("topic", "Question topic", ["Roles", "Voice", "Files"], "Roles");</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="limits">
+      <h2>
+        <span class="only-en">Limits &amp; errors</span>
+        <span class="only-ru">Лимиты и ошибки</span>
+        <span class="only-zh">限制与报错</span>
+      </h2>
+      <table>
+        <thead><tr>
+          <th><span class="only-en">Rule</span><span class="only-ru">Правило</span><span class="only-zh">规则</span></th>
+          <th><span class="only-en">Value</span><span class="only-ru">Значение</span><span class="only-zh">取值</span></th>
+        </tr></thead>
+        <tbody>
+          <tr><td>Pages</td><td>max 10</td></tr>
+          <tr><td>Blocks per page</td><td>max 30</td></tr>
+          <tr><td>Text length</td><td>1–2000</td></tr>
+          <tr><td>Label / title / option</td><td>1–80</td></tr>
+          <tr><td>Select options</td><td>1–20, unique</td></tr>
+          <tr><td>IDs (<code class="inline">page</code>, <code class="inline">checkbox</code>, <code class="inline">switch</code>, <code class="inline">select</code>)</td><td><code class="inline">^[a-z0-9-]{1,40}$</code>, page ids unique, control ids unique within a page</td></tr>
+          <tr><td><code class="inline">requires</code></td><td>max 30 same-page control ids, accept buttons only, unique</td></tr>
+          <tr><td>Gate</td><td>one <code class="inline">api.gate(pageId)</code> line max; the page must exist and contain an accept button</td></tr>
+          <tr><td>Compiled JSON</td><td>max 16 KB (UTF-8)</td></tr>
+          <tr><td>Source script</td><td>max 20 000 chars</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">
+        <span class="only-en">Errors look like <code class="inline">line 4: call api.page(id, title) first</code> — fix that line and re-run. The client highlights the same line in the editor.</span>
+        <span class="only-ru">Ошибки выглядят как <code class="inline">line 4: call api.page(id, title) first</code> — исправь эту строку и собери заново. Клиент подсвечивает ту же строку в редакторе.</span>
+        <span class="only-zh">报错形如 <code class="inline">line 4: call api.page(id, title) first</code>——改好这一行再运行。客户端编辑器会高亮同一行。</span>
+      </p>
+    </section>
+
+    <section class="card" id="playground">
+      <h2>
+        <span class="only-en">Playground — try it live</span>
+        <span class="only-ru">Песочница — попробуй живьём</span>
+        <span class="only-zh">在线试验场</span>
+      </h2>
+      <p class="muted">
+        <span class="only-en">Preview-only: it runs the same one-call-per-line parser as the client, but the real check is Zod (<code class="inline">serverHelpSchema</code>) on save. Copy working scripts straight into Settings → Help button.</span>
+        <span class="only-ru">Только предпросмотр: здесь тот же построчный парсер, что в клиенте, но решает Zod (<code class="inline">serverHelpSchema</code>) при сохранении. Удачные скрипты копируй в Настройки → Кнопка справки.</span>
+        <span class="only-zh">仅供预览：这里用的是和客户端相同的逐行解析器，真正起决定作用的是保存时的 Zod（<code class="inline">serverHelpSchema</code>）。调好的脚本可直接复制到「设置 → 帮助按钮」。</span>
+      </p>
+      <div class="play-grid">
+        <div>
+          <div class="editor-head">
+            <label class="muted" for="example">Example:</label>
+            <select id="example">
+              <option value="rulesFaq">Rules + FAQ</option>
+              <option value="rulesGate">Rules gate</option>
+              <option value="onboarding">Onboarding</option>
+              <option value="voiceGuide">Voice guide</option>
+            </select>
+          </div>
+          <textarea id="src" spellcheck="false" rows="20"></textarea>
+          <div class="row">
+            <button class="btn btn-primary" id="run" type="button">Run ▶</button>
+            <button class="btn" id="reset" type="button">Reset example</button>
+          </div>
+          <p class="status" id="status" role="status"></p>
+          <div class="meta" id="meta"></div>
+        </div>
+        <div>
+          <div class="muted" style="margin-bottom:8px">Preview:</div>
+          <div class="hlp-viewer" role="group" aria-label="Preview as" style="margin-bottom:8px">
+            <button type="button" data-viewer="pending" aria-pressed="true">Pending</button>
+            <button type="button" data-viewer="accepted" aria-pressed="false">Accepted</button>
+          </div>
+          <div class="hlp-body" id="preview" style="max-height:560px"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="notes">
+      <h2>
+        <span class="only-en">What admins should know</span>
+        <span class="only-ru">Что важно знать админу</span>
+        <span class="only-zh">管理员须知</span>
+      </h2>
+      <ul>
+        <li class="only-en">No real JavaScript runs anywhere: the editor parses calls with a hand-written tokenizer (no <code class="inline">eval</code>), viewers render JSON with plain text nodes — no HTML injection surface.</li>
+        <li class="only-ru">Настоящий JavaScript нигде не выполняется: редактор разбирает вызовы рукописным токенизатором (без <code class="inline">eval</code>), зрители рендерят JSON обычным текстом — поверхности для HTML-инъекций нет.</li>
+        <li class="only-zh">任何地方都不会执行真正的 JavaScript：编辑器用手写分词器解析调用（无 <code class="inline">eval</code>），浏览端只用纯文本节点渲染 JSON——没有 HTML 注入面。</li>
+        <li class="only-en">Checkbox / switch / select are personal checklists: their state lives in the viewer's client. The only exception is the <code class="inline">help.accept</code> handshake — an accept button sends the current states once so the server can check <code class="inline">requires</code>.</li>
+        <li class="only-ru">Checkbox / switch / select — личные чек-листы: их состояние живёт в клиенте зрителя. Единственное исключение — рукопожатие <code class="inline">help.accept</code>: accept-кнопка один раз отправляет текущие состояния, чтобы сервер проверил <code class="inline">requires</code>.</li>
+        <li class="only-zh">Checkbox / switch / select 只是个人清单：状态保存在浏览者的客户端。唯一的例外是 <code class="inline">help.accept</code> 握手——accept 按钮会一次性发送当前状态，以便服务器检查 <code class="inline">requires</code>。</li>
+        <li class="only-en">Source of truth: <code class="inline">client/src/components/server-help/builder.ts</code>, <code class="inline">shared/src/protocol.ts</code> (<code class="inline">serverHelpSchema</code>), <code class="inline">client/src/components/server-help/server-help-dialog.tsx</code>. If this page disagrees with them — they win.</li>
+        <li class="only-ru">Источник истины: <code class="inline">client/src/components/server-help/builder.ts</code>, <code class="inline">shared/src/protocol.ts</code> (<code class="inline">serverHelpSchema</code>), <code class="inline">client/src/components/server-help/server-help-dialog.tsx</code>. При расхождении с этой страницей — правы они.</li>
+        <li class="only-zh">唯一可信来源：<code class="inline">client/src/components/server-help/builder.ts</code>、<code class="inline">shared/src/protocol.ts</code>（<code class="inline">serverHelpSchema</code>）、<code class="inline">client/src/components/server-help/server-help-dialog.tsx</code>。若本站与它们不一致，以它们为准。</li>
+      </ul>
+    </section>
+
+    <footer>
+      <span class="only-en">OpenCord Help Pages API · protocol v43 · preview parser mirrors the client; server validates with Zod. MIT.</span>
+      <span class="only-ru">OpenCord Help Pages API · протокол v43 · превью повторяет клиент; сервер проверяет через Zod. MIT.</span>
+      <span class="only-zh">OpenCord Help Pages API · 协议 v43 · 预览与客户端一致；服务器以 Zod 校验。MIT.</span>
+    </footer>
+  </main>
+
+  <style>
+    body[data-lang="en"] .only-ru, body[data-lang="en"] .only-zh { display: none; }
+    body[data-lang="ru"] .only-en, body[data-lang="ru"] .only-zh { display: none; }
+    body[data-lang="zh"] .only-en, body[data-lang="zh"] .only-ru { display: none; }
+  </style>
+
+  <script src="./help-api.js"></script>
+  <script src="./examples.js"></script>
+  <script>
+    (function () {
+      var body = document.body;
+      var saved = null;
+      try { saved = localStorage.getItem("opencord-help-lang"); } catch (e) {}
+      if (saved === "ru" || saved === "zh" || saved === "en") setLang(saved);
+
+      function setLang(lang) {
+        body.setAttribute("data-lang", lang);
+        document.documentElement.lang = lang === "zh" ? "zh-CN" : lang;
+        var btns = document.querySelectorAll("[data-set-lang]");
+        for (var i = 0; i < btns.length; i += 1) {
+          btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-set-lang") === lang ? "true" : "false");
+        }
+        try { localStorage.setItem("opencord-help-lang", lang); } catch (e) {}
+        var run = document.getElementById("run");
+        if (run) run.textContent = lang === "ru" ? "Запустить ▶" : lang === "zh" ? "运行 ▶" : "Run ▶";
+      }
+      var btns = document.querySelectorAll("[data-set-lang]");
+      for (var i = 0; i < btns.length; i += 1) {
+        (function (b) {
+          b.addEventListener("click", function () { setLang(b.getAttribute("data-set-lang")); });
+        })(btns[i]);
+      }
+
+      var src = document.getElementById("src");
+      var example = document.getElementById("example");
+      var status = document.getElementById("status");
+      var meta = document.getElementById("meta");
+      var preview = document.getElementById("preview");
+      var viewer = "pending";
+      var lastSpec = null;
+
+      function setViewer(next) {
+        viewer = next;
+        var btns = document.querySelectorAll("[data-viewer]");
+        for (var i = 0; i < btns.length; i += 1) {
+          btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-viewer") === next ? "true" : "false");
+        }
+        drawPreview();
+      }
+      var viewerBtns = document.querySelectorAll("[data-viewer]");
+      for (var v = 0; v < viewerBtns.length; v += 1) {
+        (function (b) {
+          b.addEventListener("click", function () { setViewer(b.getAttribute("data-viewer")); });
+        })(viewerBtns[v]);
+      }
+
+      function drawPreview() {
+        if (!lastSpec) return;
+        // Accept in the preview flips the viewer to accepted — like help.accept on the server.
+        window.OpenCordHelp.renderPreview(preview, lastSpec, viewer, function () {
+          setViewer("accepted");
+          status.className = "status ok";
+          status.textContent = "✔ Accepted (preview) — now showing accepted pages";
+        });
+      }
+
+      function loadExample(id) {
+        if (window.HELP_EXAMPLES && window.HELP_EXAMPLES[id]) {
+          src.value = window.HELP_EXAMPLES[id].source;
+        }
+      }
+      loadExample("rulesFaq");
+
+      function fmtBytes(n) {
+        return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " KB";
+      }
+
+      function run() {
+        var text = src.value;
+        var res = window.OpenCordHelp.parseHelpSource(text);
+        if (!res.ok) {
+          status.className = "status err";
+          status.textContent = "✖ " + res.error;
+          meta.textContent = "chars: " + text.length + " / 20000";
+          preview.innerHTML = '<p class="hlp-empty">Fix the error above, then Run again.</p>';
+          return;
+        }
+        status.className = "status ok";
+        var pages = res.spec.pages.length;
+        var blocks = 0;
+        for (var i = 0; i < res.spec.pages.length; i += 1) blocks += res.spec.pages[i].blocks.length;
+        var bytes = window.OpenCordHelp.byteLength(JSON.stringify(res.spec));
+        var gateInfo = res.spec.gate.enabled ? " · gate: " + res.spec.gate.pageId : "";
+        status.textContent = "✔ OK — " + pages + " page(s), " + blocks + " block(s), JSON " + fmtBytes(bytes) + " / 16 KB" + gateInfo;
+        meta.textContent = "chars: " + text.length + " / 20000 · copy this script into Settings → Help button";
+        lastSpec = { enabled: true, gate: res.spec.gate, pages: res.spec.pages };
+        drawPreview();
+      }
+
+      document.getElementById("run").addEventListener("click", run);
+      document.getElementById("reset").addEventListener("click", function () {
+        loadExample(example.value);
+        run();
+      });
+      example.addEventListener("change", function () {
+        loadExample(example.value);
+        run();
+      });
+      run();
+    })();
+  </script>
+</body>
+</html>

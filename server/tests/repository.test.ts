@@ -26,6 +26,15 @@ describe("ChatRepository", () => {
     expect(await repository.getServer()).toMatchObject({ name: "Источник", screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60 });
   });
 
+  it("persists help pages and keeps them when old clients omit the field", async () => {
+    expect(await repository.getServer()).toMatchObject({ helpPage: { enabled: false, pages: [] } });
+    await repository.updateServerSettings({ name: "Команда", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60, helpPage: { enabled: true, gate: { enabled: false, pageId: null }, pages: [{ id: "rules", title: "Правила", audience: "always", blocks: [{ kind: "text", text: "Не спамьте", size: "sm", weight: "normal", align: "left" }] }] } });
+    expect(await repository.getServer()).toMatchObject({ helpPage: { enabled: true, pages: [{ id: "rules", title: "Правила" }] } });
+    // Старый клиент шлёт настройки без helpPage — страницы обязаны уцелеть.
+    await repository.updateServerSettings({ name: "Команда", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
+    expect(await repository.getServer()).toMatchObject({ name: "Команда", helpPage: { enabled: true, pages: [{ id: "rules" }] } });
+  });
+
   it("does not overwrite a manually changed name on the same deployment restart", async () => {
     await repository.configureServer("Имя установки", "deployment-1");
     await repository.updateServerSettings({ name: "Ручное имя", maxAttachmentBytes: null, screenShareMaxResolution: 1080, screenShareMaxFrameRate: 60 });
@@ -33,6 +42,44 @@ describe("ChatRepository", () => {
     expect((await repository.getServer()).name).toBe("Ручное имя");
     await repository.configureServer("Новая установка", "deployment-2");
     expect((await repository.getServer()).name).toBe("Новая установка");
+  });
+
+  it("tracks help acceptance for the rules gate", async () => {
+    await repository.upsertUser("user-1", "public-key", { username: "lina", discriminator: "1234", avatar: null });
+    await repository.ensureMembership("user-1", "public-key", undefined, true);
+    // Гейт выключен — блока нет даже без принятия.
+    expect(await repository.isHelpAccepted("user-1")).toBe(false);
+    expect(await repository.isHelpGateBlocked("user-1")).toBe(false);
+    // Включаем гейт: все, включая действующих участников, принимают заново.
+    await repository.updateServerSettings({
+      name: "Команда",
+      maxAttachmentBytes: null,
+      screenShareMaxResolution: 1080,
+      screenShareMaxFrameRate: 60,
+      helpPage: {
+        enabled: true,
+        gate: { enabled: true, pageId: "rules" },
+        pages: [{
+          id: "rules",
+          title: "Правила",
+          audience: "pending",
+          blocks: [
+            { kind: "text", text: "Не спамьте", size: "sm", weight: "normal", align: "left" },
+            { kind: "checkbox", id: "agree", label: "Прочитал", defaultChecked: false },
+            { kind: "button", label: "Принимаю", variant: "primary", action: { kind: "accept" }, requires: ["agree"] },
+          ],
+        }],
+      },
+    });
+    expect(await repository.isHelpGateBlocked("user-1")).toBe(true);
+    expect(await repository.setHelpAccepted("user-1")).toBe(true);
+    expect(await repository.isHelpAccepted("user-1")).toBe(true);
+    expect(await repository.isHelpGateBlocked("user-1")).toBe(false);
+    // Повторная запись идемпотентна, флаг виден в member.
+    expect(await repository.setHelpAccepted("user-1")).toBe(true);
+    expect(await repository.getMember("user-1", "online")).toMatchObject({ helpAccepted: true });
+    // Чужой идентичности принять нечего.
+    expect(await repository.setHelpAccepted("ghost")).toBe(false);
   });
 
   it("stores and returns message history", async () => {

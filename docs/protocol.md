@@ -1,6 +1,10 @@
-# OpenCord Protocol v41 (English)
+# OpenCord Protocol v43 (English)
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
+
+Protocol v43 adds the rules gate: `api.gate("rules")` forces newcomers to see one page on join, and the server blocks writing (`chat.send`/`chat.pm`/`chat.apm`, `message.update`, `message.react`, `voice.join` with `ACCEPT_REQUIRED`) until `help.accept` records the acceptance with its required controls (`api.button(..., { accept: true, requires: [...] })`). Pages gain `audience` (`always`/`pending`/`accepted`) for display routing, members gain `helpAccepted`. Acceptance lives on the membership row: leaving resets it, so rejoin shows the rules again. Audience is display-only — the snapshot still carries the full spec. Recorded acceptances survive gate toggles and restarts; only leaving, kick or ban resets them.
+
+Protocol v42 adds the `helpPage` server setting — custom help pages behind the `?` button in the channel header (rules, FAQ). It travels through `server.settings.update` and `server.snapshot` as a JSON spec of up to 10 pages with text/divider/button/checkbox/switch/select blocks (16 KB max), validated server-side with Zod. In `server.settings.update` the field is optional so older clients that omit it keep the existing pages; in `server.snapshot` it defaults to a disabled empty spec, so an older server stays compatible.
 
 Protocol v41 adds the optional `memberBackground` profile field — a WebP image in the same 5:2 banner format (at most 600×240, up to 256 KB) shown behind the user's own row in the member list. It travels through `auth.respond.profile`, `profile.update`, `server.snapshot.members`, and `member.updated`, defaulting to `null`, so a server of an earlier version stays compatible.
 
@@ -98,6 +102,7 @@ The client sends:
 - `message.update`;
 - `message.delete`;
 - `profile.update`;
+- `help.accept`;
 - `server.leave`;
 - `server.avatar.update`;
 - `server.settings.update`;
@@ -161,9 +166,13 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v41 (Русский)
+# OpenCord Protocol v43 (Русский)
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
+
+Протокол v43 добавляет гейт правил: `api.gate("rules")` принудительно показывает новичку одну страницу при входе, а сервер блокирует писанину (`chat.send`/`chat.pm`/`chat.apm`, `message.update`, `message.react`, `voice.join` с `ACCEPT_REQUIRED`) до `help.accept`, записывающего принятие с обязательными контролами (`api.button(..., { accept: true, requires: [...] })`). Страницы получают `audience` (`always`/`pending`/`accepted`) для маршрутизации показа, участники — `helpAccepted`. Принятие живёт на строке членства: выход его сбрасывает, повторный вход снова показывает правила. Audience — только показ: snapshot по-прежнему несёт полную спеку. Записанные принятия переживают переключения гейта и рестарты; сбрасывают их только выход, кик или бан.
+
+Протокол v42 добавляет настройку сервера `helpPage` — особые страницы за кнопкой `?` в шапке канала (правила, FAQ). Поле передаётся через `server.settings.update` и `server.snapshot` как JSON-спека до 10 страниц с блоками text/divider/button/checkbox/switch/select (максимум 16 КБ) и валидируется на сервере через Zod. В `server.settings.update` поле опционально, поэтому старые клиенты без него сохраняют существующие страницы; в `server.snapshot` по умолчанию подставляется выключенная пустая спека, поэтому старый сервер остаётся совместимым.
 
 Протокол v41 добавляет необязательное поле профиля `memberBackground` — WebP-изображение в том же формате шапки 5:2 (максимум 600×240, до 256 КБ), которое показывается за собственной строкой пользователя в списке участников. Поле передаётся через `auth.respond.profile`, `profile.update`, `server.snapshot.members` и `member.updated` с дефолтом `null`, поэтому сервер прошлой версии остаётся совместимым.
 
@@ -259,6 +268,7 @@ Electron-клиент показывает изображения до 10 МБ �
 - `message.update`;
 - `message.delete`;
 - `profile.update`;
+- `help.accept`;
 - `server.leave`;
 - `server.avatar.update`;
 - `server.settings.update`;
@@ -322,9 +332,13 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v41 (中文)
+# OpenCord 协议 v43 (中文)
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
+
+协议 v43 新增规则门禁：`api.gate("rules")` 强制新成员进入时只看到一个页面；在 `help.accept` 记录接受（含必填控件，`api.button(..., { accept: true, requires: [...] })`）之前，服务器会阻止发言（`chat.send`/`chat.pm`/`chat.apm`、`message.update`、`message.react`、`voice.join`，返回 `ACCEPT_REQUIRED`）。页面新增 `audience`（`always`/`pending`/`accepted`）用于展示路由，成员新增 `helpAccepted`。接受状态保存在成员资格行：退出即清零，重进会再次看到规则。Audience 仅控制展示——snapshot 仍携带完整规范。已记录的接受在开关门禁和重启后依然有效；只有退出、移出或封禁会将其清零。
+
+协议 v42 新增服务器设置 `helpPage`——频道标题栏 `?` 按钮背后的自定义帮助页面（规则、常见问题）。该字段通过 `server.settings.update` 和 `server.snapshot` 以 JSON 规范传输，最多 10 个页面，包含 text/divider/button/checkbox/switch/select 块（最大 16 KB），由服务端以 Zod 校验。在 `server.settings.update` 中该字段为可选，因此省略它的旧客户端会保留已有页面；在 `server.snapshot` 中默认为关闭的空规范，因此旧服务器保持兼容。
 
 协议 v41 新增了可选的个人资料字段 `memberBackground`——与横幅相同的 5:2 WebP 格式（最大 600×240，不超过 256 KB），显示在成员列表中用户自己一行的后面。该字段通过 `auth.respond.profile`、`profile.update`、`server.snapshot.members` 和 `member.updated` 传输，默认值为 `null`，因此旧版本服务器保持兼容。
 
@@ -420,6 +434,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `message.update`;
 - `message.delete`;
 - `profile.update`;
+- `help.accept`;
 - `server.leave`;
 - `server.avatar.update`;
 - `server.settings.update`;

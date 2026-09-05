@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { Ban, Camera, Clock3, Image as ImageIcon, ShieldCheck, SlidersHorizontal, UserCog, UserMinus, UserRoundCheck, Users, X } from "lucide-react";
-import { BAN_DURATION_MINUTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type BanDurationMinutes, type BannedMember, type MemberRole, type Permission, type ScreenShareFrameRate, type ScreenShareResolution, type ServerSettings } from "@opencord/shared";
+import { Ban, BookOpen, Camera, Clock3, Image as ImageIcon, ShieldCheck, SlidersHorizontal, UserCog, UserMinus, UserRoundCheck, Users, X } from "lucide-react";
+import { BAN_DURATION_MINUTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, DEFAULT_SERVER_HELP_PAGE, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, type BanDurationMinutes, type BannedMember, type MemberRole, type Permission, type ScreenShareFrameRate, type ScreenShareResolution, type ServerSettings } from "@opencord/shared";
 import { Avatar } from "@/components/avatar";
 import { ProfilePreview } from "@/components/profile-preview";
+import { ServerHelpEditor } from "@/components/server-help/server-help-editor";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
@@ -15,7 +16,7 @@ import { nicknameStyle } from "@/lib/name-font";
 import { cn } from "@/lib/utils";
 import type { LocalProfile, MockMember, MockServer } from "@/shared/state";
 
-type SettingsPage = "visual" | "limits" | "users";
+type SettingsPage = "visual" | "limits" | "users" | "help";
 type UsersPage = "overview" | "kick" | "ban" | "unban";
 type Access = { id: string; role: MemberRole; permissions: Permission[] };
 
@@ -48,6 +49,7 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
       maxAttachmentBytes: server.maxAttachmentBytes,
       screenShareMaxResolution: server.screenShareMaxResolution ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION,
       screenShareMaxFrameRate: server.screenShareMaxFrameRate ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE,
+      helpPage: server.helpPage ?? DEFAULT_SERVER_HELP_PAGE,
     });
   }
 
@@ -59,6 +61,7 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
       maxAttachmentBytes: unlimited ? null : parsedLimit * MEBIBYTE,
       screenShareMaxResolution: maxResolution,
       screenShareMaxFrameRate: maxFrameRate,
+      helpPage: server.helpPage ?? DEFAULT_SERVER_HELP_PAGE,
     });
   }
 
@@ -88,6 +91,7 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
           <NavigationButton active={page === "visual"} icon={<Camera className="size-4" />} onClick={() => setPage("visual")}>{t.serverSettings.visual}</NavigationButton>
           <NavigationButton active={page === "limits"} icon={<SlidersHorizontal className="size-4" />} onClick={() => setPage("limits")}>{t.serverSettings.limits}</NavigationButton>
           <NavigationButton active={page === "users"} icon={<Users className="size-4" />} onClick={() => setPage("users")}>{t.serverSettings.users}</NavigationButton>
+          <NavigationButton active={page === "help"} icon={<BookOpen className="size-4" />} onClick={() => setPage("help")}>{t.serverSettings.help}</NavigationButton>
         </nav>
         {page === "users" && <nav className="mt-4 space-y-1 border-t border-white/[.06] pt-4 max-md:grid max-md:grid-cols-2 max-md:gap-1 max-md:space-y-0">
           <NavigationButton compact active={usersPage === "overview"} icon={<UserCog className="size-3.5" />} onClick={() => setUsersPage("overview")}>{t.serverSettings.admins}</NavigationButton>
@@ -160,8 +164,10 @@ export function ServerSettingsPage({ mobile = false, server, profile, access, on
               {canManageVisual ? <Button onClick={saveLimits} disabled={!validLimit}>{t.server.saveSettings}</Button> : <p className="text-xs text-slate-500">{t.server.onlyOwner}</p>}
             </section>
           </div>
-        ) : (
+        ) : page === "users" ? (
           <UserSettings server={server} profile={profile} access={access} page={usersPage} canManageRoles={canManageRoles} canModerate={canModerate} onSetRole={onSetRole} onKick={onKick} onBan={onBan} onUnban={onUnban} />
+        ) : (
+          <ServerHelpEditor server={server} canManage={canManageVisual} onSaveSettings={onSaveSettings} />
         )}
       </div>
     </section>

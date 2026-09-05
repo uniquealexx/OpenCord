@@ -1,0 +1,58 @@
+name: Deploy Help API docs to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "help-docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Least privilege for Pages deploy.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-help-docs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy help-docs to Pages
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Validate help-docs bundle
+        shell: bash
+        run: |
+          test -f help-docs/index.html || { echo "Missing help-docs/index.html" >&2; exit 1; }
+          test -f help-docs/help-api.js || { echo "Missing help-docs/help-api.js" >&2; exit 1; }
+          test -f help-docs/examples.js || { echo "Missing help-docs/examples.js" >&2; exit 1; }
+          test -f help-docs/styles.css || { echo "Missing help-docs/styles.css" >&2; exit 1; }
+          node --check help-docs/help-api.js
+          node --check help-docs/examples.js
+          # No secrets, no build step: pure static site.
+          if grep -RIn --exclude-dir=node_modules -E "BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|ghp_|github_pat_|xox[bap]-|AKIA[0-9A-Z]{16}" help-docs .github/workflows/pages.yml; then
+            echo "Potential secret in help-docs payload." >&2
+            exit 1
+          fi
+
+      - name: Configure Pages
+        uses: actions/configure-pages@44939d102c2d88b8ed4748b8d2618941d92ed9e28 # v5
+
+      - name: Upload help-docs artifact
+        uses: actions/upload-pages-artifact@7b4847ccafb5ad47d456cc9404c87febd2b6130 # v3
+        with:
+          path: help-docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164acdf34462f46a93a07783f43d06f917d # v4

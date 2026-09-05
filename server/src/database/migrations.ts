@@ -496,6 +496,25 @@ const migrations = [
       ALTER TABLE users ADD COLUMN IF NOT EXISTS member_background text;
     `,
   },
+  {
+    // Справочные страницы за кнопкой `?`: JSON спеки блоков (протокол v42).
+    // NULL — страница не задана, клиенты показывают выключенную по умолчанию.
+    id: "033_servers_help_page",
+    sql: `
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS help_page text NULL;
+    `,
+  },
+  {
+    // Гейт правил (протокол v43): принял ли участник справку через `help.accept`.
+    // Все начинают с false: при включении гейта правила принимает каждый заново,
+    // включая действующих участников. Строка членства создаётся заново и при
+    // повторном входе после выхода, поэтому принятие не переживает выход.
+    id: "034_help_acceptance",
+    sql: `
+      ALTER TABLE server_members ADD COLUMN IF NOT EXISTS help_accepted boolean NOT NULL DEFAULT false;
+      ALTER TABLE server_members ADD COLUMN IF NOT EXISTS help_accepted_at timestamptz;
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

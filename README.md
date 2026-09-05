@@ -157,6 +157,7 @@ pnpm build
 | [`docs/voice-livekit-v1.md`](docs/voice-livekit-v1.md) | voice chat v1 |
 | [`docs/voice-audio-processing.md`](docs/voice-audio-processing.md) | noise suppression and audio processing |
 | [`docs/screen-sharing.md`](docs/screen-sharing.md) | screen sharing |
+| [`docs/help-api.md`](docs/help-api.md) | Help Pages `api.*` builder reference (EN/RU/ZH) + Pages playground |
 
 ## Security and privacy
 
@@ -361,6 +362,7 @@ pnpm build
 | [`docs/voice-livekit-v1.md`](docs/voice-livekit-v1.md) | голосовой чат v1 |
 | [`docs/voice-audio-processing.md`](docs/voice-audio-processing.md) | шумоподавление и обработка звука |
 | [`docs/screen-sharing.md`](docs/screen-sharing.md) | демонстрация экрана |
+| [`docs/help-api.md`](docs/help-api.md) | справочник `api.*` страниц справки (EN/RU/ZH) + песочница на Pages |
 
 ## Безопасность и приватность
 
@@ -565,6 +567,7 @@ pnpm build
 | [`docs/voice-livekit-v1.md`](docs/voice-livekit-v1.md) | 语音聊天 v1 |
 | [`docs/voice-audio-processing.md`](docs/voice-audio-processing.md) | 降噪与音频处理 |
 | [`docs/screen-sharing.md`](docs/screen-sharing.md) | 屏幕共享 |
+| [`docs/help-api.md`](docs/help-api.md) | Help Pages `api.*` 构建器参考（EN/RU/ZH）+ Pages 试验场 |
 
 ## 安全与隐私
 
