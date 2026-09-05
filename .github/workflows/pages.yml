@@ -40,7 +40,7 @@ jobs:
           node --check help-docs/help-api.js
           node --check help-docs/examples.js
           # No secrets, no build step: pure static site.
-          if grep -RIn --exclude-dir=node_modules -E "BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|ghp_|github_pat_|xox[bap]-|AKIA[0-9A-Z]{16}" help-docs .github/workflows/pages.yml; then
+          if grep -RIn --exclude-dir=node_modules -E "BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|ghp_|github_pat_|xox[bap]-|AKIA[0-9A-Z]{16}" help-docs; then
             echo "Potential secret in help-docs payload." >&2
             exit 1
           fi
