@@ -104,13 +104,59 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px;
 }
-textarea#src {
-  width: 100%; min-height: 380px; resize: vertical;
-  background: var(--code); color: #e2e8f0;
-  border: 1px solid var(--border); border-radius: 12px;
-  padding: 12px; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+.kbd-hint {
+  margin-left: auto; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px;
 }
-textarea#src:focus { outline: 2px solid rgba(139, 92, 246, 0.5); border-color: rgba(139, 92, 246, 0.7); }
+
+/* Code editor: прозрачный textarea поверх подсвеченного <pre> с той же метрикой. */
+.code-editor {
+  display: flex; height: 460px; min-height: 300px;
+  background: var(--code); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden; resize: vertical;
+}
+.code-editor:focus-within { outline: 2px solid rgba(139, 92, 246, 0.5); border-color: rgba(139, 92, 246, 0.7); }
+.code-gutter {
+  flex: none; width: 46px; margin: 0; overflow: hidden;
+  padding: 12px 0; background: rgba(0, 0, 0, 0.25);
+  border-right: 1px solid var(--border);
+  font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #556274; text-align: right; user-select: none;
+}
+.code-gutter .ln { padding-right: 10px; }
+.code-gutter .ln.cur { color: #a5b4cf; }
+.code-gutter .ln.err { color: #fecaca; background: rgba(248, 113, 113, 0.16); box-shadow: inset 2px 0 0 var(--bad); }
+.code-shell { position: relative; flex: 1; min-width: 0; }
+.code-highlight, .code-shell textarea {
+  margin: 0; border: 0; tab-size: 2;
+  font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 12px 14px; white-space: pre; word-break: normal; overflow-wrap: normal;
+}
+.code-highlight { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: #c9d4e4; }
+.code-highlight code { display: block; font: inherit; }
+.code-shell textarea {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  background: transparent; color: transparent; caret-color: var(--text);
+  resize: none; outline: none; overflow: auto;
+}
+.code-shell textarea::selection { background: rgba(139, 92, 246, 0.35); color: transparent; }
+.code-shell textarea::-webkit-scrollbar { width: 10px; height: 10px; }
+.code-shell textarea::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 999px; }
+.code-shell textarea::-webkit-scrollbar-corner { background: transparent; }
+
+/* Токены подсветки (редактор, примеры и .sig) */
+.tok-c { color: #6b7a90; font-style: italic; }
+.tok-api { color: #c4b5fd; font-weight: 700; }
+.tok-method { color: #7dd3fc; }
+.tok-method.tok-unknown { color: #fbbf24; text-decoration: underline wavy rgba(251, 191, 36, 0.65); }
+.tok-str { color: #86efac; }
+.tok-str.tok-unterminated { text-decoration: underline wavy rgba(248, 113, 113, 0.65); }
+.tok-num { color: #fbbf24; }
+.tok-lit { color: #fda4af; font-weight: 600; }
+.tok-key { color: #93c5fd; }
+.tok-punct { color: #64748b; }
+.tok-plain { color: #e2e8f0; }
+
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .status { font-size: 13px; margin-top: 10px; min-height: 22px; }
 .status.ok { color: var(--good); }

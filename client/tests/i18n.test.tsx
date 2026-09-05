@@ -68,9 +68,9 @@ describe("i18n", () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
     const preferences = createDefaultState().preferences;
-    render(<SettingsDialog preferences={preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={onPreferences} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsDialog preferences={preferences} profile={null} open confirmReset={false} initialPage="language" onOpenChange={vi.fn()} onPreferences={onPreferences} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
     // Вне провайдера компоненты используют русский словарь по умолчанию.
-    expect(screen.getByText("Язык")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Язык" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "中文" }));
     expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({ language: "zh" }));
     await user.click(screen.getByRole("button", { name: "English" }));

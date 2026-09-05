@@ -3,6 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { createDefaultState } from "@/shared/state";
+import type { LocalProfile } from "@/shared/state";
+
+const testProfile: LocalProfile = {
+  id: "local-user",
+  username: "lina",
+  discriminator: "1234",
+  bio: "",
+  avatar: null,
+  banner: null,
+  memberBackground: null,
+  createdAt: "2026-08-07T00:00:00.000Z",
+};
 
 describe("SettingsDialog microphone test", () => {
   const stopTrack = vi.fn();
@@ -45,7 +57,7 @@ describe("SettingsDialog microphone test", () => {
   it("plays the selected microphone locally and releases it when stopped", async () => {
     const user = userEvent.setup();
     const preferences = createDefaultState().preferences;
-    render(<SettingsDialog preferences={preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsDialog preferences={preferences} profile={testProfile} open confirmReset={false} initialPage="voice" onOpenChange={vi.fn()} onPreferences={vi.fn()} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "Прослушать" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Микрофон воспроизводится");
@@ -63,7 +75,7 @@ describe("SettingsDialog microphone test", () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
     const preferences = createDefaultState().preferences;
-    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences, onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const props = { open: true, confirmReset: false, initialPage: "sensitivity" as const, profile: testProfile, onOpenChange: vi.fn(), onPreferences, onSaveProfile: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
     const view = render(<SettingsDialog preferences={preferences} {...props} />);
 
     await user.click(screen.getByRole("switch", { name: "Автоматическая чувствительность" }));
@@ -87,7 +99,7 @@ describe("SettingsDialog microphone test", () => {
       install: vi.fn(),
       onStateChange: vi.fn(() => () => undefined),
     };
-    render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsDialog preferences={createDefaultState().preferences} profile={testProfile} open confirmReset={false} initialPage="updates" onOpenChange={vi.fn()} onPreferences={vi.fn()} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Скачать обновление" }));
     expect(download).toHaveBeenCalledOnce();
     expect(screen.getByText(/0\.2\.0-beta\.1/u)).toBeInTheDocument();
@@ -96,7 +108,7 @@ describe("SettingsDialog microphone test", () => {
   it("shows the theme mode above the color schemes and saves both", async () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
-    render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={onPreferences} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsDialog preferences={createDefaultState().preferences} profile={testProfile} open confirmReset={false} initialPage="appearance" onOpenChange={vi.fn()} onPreferences={onPreferences} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
 
     const modeGroup = screen.getByRole("radiogroup", { name: "Тема" });
     expect(within(modeGroup).getAllByRole("radio")).toHaveLength(3);
@@ -113,7 +125,7 @@ describe("SettingsDialog microphone test", () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
     const preferences = createDefaultState().preferences;
-    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences, onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const props = { open: true, confirmReset: false, initialPage: "appearance" as const, profile: testProfile, onOpenChange: vi.fn(), onPreferences, onSaveProfile: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
     const view = render(<SettingsDialog preferences={preferences} {...props} />);
 
     // jsdom без matchMedia: системная тема считается тёмной, слайдер виден.
@@ -134,7 +146,7 @@ describe("SettingsDialog microphone test", () => {
     const user = userEvent.setup();
     const onPreferences = vi.fn();
     const preferences = createDefaultState().preferences;
-    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences, onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const props = { open: true, confirmReset: false, initialPage: "voice" as const, profile: testProfile, onOpenChange: vi.fn(), onPreferences, onSaveProfile: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
     const view = render(<SettingsDialog preferences={preferences} {...props} />);
 
     const toggle = screen.getByRole("switch", { name: "Шумоподавление микрофона (RNNoise)" });
@@ -149,7 +161,7 @@ describe("SettingsDialog microphone test", () => {
   it("requests the microphone with noise suppression disabled when the preference is off", async () => {
     const user = userEvent.setup();
     const preferences = { ...createDefaultState().preferences, noiseSuppression: false };
-    render(<SettingsDialog preferences={preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsDialog preferences={preferences} profile={testProfile} open confirmReset={false} initialPage="voice" onOpenChange={vi.fn()} onPreferences={vi.fn()} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "Прослушать" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Микрофон воспроизводится");
@@ -162,7 +174,7 @@ describe("SettingsDialog microphone test", () => {
   it("keeps the microphone test running while audio preferences change", async () => {
     const user = userEvent.setup();
     const preferences = createDefaultState().preferences;
-    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const props = { open: true, confirmReset: false, initialPage: "voice" as const, profile: testProfile, onOpenChange: vi.fn(), onPreferences: vi.fn(), onSaveProfile: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
     const view = render(<SettingsDialog preferences={preferences} {...props} />);
 
     await user.click(screen.getByRole("button", { name: "Прослушать" }));
@@ -186,7 +198,7 @@ describe("SettingsDialog microphone test", () => {
 
   it("shows the live level meter and threshold marker only in manual sensitivity mode", () => {
     const preferences = createDefaultState().preferences;
-    const props = { open: true, confirmReset: false, onOpenChange: vi.fn(), onPreferences: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
+    const props = { open: true, confirmReset: false, initialPage: "sensitivity" as const, profile: testProfile, onOpenChange: vi.fn(), onPreferences: vi.fn(), onSaveProfile: vi.fn(), onRequestReset: vi.fn(), onCancelReset: vi.fn(), onReset: vi.fn() };
     const view = render(<SettingsDialog preferences={preferences} {...props} />);
     expect(screen.queryByRole("meter", { name: "Уровень микрофона" })).not.toBeInTheDocument();
 
@@ -201,7 +213,7 @@ describe("SettingsDialog microphone test", () => {
     const user = userEvent.setup();
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     try {
-      render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+      render(<SettingsDialog preferences={createDefaultState().preferences} profile={testProfile} open confirmReset={false} initialPage="privacy" onOpenChange={vi.fn()} onPreferences={vi.fn()} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
       await user.click(await screen.findByRole("button", { name: "Скопировать публичный ключ" }));
       expect(writeText).toHaveBeenCalledWith("public-key");
       expect(await screen.findByText("Скопировано")).toBeInTheDocument();
@@ -213,7 +225,7 @@ describe("SettingsDialog microphone test", () => {
   it("shows the tag discriminator and reports a new one after the identity reset", async () => {
     const user = userEvent.setup();
     const onIdentityReset = vi.fn();
-    render(<SettingsDialog preferences={createDefaultState().preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} onIdentityReset={onIdentityReset} />);
+    render(<SettingsDialog preferences={createDefaultState().preferences} profile={testProfile} open confirmReset={false} initialPage="privacy" onOpenChange={vi.fn()} onPreferences={vi.fn()} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} onIdentityReset={onIdentityReset} />);
 
     expect(await screen.findByText("#1234")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Сменить ключи" }));
@@ -248,7 +260,7 @@ describe("SettingsDialog global keybinds", () => {
   });
 
   function renderDialog(preferences = createDefaultState().preferences, onPreferences = vi.fn()) {
-    render(<SettingsDialog preferences={preferences} open confirmReset={false} onOpenChange={vi.fn()} onPreferences={onPreferences} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsDialog preferences={preferences} profile={testProfile} open confirmReset={false} initialPage="keybinds" onOpenChange={vi.fn()} onPreferences={onPreferences} onSaveProfile={vi.fn()} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
     return onPreferences;
   }
 
@@ -325,9 +337,76 @@ describe("SettingsDialog global keybinds", () => {
   });
 
   it("renders both action rows in the default dialog", () => {
-    // Санити: обе строки присутствуют в дефолтном диалоге.
+    // Санити: обе строки присутствуют на странице биндов.
     renderDialog();
     expect(screen.getByTestId("keybind-row-mute")).toBeInTheDocument();
     expect(screen.getByTestId("keybind-row-deafen")).toBeInTheDocument();
+  });
+});
+
+describe("SettingsDialog pages", () => {
+  beforeEach(() => {
+    window.openCord = {
+      identity: {
+        getOrCreate: vi.fn(async () => ({ publicKey: "public-key", fingerprint: "fingerprint", discriminator: "1234" })),
+        signChallenge: vi.fn(async () => "signature"),
+        reset: vi.fn(async () => ({ publicKey: "new-public-key", fingerprint: "new-fingerprint", discriminator: "9999" })),
+      },
+    } as unknown as NonNullable<typeof window.openCord>;
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    delete window.openCord;
+  });
+
+  function renderDialog(page?: "account" | "appearance" | "language" | "notifications" | "voice" | "sensitivity" | "keybinds" | "updates" | "privacy" | "reset", profile: LocalProfile | null = testProfile) {
+    const onSaveProfile = vi.fn();
+    render(<SettingsDialog preferences={createDefaultState().preferences} profile={profile} open confirmReset={false} initialPage={page} onOpenChange={vi.fn()} onPreferences={vi.fn()} onSaveProfile={onSaveProfile} onRequestReset={vi.fn()} onCancelReset={vi.fn()} onReset={vi.fn()} />);
+    return { onSaveProfile };
+  }
+
+  it("opens the account page by default and switches pages from the sidebar", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    expect(screen.getByRole("heading", { name: "Моя учётная запись" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Прослушать" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Голос" }));
+    expect(screen.getByRole("heading", { name: "Голос" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Прослушать" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Моя учётная запись" })).not.toBeInTheDocument();
+  });
+
+  it("hides the account page without a local profile", () => {
+    renderDialog(undefined, null);
+
+    expect(screen.getByRole("heading", { name: "Интерфейс" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Моя учётная запись" })).not.toBeInTheDocument();
+  });
+
+  it("filters the sidebar with search and reports no matches", async () => {
+    const user = userEvent.setup();
+    renderDialog("appearance");
+
+    const search = screen.getByRole("textbox", { name: "Поиск по настройкам" });
+    await user.type(search, "голос");
+    expect(screen.getByRole("button", { name: "Голос" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Язык" })).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "zzz-no-such-setting");
+    expect(screen.getByText("Ничего не найдено")).toBeInTheDocument();
+  });
+
+  it("saves the profile from the embedded account page", async () => {
+    const user = userEvent.setup();
+    const { onSaveProfile } = renderDialog("account");
+
+    await user.click(screen.getByRole("button", { name: "Сохранить профиль" }));
+    expect(onSaveProfile).toHaveBeenCalledWith(expect.objectContaining({ username: "lina" }));
+    expect(await screen.findByText("Профиль сохранён")).toBeInTheDocument();
   });
 });

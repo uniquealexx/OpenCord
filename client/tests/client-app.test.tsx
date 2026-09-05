@@ -1142,7 +1142,7 @@ describe("ClientApp", () => {
     await screen.findByRole("heading", { name: "Главный экран" });
 
     await user.click(screen.getByRole("button", { name: "Настроить профиль" }));
-    expect(await screen.findByRole("heading", { name: "Публичный профиль" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Моя учётная запись" })).toBeInTheDocument();
   });
 
   it("renders a mention as a highlighted chip that opens the profile preview", async () => {

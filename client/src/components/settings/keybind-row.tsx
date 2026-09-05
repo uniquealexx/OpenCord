@@ -190,7 +190,7 @@ export function KeybindRow({ action, title, hint, icon: Icon, bind, conflict, on
               <X className="size-4" />
             </Button>
           )}
-          <Button variant={capturing ? "danger" : "secondary"} size="sm" onClick={toggleCapture}>
+          <Button variant={capturing ? "danger" : "secondary"} size="sm" className="min-w-28 justify-center" onClick={toggleCapture}>
             {!capturing && <Pencil className="size-3.5" />}
             {capturing ? t.settings.keybindCancel : t.settings.keybindBindAction}
           </Button>

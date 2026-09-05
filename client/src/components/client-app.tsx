@@ -23,7 +23,7 @@ import { ServerPreviewDialog } from "@/components/server-preview-dialog";
 import { ServerSettingsPage } from "@/components/server-settings-page";
 import { ServerSearchPanel } from "@/components/server-search-panel";
 import { ScreenShareDialog, ScreenShareSurface, screenShareResolutionLabel } from "@/components/screen-share-dialog";
-import { SettingsDialog } from "@/components/settings-dialog";
+import { SettingsDialog, type SettingsPageId } from "@/components/settings-dialog";
 import { MobileSettingsScreen } from "@/mobile/screens/settings-screen";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
@@ -111,6 +111,7 @@ export function ClientApp(): React.ReactElement {
   const [state, setState] = useState<PersistedClientState | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<SettingsPageId | null>(null);
   const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [replyingToId, setReplyingToId] = useState<string | null>(null);
@@ -1497,8 +1498,8 @@ export function ClientApp(): React.ReactElement {
       onBulkSlowmode={() => setModal("channel-slowmode")}
       onSelectChannel={selectChannel}
       onServerMenu={() => setModal("leave")}
-      onProfile={() => setModal("profile")}
-      onSettings={() => setModal("settings")}
+      onProfile={() => { setSettingsPage("account"); setModal("settings"); }}
+      onSettings={() => { setSettingsPage(null); setModal("settings"); }}
       onJoinVoice={joinVoiceChannel}
       onLeaveVoice={leaveVoiceChannel}
       onMuted={(value) => {
@@ -1750,7 +1751,7 @@ export function ClientApp(): React.ReactElement {
           )}
         </>
       ) : (
-        <HomeScreen showCreate={!mobile} serverCount={state.servers.length} profile={state.profile} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} onProfile={() => setModal("profile")} onSettings={() => setModal("settings")} />
+        <HomeScreen showCreate={!mobile} serverCount={state.servers.length} profile={state.profile} onCreate={() => setModal("create")} onConnect={() => setModal("connect")} onProfile={() => { setSettingsPage("account"); setModal("settings"); }} onSettings={() => { setSettingsPage(null); setModal("settings"); }} />
       )}
       {notice && (
         <div role="status" className="glass absolute bottom-5 left-1/2 z-40 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl px-4 py-2.5 text-center text-xs font-medium text-slate-200 shadow-xl">
@@ -1781,13 +1782,16 @@ export function ClientApp(): React.ReactElement {
       ) : (
         <SettingsDialog
           preferences={state.preferences}
+          profile={state.profile}
           open
           confirmReset={confirmReset}
+          initialPage={settingsPage ?? undefined}
           onOpenChange={(open) => {
             setModal(open ? "settings" : null);
             if (!open) setConfirmReset(false);
           }}
           onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))}
+          onSaveProfile={saveProfile}
           onRequestReset={() => setConfirmReset(true)}
           onCancelReset={() => setConfirmReset(false)}
           onReset={() => void reset()}

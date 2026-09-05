@@ -53,7 +53,7 @@
       <p class="only-en">One <code class="inline">api.*</code> call per line. <code class="inline">//</code> comments and blank lines are ignored. Anything else (loops, variables, real JS) is rejected — this keeps the editor CSP-safe and every error points at a line number. <code class="inline">api.gate("rules")</code> turns on the rules gate: newcomers see that page on join and cannot write until they accept.</p>
       <p class="only-ru">Один вызов <code class="inline">api.*</code> на строку. Комментарии <code class="inline">//</code> и пустые строки игнорируются. Всё остальное (циклы, переменные, настоящий JS) отклоняется — так редактор остаётся CSP-безопасным, а каждая ошибка указывает на номер строки. <code class="inline">api.gate("rules")</code> включает гейт правил: новички видят эту страницу при входе и не могут писать, пока не примут.</p>
       <p class="only-zh">每行一个 <code class="inline">api.*</code> 调用。<code class="inline">//</code> 注释和空行会被忽略。其他写法（循环、变量、真正的 JS）都会被拒绝——这样编辑器保持 CSP 安全，每个报错都会指出行号。<code class="inline">api.gate("rules")</code> 开启规则门禁：新成员进入时只看到该页面，接受之前不能发言。</p>
-<pre><span class="c">// Rules + FAQ behind the ? button.</span>
+<pre class="code-sample"><span class="c">// Rules + FAQ behind the ? button.</span>
 api.page("rules", "Rules");
 api.text("Server rules", { size: "lg", weight: "bold", align: "center" });
 api.text("1. No spam or flooding the chat.");
@@ -194,8 +194,15 @@ api.button("Back to rules", { toPage: "rules" });</pre>
               <option value="onboarding">Onboarding</option>
               <option value="voiceGuide">Voice guide</option>
             </select>
+            <span class="kbd-hint">Tab = indent · Ctrl+Enter = Run</span>
           </div>
-          <textarea id="src" spellcheck="false" rows="20"></textarea>
+          <div class="code-editor" id="editor">
+            <pre class="code-gutter" id="gutter" aria-hidden="true"></pre>
+            <div class="code-shell">
+              <pre class="code-highlight" aria-hidden="true"><code id="highlight"></code></pre>
+              <textarea id="src" spellcheck="false" wrap="off" aria-label="Help script editor, one api.* call per line"></textarea>
+            </div>
+          </div>
           <div class="row">
             <button class="btn btn-primary" id="run" type="button">Run ▶</button>
             <button class="btn" id="reset" type="button">Reset example</button>
@@ -248,6 +255,7 @@ api.button("Back to rules", { toPage: "rules" });</pre>
 
   <script src="./help-api.js"></script>
   <script src="./examples.js"></script>
+  <script src="./editor.js"></script>
   <script>
     (function () {
       var body = document.body;
@@ -278,6 +286,7 @@ api.button("Back to rules", { toPage: "rules" });</pre>
       var status = document.getElementById("status");
       var meta = document.getElementById("meta");
       var preview = document.getElementById("preview");
+      var helpEditor = window.OpenCordHelpEditor.create({ root: "editor", onRun: function () { run(); } });
       var viewer = "pending";
       var lastSpec = null;
 
@@ -309,6 +318,7 @@ api.button("Back to rules", { toPage: "rules" });</pre>
       function loadExample(id) {
         if (window.HELP_EXAMPLES && window.HELP_EXAMPLES[id]) {
           src.value = window.HELP_EXAMPLES[id].source;
+          helpEditor.render();
         }
       }
       loadExample("rulesFaq");
@@ -321,12 +331,15 @@ api.button("Back to rules", { toPage: "rules" });</pre>
         var text = src.value;
         var res = window.OpenCordHelp.parseHelpSource(text);
         if (!res.ok) {
+          var lm = /^line (\d+)/.exec(res.error);
+          helpEditor.setErrorLine(lm ? Number(lm[1]) : 0);
           status.className = "status err";
           status.textContent = "✖ " + res.error;
           meta.textContent = "chars: " + text.length + " / 20000";
           preview.innerHTML = '<p class="hlp-empty">Fix the error above, then Run again.</p>';
           return;
         }
+        helpEditor.setErrorLine(0);
         status.className = "status ok";
         var pages = res.spec.pages.length;
         var blocks = 0;
