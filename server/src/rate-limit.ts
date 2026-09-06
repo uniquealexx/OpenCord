@@ -27,6 +27,14 @@ interface Bucket {
   updatedAt: number;
 }
 
+/** Pre-authentication WebSocket hardening tunables. */
+export const WS_CONNECT_BURST = 5;
+export const WS_CONNECT_REFILL_MS = 1_000;
+export const WS_AUTH_FAILURE_BURST = 5;
+export const WS_AUTH_FAILURE_REFILL_MS = 30_000;
+export const WS_MAX_CONNECTIONS = 5_000;
+export const WS_HANDSHAKE_TIMEOUT_MS = 90_000;
+
 export function createFloodLimiter(options: FloodLimiterOptions): FloodLimiter {
   const { capacity, refillIntervalMs } = options;
   const pruneThreshold = options.pruneThreshold ?? 1_000;

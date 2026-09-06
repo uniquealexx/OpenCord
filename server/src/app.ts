@@ -11,18 +11,22 @@ import { runMigrations } from "./database/migrations";
 import { ChatRepository, messageForViewer, permissionsForRole } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, type AttachmentStorage } from "./attachments/storage";
-import { createFloodLimiter } from "./rate-limit";
+import { createFloodLimiter, WS_AUTH_FAILURE_BURST, WS_AUTH_FAILURE_REFILL_MS, WS_CONNECT_BURST, WS_CONNECT_REFILL_MS, WS_HANDSHAKE_TIMEOUT_MS, WS_MAX_CONNECTIONS } from "./rate-limit";
+import { getClientIp } from "./ip";
 import { DisabledVoiceService, VOICE_MUTE_VERIFY_DELAY_MS, VoiceRoomFullError, VoiceUnavailableError, type VoiceLookups, type VoiceService } from "./voice";
 import type { ServerBuildInfo } from "./build-info";
 
 interface ConnectionState {
   socket: WebSocket;
+  clientIp: string;
   challenge: string;
   challengeRequestId: string;
   challengeExpiresAt: number;
   userId: string | null;
   sessionToken: string | null;
   presenceStatus: UserStatus | null;
+  failedAuthAttempts: number;
+  handshakeTimer: NodeJS.Timeout | null;
 }
 
 export interface BuildAppOptions {
@@ -78,6 +82,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   // Отдельный ограничитель: вход в голосовой канал стоит дороже сообщения (обращения
   // к LiveKit и рассылка всем), но и случается несопоставимо реже.
   const voiceJoinLimiter = createFloodLimiter({ capacity: VOICE_JOIN_BURST, refillIntervalMs: VOICE_JOIN_REFILL_MS });
+  // Ограничители до аутентификации: новые WebSocket-подключения и неудачные попытки auth.respond.
+  const wsConnectLimiter = createFloodLimiter({ capacity: WS_CONNECT_BURST, refillIntervalMs: WS_CONNECT_REFILL_MS });
+  const authFailureLimiter = createFloodLimiter({ capacity: WS_AUTH_FAILURE_BURST, refillIntervalMs: WS_AUTH_FAILURE_REFILL_MS });
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 2_100_000 });
   const voiceReconcileTimer = setInterval(() => { void reconcileVoicePresence(); }, 30_000);
   voiceReconcileTimer.unref();
@@ -151,11 +158,31 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.type(attachment.mimeType).send(attachmentStorage.open(attachment.storageKey));
   });
 
-  app.get("/ws", { websocket: true }, (socket) => {
+  app.get("/ws", { websocket: true }, (socket, request) => {
+    const peerIp = request.socket.remoteAddress ?? "127.0.0.1";
+    const clientIp = getClientIp(peerIp, request.headers["x-forwarded-for"]);
+
+    if (connections.size >= WS_MAX_CONNECTIONS) {
+      app.log.warn(`Достигнут глобальный лимит WebSocket-соединений (${WS_MAX_CONNECTIONS}); новое соединение отклонено`);
+      socket.close(1008, "Policy violation");
+      return;
+    }
+
+    const connectLimit = wsConnectLimiter.consume(clientIp);
+    if (!connectLimit.allowed) {
+      socket.close(1008, "Policy violation");
+      return;
+    }
+
     const challenge = randomBytes(32).toString("base64");
     const requestId = randomUUID();
     const expiresAt = Date.now() + 60_000;
-    const state: ConnectionState = { socket, challenge, challengeRequestId: requestId, challengeExpiresAt: expiresAt, userId: null, sessionToken: null, presenceStatus: null };
+    const state: ConnectionState = { socket, clientIp, challenge, challengeRequestId: requestId, challengeExpiresAt: expiresAt, userId: null, sessionToken: null, presenceStatus: null, failedAuthAttempts: 0, handshakeTimer: null };
+    const handshakeTimer = setTimeout(() => {
+      if (!state.userId) socket.close(1008, "Policy violation");
+    }, WS_HANDSHAKE_TIMEOUT_MS);
+    handshakeTimer.unref();
+    state.handshakeTimer = handshakeTimer;
     connections.add(state);
     send(socket, { type: "auth.challenge", requestId, protocolVersion: PROTOCOL_VERSION, challenge, expiresAt: new Date(expiresAt).toISOString() });
 
@@ -168,6 +195,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
     socket.on("close", () => {
       connections.delete(state);
+      if (state.handshakeTimer) { clearTimeout(state.handshakeTimer); state.handshakeTimer = null; }
       if (state.sessionToken) sessions.delete(state.sessionToken);
       if (!state.userId) return;
       void broadcastMember(state.userId, publicUserStatuses().get(state.userId) ?? "offline");
@@ -537,10 +565,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   }
 
   async function authenticate(connection: ConnectionState, event: Extract<ClientEvent, { type: "auth.respond" }>): Promise<void> {
-    if (event.protocolVersion !== PROTOCOL_VERSION) return sendError(connection.socket, event.requestId, "PROTOCOL_MISMATCH", "Версия протокола не поддерживается");
+    const fail = (code: Extract<ServerEvent, { type: "error" }>["code"], message: string): void => {
+      connection.failedAuthAttempts += 1;
+      const ipLimit = authFailureLimiter.consume(connection.clientIp);
+      sendError(connection.socket, event.requestId, code, message);
+      if (connection.failedAuthAttempts >= WS_AUTH_FAILURE_BURST || !ipLimit.allowed) connection.socket.close(1008, "Policy violation");
+    };
+
+    if (event.protocolVersion !== PROTOCOL_VERSION) return fail("PROTOCOL_MISMATCH", "Версия протокола не поддерживается");
     if (event.requestId !== connection.challengeRequestId || Date.now() > connection.challengeExpiresAt || !verifyChallenge(event.publicKey, connection.challenge, event.signature)) {
-      return sendError(connection.socket, event.requestId, "AUTH_FAILED", "Не удалось подтвердить владение ключом");
+      return fail("AUTH_FAILED", "Не удалось подтвердить владение ключом");
     }
+    authFailureLimiter.forget(connection.clientIp);
+    connection.failedAuthAttempts = 0;
+    if (connection.handshakeTimer) { clearTimeout(connection.handshakeTimer); connection.handshakeTimer = null; }
     const userId = userIdFromPublicKey(event.publicKey);
     await runRetentionCleanup();
     const activeBan = await repository.findActiveBan(userId);
