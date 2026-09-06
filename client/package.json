@@ -48,7 +48,7 @@
     "react-dom": "latest",
     "ssh2": "1.17.0",
     "tailwind-merge": "latest",
-    "tar": "7.5.20",
+    "tar": "^7.5.22",
     "uiohook-napi": "^1.5.5",
     "zod": "latest"
   },
