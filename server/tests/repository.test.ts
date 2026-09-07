@@ -201,18 +201,37 @@ describe("ChatRepository", () => {
     await repository.createAttachment(fileId, "user-1", randomUUID(), "отчёт.pdf", "application/pdf", 30, "c".repeat(64));
     await repository.createMessage(randomUUID(), channel.id, "user-1", "", [fileId]);
 
-    const images = await repository.searchMessages({ query: "галактика", authorId: null, channelId: null, contentTypes: ["image"], offset: 0, limit: 25 });
+    const images = await repository.searchMessages({ query: "галактика", authorId: null, channelId: null, contentTypes: ["image"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(images).toMatchObject({ total: 1, offset: 0, hasMore: false });
     expect(images.messages[0]?.attachments[0]?.fileName).toBe("галактика.png");
 
-    const authoredTextAndVideo = await repository.searchMessages({ query: "кос", authorId: "user-1", channelId: null, contentTypes: ["text", "video"], offset: 0, limit: 1 });
+    const authoredTextAndVideo = await repository.searchMessages({ query: "кос", authorId: "user-1", channelId: null, contentTypes: ["text", "video"], pinnedOnly: false, offset: 0, limit: 1 });
     expect(authoredTextAndVideo.total).toBe(2);
     expect(authoredTextAndVideo.messages).toHaveLength(1);
     expect(authoredTextAndVideo.hasMore).toBe(true);
 
-    const filesInChannel = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: ["file"], offset: 0, limit: 25 });
+    const filesInChannel = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: ["file"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(filesInChannel.messages).toHaveLength(1);
     expect(filesInChannel.messages[0]?.attachments[0]?.fileName).toBe("отчёт.pdf");
+  });
+
+  it("pins channel messages and lists them with pinnedAt", async () => {
+    const server = await repository.getServer();
+    const channel = server.channels.find((item) => item.kind === "text")!;
+    await repository.upsertUser("user-1", "public-key-1", { username: "lina", discriminator: "1234", avatar: null });
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    await repository.createMessage(firstId, channel.id, "user-1", "Первое сообщение");
+    await repository.createMessage(secondId, channel.id, "user-1", "Второе сообщение");
+    expect(await repository.setMessagePinned(firstId, true)).toMatchObject({ id: firstId, pinned: true });
+    expect(await repository.setMessagePinned(randomUUID(), true)).toBeNull();
+    const pinned = await repository.listPinnedMessages(channel.id, 25, "user-1");
+    expect(pinned.map((message) => message.id)).toEqual([firstId]);
+    expect(pinned[0]?.pinnedAt).toEqual(expect.any(String));
+    const search = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: [], pinnedOnly: true, offset: 0, limit: 25 });
+    expect(search.messages.map((message) => message.id)).toEqual([firstId]);
+    expect(await repository.setMessagePinned(firstId, false)).toMatchObject({ id: firstId, pinned: false, pinnedAt: null });
+    expect(await repository.listPinnedMessages(channel.id, 25, "user-1")).toEqual([]);
   });
 
   it("updates channels and deletes their message history", async () => {
@@ -479,7 +498,7 @@ describe("ChatRepository", () => {
     expect(updated?.message.mentions).toEqual([{ userId: "author" }]);
     expect((await repository.getHistory(channel.id, 50, "author"))[0]?.mentions).toEqual([{ userId: "author" }]);
 
-    const search = await repository.searchMessages({ query: "Привет", authorId: "author", channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
+    const search = await repository.searchMessages({ query: "Привет", authorId: "author", channelId: null, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(search.messages[0]?.mentions).toEqual([{ userId: "author" }]);
   });
 
@@ -509,7 +528,7 @@ describe("ChatRepository", () => {
     expect(removed).toEqual([{ emoji: "👍", userIds: ["reactor"] }, { emoji: "❤️", userIds: ["reactor"] }]);
     expect((await repository.getHistory(channel.id, 50, "author"))[0]?.reactions).toEqual(removed);
 
-    const search = await repository.searchMessages({ query: "реакций", authorId: "author", channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
+    const search = await repository.searchMessages({ query: "реакций", authorId: "author", channelId: null, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(search.messages[0]?.reactions).toEqual(removed);
 
     expect(await repository.toggleReaction(randomUUID(), "author", "👍")).toBeNull();
@@ -543,7 +562,7 @@ describe("ChatRepository", () => {
 
     expect(await repository.getHistory(channel.id, 50, "outsider")).toEqual([]);
 
-    const search = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: ["text"], offset: 0, limit: 25 });
+    const search = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(search.messages.map((message) => message.id)).not.toContain(pm!.id);
     expect(search.messages.map((message) => message.id)).not.toContain(apm!.id);
   });

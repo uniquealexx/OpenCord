@@ -1,15 +1,25 @@
-import { isReactionEmoji, stripBidiControls, NAME_FONT_VALUES, PROFILE_RETENTION_DAYS, parseServerHelpPage, publicKeyFingerprint, type Attachment, type BanDurationMinutes, type BannedMember, type Channel, type ChatMessage, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type PublicMemberStatus, type PublicProfile, type ServerHelp, type ServerSettings } from "@opencord/shared";
+import { isReactionEmoji, stripBidiControls, NAME_FONT_VALUES, PROFILE_RETENTION_DAYS, parseServerHelpPage, publicKeyFingerprint, resolveChannelPermissions, AUDIT_LOG_MAX_ENTRIES, DEFAULT_WELCOME_MESSAGE, auditActionSchema, type Attachment, type AuditAction, type AuditEntry, type BanDurationMinutes, type BannedMember, type Channel, type ChannelOverwrite, type ChatMessage, type CustomRole, type Member, type MemberRole, type MessageReaction, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type PublicMemberStatus, type PublicProfile, type ServerHelp, type ServerSettings } from "@opencord/shared";
 import type { Database, QueryRow } from "./database";
 import { DEFAULT_SERVER_ID } from "./migrations";
 
-interface ServerRow extends QueryRow { id: string; name: string; description: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number; help_page: string | null }
+interface ServerRow extends QueryRow { id: string; name: string; description: string; avatar: string | null; banner: string | null; max_attachment_bytes: number | string | null; screen_share_max_resolution: number; screen_share_max_frame_rate: number; help_page: string | null; welcome_channel_id: string | null; welcome_message: string | null }
 interface ChannelRow extends QueryRow { id: string; name: string; kind: "text" | "voice"; description: string; participant_limit: number | null; slowmode_seconds?: number | null }
 interface UserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; member_background: string | null; custom_status: string; custom_status_emoji: string | null; accent_color: string | null; name_glow: string | null; name_font: string | null; role: MemberRole; chat_muted: boolean; chat_muted_until: Date | string | null; help_accepted: boolean }
 interface BannedUserRow extends QueryRow { id: string; username: string | null; discriminator: string | null; public_key: string; bio: string; avatar: string | null; banner: string | null; banned_at: Date | string; banned_by: string; expires_at: Date | string | null }
-interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null }
+interface MessageRow extends QueryRow { id: string; channel_id: string; author_id: string; author_name: string; author_avatar: string | null; content: string; created_at: Date | string; edited_at: Date | string | null; kind: "chat" | "pm" | "apm"; target_user_id: string | null; anonymous: boolean; reply_to_message_id: string | null; pinned: boolean; pinned_at: Date | string | null }
 interface MentionRow extends QueryRow { message_id: string; user_id: string }
 interface ReactionRow extends QueryRow { message_id: string; user_id: string; emoji: string }
 interface AttachmentRow extends QueryRow { id: string; storage_key: string; original_name: string; mime_type: string; size_bytes: number; sha256: string; message_id?: string }
+interface RoleRow extends QueryRow { id: string; name: string; color: string | null; position: number; permissions: string[] | string | null }
+interface OverwriteRow extends QueryRow { channel_id: string; role_id: string; allow: string[] | string | null; deny: string[] | string | null }
+interface AuditRow extends QueryRow { id: string; at: Date | string; actor_id: string; action: string; target_id: string | null; detail: string | null }
+
+/** Сиды legacy-ролей (миграция 036): повторяют поведение до кастомных ролей. */
+export const SEEDED_ADMINISTRATOR_ROLE_ID = "00000000-0000-4000-8000-00000000a001" as const;
+export const SEEDED_MEMBER_ROLE_ID = "00000000-0000-4000-8000-00000000a002" as const;
+/** Топ владельца — вне таблицы, выше любой кастомной позиции. */
+export const OWNER_TOP_POSITION = 10_000 as const;
+export const ALL_PERMISSIONS: Permission[] = ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 interface MessageUpdateRow extends MessageRow { removed_storage_keys: string[] | null }
 
@@ -43,10 +53,10 @@ export class ChatRepository {
   }
 
   async getServer(): Promise<{ id: string; avatar: string | null; banner: string | null; channels: Channel[] } & ServerSettings> {
-    const [server] = await this.database.query<ServerRow>("SELECT id, name, description, avatar, banner, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate, help_page FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
+    const [server] = await this.database.query<ServerRow>("SELECT id, name, description, avatar, banner, max_attachment_bytes, screen_share_max_resolution, screen_share_max_frame_rate, help_page, welcome_channel_id, welcome_message FROM servers WHERE id = $1", [DEFAULT_SERVER_ID]);
     if (!server) throw new Error("Default server is missing");
     const channels = await this.database.query<ChannelRow>("SELECT id, name, kind, description, participant_limit, slowmode_seconds FROM channels WHERE server_id = $1 ORDER BY position, name", [server.id]);
-    return { id: server.id, name: server.name, description: server.description, avatar: server.avatar, banner: server.banner, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], helpPage: parseServerHelpPage(server.help_page), channels: channels.map(mapChannel) };
+    return { id: server.id, name: server.name, description: server.description, avatar: server.avatar, banner: server.banner, maxAttachmentBytes: server.max_attachment_bytes === null ? null : Number(server.max_attachment_bytes), screenShareMaxResolution: server.screen_share_max_resolution as ServerSettings["screenShareMaxResolution"], screenShareMaxFrameRate: server.screen_share_max_frame_rate as ServerSettings["screenShareMaxFrameRate"], helpPage: parseServerHelpPage(server.help_page), welcomeChannelId: server.welcome_channel_id ?? null, welcomeMessage: server.welcome_message ?? DEFAULT_WELCOME_MESSAGE, channels: channels.map(mapChannel) };
   }
 
   async updateServerAvatar(avatar: string | null): Promise<void> {
@@ -118,6 +128,8 @@ export class ChatRepository {
       "DELETE FROM channels WHERE id = $1 AND server_id = $2 RETURNING id",
       [channelId, DEFAULT_SERVER_ID],
     );
+    // Удаление welcome-канала молча выключает приветствие (дублирует FK SET NULL).
+    if (rows.length > 0) await this.database.query("UPDATE servers SET welcome_channel_id = NULL WHERE id = $1 AND welcome_channel_id = $2", [DEFAULT_SERVER_ID, channelId]);
     return rows.length > 0;
   }
 
@@ -196,6 +208,7 @@ export class ChatRepository {
     const role = await this.getOptionalMemberRole(userId);
     if (!role) return null;
     if (role !== "owner") {
+      await this.database.query("DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
       await this.database.query(
         `WITH removed AS (
            DELETE FROM server_members WHERE server_id = $1 AND user_id = $2 RETURNING user_id
@@ -237,10 +250,12 @@ export class ChatRepository {
          DELETE FROM server_members WHERE server_id = $1 AND user_id = $2
          AND EXISTS (SELECT 1 FROM departed) RETURNING user_id
        )
-       SELECT user_id FROM banned`,
+        SELECT user_id FROM banned`,
       [DEFAULT_SERVER_ID, userId, bannedBy, durationMinutes, PROFILE_RETENTION_DAYS],
     );
-    return rows.length > 0;
+    if (rows.length === 0) return false;
+    await this.database.query("DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    return true;
   }
 
   async unbanMember(userId: string): Promise<boolean> {
@@ -299,14 +314,25 @@ export class ChatRepository {
     const [existingOwner] = await this.database.query<{ user_id: string }>("SELECT user_id FROM server_members WHERE server_id = $1 AND role = 'owner'", [DEFAULT_SERVER_ID]);
     const mayBecomeOwner = (!existingOwner || existingOwner.user_id === userId)
       && (publicKey === bootstrapOwnerPublicKey || (allowFirstUserOwner && !existingOwner));
-    await this.database.query(
+    const inserted = await this.database.query<{ user_id: string }>(
       `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, $3)
        ON CONFLICT (server_id, user_id) DO UPDATE SET role = EXCLUDED.role
-       WHERE server_members.role <> 'owner' AND EXCLUDED.role = 'owner'`,
+       WHERE server_members.role <> 'owner' AND EXCLUDED.role = 'owner'
+       RETURNING user_id`,
       [DEFAULT_SERVER_ID, userId, mayBecomeOwner ? "owner" : "member"],
     );
+    // Новая строка членства получает сид member-роли; владелец — вне таблицы ролей.
+    if (inserted.length > 0 && !mayBecomeOwner) {
+      await this.database.query(
+        "INSERT INTO member_roles (server_id, user_id, role_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        [DEFAULT_SERVER_ID, userId, SEEDED_MEMBER_ROLE_ID],
+      );
+    }
     await this.database.query("DELETE FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
-    return this.getMemberRole(userId);
+    const role = await this.getMemberRole(userId);
+    // Владелец не хранит назначений: зачищаем возможные остатки, чтобы инвариант держался.
+    if (role === "owner") await this.database.query("DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    return role;
   }
 
   async getMemberRole(userId: string): Promise<MemberRole> {
@@ -325,7 +351,228 @@ export class ChatRepository {
     if (!current) return "not_found";
     if (current.role === "owner") return "owner";
     await this.database.query("UPDATE server_members SET role = $3 WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId, role]);
+    // Legacy-поле остаётся источником для старых клиентов: синхронизируем сид-роли.
+    await this.database.query("DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2 AND role_id IN ($3, $4)", [DEFAULT_SERVER_ID, userId, SEEDED_ADMINISTRATOR_ROLE_ID, SEEDED_MEMBER_ROLE_ID]);
+    await this.database.query("INSERT INTO member_roles (server_id, user_id, role_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [
+      DEFAULT_SERVER_ID, userId, role === "administrator" ? SEEDED_ADMINISTRATOR_ROLE_ID : SEEDED_MEMBER_ROLE_ID,
+    ]);
     return "updated";
+  }
+
+  /**
+   * Кастомные роли (протокол v48). Владелец — вне таблицы и обрабатывается
+   * вызывающим кодом: здесь только CRUD строк и назначений.
+   */
+  async listRoles(): Promise<CustomRole[]> {
+    const rows = await this.database.query<RoleRow>(
+      "SELECT id, name, color, position, permissions FROM server_roles WHERE server_id = $1 ORDER BY position DESC, name",
+      [DEFAULT_SERVER_ID],
+    );
+    return rows.map(mapRole);
+  }
+
+  async getRole(roleId: string): Promise<CustomRole | null> {
+    const [row] = await this.database.query<RoleRow>("SELECT id, name, color, position, permissions FROM server_roles WHERE server_id = $1 AND id = $2", [DEFAULT_SERVER_ID, roleId]);
+    return row ? mapRole(row) : null;
+  }
+
+  async createRole(id: string, name: string, color: string | null, position: number, permissions: Permission[]): Promise<CustomRole> {
+    const rows = await this.database.query<RoleRow>(
+      "INSERT INTO server_roles (id, server_id, name, color, position, permissions) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, color, position, permissions",
+      [id, DEFAULT_SERVER_ID, name, color, position, [...new Set(permissions)]],
+    );
+    return mapRole(required(rows[0], "Created role is missing"));
+  }
+
+  async updateRole(roleId: string, patch: { name?: string; color?: string | null; position?: number; permissions?: Permission[] }): Promise<CustomRole | null> {
+    const current = await this.getRole(roleId);
+    if (!current) return null;
+    const next = {
+      name: patch.name ?? current.name,
+      color: patch.color === undefined ? current.color : patch.color,
+      position: patch.position ?? current.position,
+      permissions: patch.permissions === undefined ? current.permissions : [...new Set(patch.permissions)],
+    };
+    const rows = await this.database.query<RoleRow>(
+      "UPDATE server_roles SET name = $3, color = $4, position = $5, permissions = $6 WHERE server_id = $1 AND id = $2 RETURNING id, name, color, position, permissions",
+      [DEFAULT_SERVER_ID, roleId, next.name, next.color, next.position, next.permissions],
+    );
+    return rows[0] ? mapRole(rows[0]) : null;
+  }
+
+  async deleteRole(roleId: string): Promise<boolean> {
+    await this.database.query("DELETE FROM member_roles WHERE server_id = $1 AND role_id = $2", [DEFAULT_SERVER_ID, roleId]);
+    const rows = await this.database.query<{ id: string }>("DELETE FROM server_roles WHERE server_id = $1 AND id = $2 RETURNING id", [DEFAULT_SERVER_ID, roleId]);
+    if (rows.length > 0) await this.syncLegacyRoleForMembers();
+    return rows.length > 0;
+  }
+
+  async getMemberRoleIds(userId: string): Promise<string[]> {
+    const rows = await this.database.query<{ role_id: string }>("SELECT role_id FROM member_roles WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    return rows.map((row) => row.role_id);
+  }
+
+  /**
+   * Назначает точный набор ролей; возвращает null для несуществующего участника
+   * или владельца (владельца трогать нельзя). Несуществующие roleId молча
+   * отбрасываются вызывающим кодом через проверку — здесь фильтруем по таблице.
+   */
+  async setMemberRoles(userId: string, roleIds: readonly string[]): Promise<"updated" | "not_found" | "owner"> {
+    const [current] = await this.database.query<{ role: MemberRole }>("SELECT role FROM server_members WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    if (!current) return "not_found";
+    if (current.role === "owner") return "owner";
+    const unique = [...new Set(roleIds)];
+    const existing = unique.length
+      ? await this.database.query<{ id: string }>("SELECT id FROM server_roles WHERE server_id = $1 AND id = ANY($2::uuid[])", [DEFAULT_SERVER_ID, unique])
+      : [];
+    const valid = new Set(existing.map((row) => row.id));
+    await this.database.query("DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    for (const roleId of unique) {
+      if (!valid.has(roleId)) continue;
+      await this.database.query("INSERT INTO member_roles (server_id, user_id, role_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [DEFAULT_SERVER_ID, userId, roleId]);
+    }
+    await this.syncLegacyRole(userId);
+    return "updated";
+  }
+
+  /**
+   * Legacy-поле role — производное от назначений для старых клиентов: сид
+   * administrator в наборе даёт `administrator`, иначе `member`. Владелец не трогается.
+   */
+  private async syncLegacyRole(userId: string): Promise<void> {
+    const [current] = await this.database.query<{ role: MemberRole }>("SELECT role FROM server_members WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, userId]);
+    if (!current || current.role === "owner") return;
+    const ids = await this.getMemberRoleIds(userId);
+    await this.database.query("UPDATE server_members SET role = $3 WHERE server_id = $1 AND user_id = $2", [
+      DEFAULT_SERVER_ID, userId, ids.includes(SEEDED_ADMINISTRATOR_ROLE_ID) ? "administrator" : "member",
+    ]);
+  }
+
+  private async syncLegacyRoleForMembers(): Promise<void> {
+    const members = await this.database.query<{ user_id: string }>("SELECT user_id FROM server_members WHERE server_id = $1 AND role <> 'owner'", [DEFAULT_SERVER_ID]);
+    for (const member of members) await this.syncLegacyRole(member.user_id);
+  }
+
+  /**
+   * Эффективные права: владелец — всегда все; остальные — объединение (union)
+   * назначенных ролей. Пустой набор даёт базовый голосовой доступ, как legacy member.
+   */
+  async getMemberPermissions(userId: string): Promise<Permission[]> {
+    const role = await this.getMemberRole(userId);
+    if (role === "owner") return [...ALL_PERMISSIONS];
+    if (role === "administrator") {
+      const ids = await this.getMemberRoleIds(userId);
+      if (ids.length === 0) return permissionsForRole("administrator");
+    }
+    const ids = await this.getMemberRoleIds(userId);
+    if (ids.length === 0) return permissionsForRole(role);
+    const rows = await this.database.query<{ permissions: string[] | string | null }>("SELECT permissions FROM server_roles WHERE server_id = $1 AND id = ANY($2::uuid[])", [DEFAULT_SERVER_ID, ids]);
+    const union = new Set<Permission>();
+    for (const row of rows) for (const permission of parseRolePermissions(row.permissions)) union.add(permission);
+    if (union.size === 0) return permissionsForRole(role);
+    return [...union];
+  }
+
+  /**
+   * Переопределения прав канала (протокол v49): только для ролей (roles only,
+   * member-targets нет). allow/deny — подмножества существующих прав, новых нет.
+   * Пустая пара (allow и deny пусты) строку не хранит — запись удаляется.
+   */
+  async listChannelOverwrites(): Promise<ChannelOverwrite[]> {
+    const rows = await this.database.query<OverwriteRow>(
+      `SELECT o.channel_id, o.role_id, o.allow, o.deny FROM channel_overwrites o
+       JOIN channels c ON c.id = o.channel_id WHERE c.server_id = $1
+       ORDER BY o.channel_id, o.role_id`,
+      [DEFAULT_SERVER_ID],
+    );
+    return rows.map(mapOverwrite);
+  }
+
+  async listChannelOverwritesForChannel(channelId: string): Promise<ChannelOverwrite[]> {
+    const rows = await this.database.query<OverwriteRow>(
+      `SELECT o.channel_id, o.role_id, o.allow, o.deny FROM channel_overwrites o
+       JOIN channels c ON c.id = o.channel_id WHERE c.server_id = $1 AND o.channel_id = $2`,
+      [DEFAULT_SERVER_ID, channelId],
+    );
+    return rows.map(mapOverwrite);
+  }
+
+  async setChannelOverwrite(channelId: string, roleId: string, allow: readonly Permission[], deny: readonly Permission[]): Promise<ChannelOverwrite | null> {
+    const uniqueAllow = [...new Set(allow)];
+    const uniqueDeny = [...new Set(deny)];
+    if (uniqueAllow.length === 0 && uniqueDeny.length === 0) {
+      await this.database.query("DELETE FROM channel_overwrites WHERE channel_id = $1 AND role_id = $2", [channelId, roleId]);
+      return null;
+    }
+    const rows = await this.database.query<OverwriteRow>(
+      `INSERT INTO channel_overwrites (channel_id, role_id, allow, deny) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (channel_id, role_id) DO UPDATE SET allow = EXCLUDED.allow, deny = EXCLUDED.deny
+       RETURNING channel_id, role_id, allow, deny`,
+      [channelId, roleId, uniqueAllow, uniqueDeny],
+    );
+    return rows[0] ? mapOverwrite(rows[0]) : null;
+  }
+
+  /**
+   * Эффективные права в канале: (union прав ролей ∪ union allow) − union deny.
+   * Deny побеждает allow при конфликте поперёк ролей (правило Discord).
+   * Владелец вне overwrites: всегда все права, deny его не касается.
+   */
+  async getMemberChannelPermissions(userId: string, channelId: string): Promise<Permission[]> {
+    const role = await this.getMemberRole(userId);
+    if (role === "owner") return [...ALL_PERMISSIONS];
+    const base = await this.getMemberPermissions(userId);
+    const roleIds = await this.getMemberRoleIds(userId);
+    if (roleIds.length === 0) return base;
+    const rows = await this.database.query<OverwriteRow>(
+      "SELECT channel_id, role_id, allow, deny FROM channel_overwrites WHERE channel_id = $1 AND role_id = ANY($2::uuid[])",
+      [channelId, roleIds],
+    );
+    if (rows.length === 0) return base;
+    return resolveChannelPermissions(base, rows.map((row) => mapOverwrite(row)));
+  }
+
+  async hasChannelPermission(userId: string, channelId: string, permission: Permission): Promise<boolean> {
+    try {
+      return (await this.getMemberChannelPermissions(userId, channelId)).includes(permission);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Каналы, видимые участнику: эффективный VOICE_CONNECT в канале (см. v49). */
+  async getVisibleChannelIds(userId: string): Promise<Set<string>> {
+    const role = await this.getMemberRole(userId);
+    if (role === "owner") {
+      const all = await this.database.query<{ id: string }>("SELECT id FROM channels WHERE server_id = $1", [DEFAULT_SERVER_ID]);
+      return new Set(all.map((row) => row.id));
+    }
+    const visible = new Set<string>();
+    const channels = await this.database.query<{ id: string }>("SELECT id FROM channels WHERE server_id = $1", [DEFAULT_SERVER_ID]);
+    for (const channel of channels) {
+      if (await this.hasChannelPermission(userId, channel.id, "VOICE_CONNECT")) visible.add(channel.id);
+    }
+    return visible;
+  }
+
+  async getAttachmentChannelId(attachmentId: string): Promise<string | null> {
+    const [row] = await this.database.query<{ channel_id: string }>(
+      `SELECT m.channel_id FROM message_attachments ma JOIN messages m ON m.id = ma.message_id
+       WHERE ma.attachment_id = $1 LIMIT 1`,
+      [attachmentId],
+    );
+    return row?.channel_id ?? null;
+  }
+
+  /** Вершина иерархии — max position назначенных ролей; владелец вне таблицы. */
+  async getMemberTopPosition(userId: string): Promise<number> {
+    const role = await this.getMemberRole(userId);
+    if (role === "owner") return OWNER_TOP_POSITION;
+    const ids = await this.getMemberRoleIds(userId);
+    if (ids.length === 0) return role === "administrator" ? 10 : 0;
+    const rows = await this.database.query<{ position: number }>("SELECT position FROM server_roles WHERE server_id = $1 AND id = ANY($2::uuid[])", [DEFAULT_SERVER_ID, ids]);
+    if (rows.length === 0) return 0;
+    return Math.max(...rows.map((row) => Number(row.position)));
   }
 
   async listMembers(statuses: ReadonlyMap<string, PublicMemberStatus>): Promise<Member[]> {
@@ -335,7 +582,8 @@ export class ChatRepository {
        ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 ELSE 2 END, u.username`,
       [DEFAULT_SERVER_ID],
     );
-    return Promise.all(users.map((user) => mapMember(user, statuses.get(user.id) ?? "offline")));
+    const roleIds = await this.getRoleIdsForMembers(users.map((user) => user.id));
+    return Promise.all(users.map((user) => mapMember(user, statuses.get(user.id) ?? "offline", roleIds.get(user.id) ?? [])));
   }
 
   async getMember(userId: string, status: PublicMemberStatus): Promise<Member> {
@@ -345,7 +593,19 @@ export class ChatRepository {
       [userId, DEFAULT_SERVER_ID],
     );
     if (!user) throw new Error("User is missing");
-    return mapMember(user, status);
+    return mapMember(user, status, await this.getMemberRoleIds(userId));
+  }
+
+  private async getRoleIdsForMembers(userIds: readonly string[]): Promise<Map<string, string[]>> {
+    const result = new Map<string, string[]>();
+    if (userIds.length === 0) return result;
+    const rows = await this.database.query<{ user_id: string; role_id: string }>("SELECT user_id, role_id FROM member_roles WHERE server_id = $1 AND user_id = ANY($2::text[])", [DEFAULT_SERVER_ID, [...userIds]]);
+    for (const row of rows) {
+      const current = result.get(row.user_id) ?? [];
+      current.push(row.role_id);
+      result.set(row.user_id, current);
+    }
+    return result;
   }
 
   /**
@@ -477,10 +737,10 @@ export class ChatRepository {
          WHERE a.uploader_id = $3 AND a.server_id = $6
          AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id)
        ), inserted AS (
-         INSERT INTO messages (id, channel_id, author_id, content, kind, target_user_id, anonymous, reply_to_message_id)
-         SELECT $1, $2, $3, $4, $8, $9, $10, $11
-         WHERE (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
-         RETURNING id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id
+          INSERT INTO messages (id, channel_id, author_id, content, kind, target_user_id, anonymous, reply_to_message_id)
+          SELECT $1, $2, $3, $4, $8, $9, $10, $11
+          WHERE (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
+          RETURNING id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id, pinned, pinned_at
        ), linked AS (
          INSERT INTO message_attachments (message_id, attachment_id, position)
          SELECT inserted.id, available.id, available.position FROM inserted CROSS JOIN available
@@ -494,9 +754,9 @@ export class ChatRepository {
            ORDER BY input.value, input.ordinality
          ) AS candidate
        )
-       SELECT id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id,
-       (SELECT coalesce(username, 'unknown') FROM users WHERE users.id = author_id) AS author_name,
-       (SELECT avatar FROM users WHERE users.id = author_id) AS author_avatar FROM inserted`,
+        SELECT id, channel_id, author_id, content, created_at, edited_at, kind, target_user_id, anonymous, reply_to_message_id, pinned, pinned_at,
+        (SELECT coalesce(username, 'unknown') FROM users WHERE users.id = author_id) AS author_name,
+        (SELECT avatar FROM users WHERE users.id = author_id) AS author_avatar FROM inserted`,
       [id, channelId, authorId, content, attachmentIds, DEFAULT_SERVER_ID, mentions, kind, targetUserId, anonymous, replyToMessageId],
     );
     const row = rows[0];
@@ -541,12 +801,12 @@ export class ChatRepository {
            OR (a.uploader_id = $2 AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id))
          )
        ), updated AS (
-         UPDATE messages AS m SET content = $3, edited_at = now()
-         WHERE m.id = $1 AND m.author_id = $2
-         AND EXISTS (SELECT 1 FROM channels c WHERE c.id = m.channel_id AND c.server_id = $5)
-         AND (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
-         AND ($3 <> '' OR EXISTS (SELECT 1 FROM requested))
-         RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
+          UPDATE messages AS m SET content = $3, edited_at = now()
+          WHERE m.id = $1 AND m.author_id = $2
+          AND EXISTS (SELECT 1 FROM channels c WHERE c.id = m.channel_id AND c.server_id = $5)
+          AND (SELECT count(*) FROM requested) = (SELECT count(*) FROM available)
+          AND ($3 <> '' OR EXISTS (SELECT 1 FROM requested))
+          RETURNING m.id, m.channel_id, m.author_id, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id, m.pinned, m.pinned_at
        ), removed AS (
          DELETE FROM message_attachments ma USING updated
          WHERE ma.message_id = updated.id AND NOT EXISTS (SELECT 1 FROM requested r WHERE r.id = ma.attachment_id)
@@ -571,7 +831,7 @@ export class ChatRepository {
        ), removed_files AS (
          DELETE FROM attachments a USING removed WHERE a.id = removed.attachment_id RETURNING a.storage_key
        )
-       SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at, updated.kind, updated.target_user_id, updated.anonymous, updated.reply_to_message_id,
+        SELECT updated.id, updated.channel_id, updated.author_id, updated.content, updated.created_at, updated.edited_at, updated.kind, updated.target_user_id, updated.anonymous, updated.reply_to_message_id, updated.pinned, updated.pinned_at,
        (SELECT coalesce(username, 'unknown') FROM users WHERE users.id = updated.author_id) AS author_name,
        (SELECT avatar FROM users WHERE users.id = updated.author_id) AS author_avatar,
        COALESCE((SELECT array_agg(storage_key) FROM removed_files), ARRAY[]::text[]) AS removed_storage_keys
@@ -628,9 +888,82 @@ export class ChatRepository {
     return { channelId: deleted[0].channel_id, storageKeys: candidates.flatMap((row) => row.storage_key ? [row.storage_key] : []) };
   }
 
+  /**
+   * Массово удаляет обычные сообщения одного текстового канала (протокол v47).
+   * Всё или ничего: если хотя бы одно сообщение отсутствует, лежит в другом канале
+   * или является личным (pm/apm) — ничего не удаляется и возвращается null.
+   * Удаление выполняется одним оператором DELETE (атомарно), затем чистятся
+   * осиротевшие вложения. Владение не проверяется: права проверяет сервер.
+   */
+  async deleteMessages(messageIds: readonly string[], channelId: string): Promise<{ deletedIds: string[]; channelId: string; storageKeys: string[] } | null> {
+    if (messageIds.length === 0) return null;
+    const scope = await this.database.query<{ id: string; channel_id: string; kind: "chat" | "pm" | "apm" }>(
+      `SELECT m.id, m.channel_id, m.kind FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       WHERE m.id = ANY($1::uuid[]) AND c.server_id = $2`,
+      [[...messageIds], DEFAULT_SERVER_ID],
+    );
+    if (scope.length !== messageIds.length) return null;
+    for (const row of scope) {
+      if (row.channel_id !== channelId || row.kind !== "chat") return null;
+    }
+    const candidates = await this.database.query<{ attachment_id: string | null; storage_key: string | null }>(
+      `SELECT a.id AS attachment_id, a.storage_key
+       FROM message_attachments ma JOIN attachments a ON a.id = ma.attachment_id
+       WHERE ma.message_id = ANY($1::uuid[])`,
+      [[...messageIds]],
+    );
+    const deleted = await this.database.query<{ id: string; channel_id: string }>(
+      `DELETE FROM messages WHERE id = ANY($1::uuid[]) RETURNING id, channel_id`,
+      [[...messageIds]],
+    );
+    if (deleted.length !== messageIds.length) return null;
+    const attachmentIds = candidates.flatMap((row) => row.attachment_id ? [row.attachment_id] : []);
+    if (attachmentIds.length) await this.database.query("DELETE FROM attachments WHERE id = ANY($1::uuid[]) AND server_id = $2", [attachmentIds, DEFAULT_SERVER_ID]);
+    return { deletedIds: deleted.map((row) => row.id), channelId, storageKeys: candidates.flatMap((row) => row.storage_key ? [row.storage_key] : []) };
+  }
+
+  /**
+   * Закрепляет сообщение канала или снимает закреп. Личные (pm/apm) не закрепляются:
+   * закреп — свойство канала, а не переписки двух участников.
+   */
+  async setMessagePinned(messageId: string, pinned: boolean): Promise<ChatMessage | null> {
+    const rows = await this.database.query<MessageRow>(
+      `UPDATE messages AS m SET pinned = $2, pinned_at = CASE WHEN $2 THEN now() ELSE NULL END
+       WHERE m.id = $1 AND m.kind = 'chat'
+       AND EXISTS (SELECT 1 FROM channels c WHERE c.id = m.channel_id AND c.server_id = $3)
+       RETURNING m.id, m.channel_id, m.author_id,
+       (SELECT coalesce(username, 'unknown') FROM users WHERE users.id = m.author_id) AS author_name,
+       (SELECT avatar FROM users WHERE users.id = m.author_id) AS author_avatar,
+       m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id, m.pinned, m.pinned_at`,
+      [messageId, pinned, DEFAULT_SERVER_ID],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const attachments = await this.getAttachmentsForMessages([messageId]);
+    const messageMentions = await this.getMentionsForMessages([messageId]);
+    const messageReactions = await this.getReactionsForMessages([messageId]);
+    return mapMessage(row, attachments.get(messageId) ?? [], messageMentions.get(messageId) ?? [], messageReactions.get(messageId) ?? []);
+  }
+
+  async listPinnedMessages(channelId: string, limit: number, viewerId: string): Promise<ChatMessage[]> {
+    const rows = await this.database.query<MessageRow>(
+      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id, m.pinned, m.pinned_at
+       FROM messages m JOIN users u ON u.id = m.author_id
+       WHERE m.channel_id = $1 AND m.pinned = true AND m.kind = 'chat'
+       AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
+       ORDER BY m.pinned_at DESC NULLS LAST, m.created_at DESC LIMIT $2`,
+      [channelId, limit, viewerId],
+    );
+    const attachments = await this.getAttachmentsForMessages(rows.map((message) => message.id));
+    const messageMentions = await this.getMentionsForMessages(rows.map((message) => message.id));
+    const messageReactions = await this.getReactionsForMessages(rows.map((message) => message.id));
+    return rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
+  }
+
   async getHistory(channelId: string, limit: number, viewerId: string): Promise<ChatMessage[]> {
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
+      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id, m.pinned, m.pinned_at
        FROM messages m JOIN users u ON u.id = m.author_id
        WHERE m.channel_id = $1 AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
        ORDER BY m.created_at DESC LIMIT $2`,
@@ -643,21 +976,38 @@ export class ChatRepository {
     return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
   }
 
-  async updateServerSettings(settings: Omit<ServerSettings, "description" | "helpPage"> & { description?: string; helpPage?: ServerHelp }): Promise<void> {
-    // Старые клиенты поле не шлют (в событии оно опционально): тогда сохраняем
-    // существующие страницы, чтобы смена названия не затирала кнопку `?`.
-    const [current] = settings.helpPage === undefined
-      ? await this.database.query<Pick<ServerRow, "help_page">>("SELECT help_page FROM servers WHERE id = $1", [DEFAULT_SERVER_ID])
+  async updateServerSettings(settings: Omit<ServerSettings, "description" | "helpPage" | "welcomeChannelId" | "welcomeMessage"> & { description?: string; helpPage?: ServerHelp; welcomeChannelId?: string | null; welcomeMessage?: string }): Promise<void> {
+    // Старые клиенты новые поля не шлют (в событии они опциональны): тогда сохраняем
+    // существующие значения, чтобы смена названия не затирала welcome-настройки.
+    const [current] = settings.helpPage === undefined || settings.welcomeChannelId === undefined || settings.welcomeMessage === undefined
+      ? await this.database.query<Pick<ServerRow, "help_page" | "welcome_channel_id" | "welcome_message">>("SELECT help_page, welcome_channel_id, welcome_message FROM servers WHERE id = $1", [DEFAULT_SERVER_ID])
       : [];
     const helpPage = settings.helpPage ?? parseServerHelpPage(current?.help_page ?? null);
     await this.database.query(
-      "UPDATE servers SET name = $2, description = $3, max_attachment_bytes = $4, screen_share_max_resolution = $5, screen_share_max_frame_rate = $6, help_page = $7 WHERE id = $1",
-      [DEFAULT_SERVER_ID, settings.name, settings.description ?? "", settings.maxAttachmentBytes, settings.screenShareMaxResolution, settings.screenShareMaxFrameRate, JSON.stringify(helpPage)],
+      "UPDATE servers SET name = $2, description = $3, max_attachment_bytes = $4, screen_share_max_resolution = $5, screen_share_max_frame_rate = $6, help_page = $7, welcome_channel_id = $8, welcome_message = $9 WHERE id = $1",
+      [DEFAULT_SERVER_ID, settings.name, settings.description ?? "", settings.maxAttachmentBytes, settings.screenShareMaxResolution, settings.screenShareMaxFrameRate, JSON.stringify(helpPage), settings.welcomeChannelId !== undefined ? settings.welcomeChannelId : (current?.welcome_channel_id ?? null), settings.welcomeMessage !== undefined ? settings.welcomeMessage : (current?.welcome_message ?? DEFAULT_WELCOME_MESSAGE)],
     );
   }
 
-  async searchMessages(filters: MessageSearchFilters): Promise<MessageSearchResult> {
+  /** Был ли пользователь уже зарегистрирован: повторный вход приветствия не получает. */
+  async userExists(userId: string): Promise<boolean> {
+    const [row] = await this.database.query<{ id: string }>("SELECT id FROM users WHERE id = $1", [userId]);
+    return Boolean(row);
+  }
+
+  async isMember(userId: string): Promise<boolean> {
+    return (await this.getOptionalMemberRole(userId)) !== null;
+  }
+
+  /** Владелец — автор системных приветствий (plain chat от имени сервера). */
+  async getOwnerId(): Promise<string | null> {
+    const [row] = await this.database.query<{ user_id: string }>("SELECT user_id FROM server_members WHERE server_id = $1 AND role = 'owner'", [DEFAULT_SERVER_ID]);
+    return row?.user_id ?? null;
+  }
+
+  async searchMessages(filters: MessageSearchFilters, visibleChannelIds?: readonly string[]): Promise<MessageSearchResult> {
     // Личные и анонимные сообщения в общий поиск не попадают.
+    // visibleChannelIds (протокол v49): скрытые overwrites-каналы из поиска исключаются.
     const conditions = `c.server_id = $1
       AND m.kind = 'chat'
       AND ($2::text = '' OR m.content ILIKE '%' || $2 || '%' OR EXISTS (
@@ -679,16 +1029,18 @@ export class ChatRepository {
         OR ('file' = ANY($5::text[]) AND EXISTS (
           SELECT 1 FROM message_attachments file_ma JOIN attachments file_a ON file_a.id = file_ma.attachment_id
           WHERE file_ma.message_id = m.id AND file_a.mime_type NOT LIKE 'image/%' AND file_a.mime_type NOT LIKE 'video/%'
-        )))`;
-    const parameters = [DEFAULT_SERVER_ID, filters.query, filters.authorId, filters.channelId, filters.contentTypes];
+        )))
+      AND ($6::boolean = false OR m.pinned = true)
+      AND ($7::uuid[] IS NULL OR m.channel_id = ANY($7::uuid[]))`;
+    const parameters = [DEFAULT_SERVER_ID, filters.query, filters.authorId, filters.channelId, filters.contentTypes, filters.pinnedOnly, visibleChannelIds ? [...visibleChannelIds] : null];
     const [countRow] = await this.database.query<{ count: number }>(
       `SELECT count(*)::integer AS count FROM messages m JOIN channels c ON c.id = m.channel_id WHERE ${conditions}`,
       parameters,
     );
     const rows = await this.database.query<MessageRow>(
-      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id
+      `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id, m.pinned, m.pinned_at
        FROM messages m JOIN users u ON u.id = m.author_id JOIN channels c ON c.id = m.channel_id
-       WHERE ${conditions} ORDER BY m.created_at DESC, m.id DESC LIMIT $6 OFFSET $7`,
+       WHERE ${conditions} ORDER BY m.created_at DESC, m.id DESC LIMIT $8 OFFSET $9`,
       [...parameters, filters.limit, filters.offset],
     );
     const attachments = await this.getAttachmentsForMessages(rows.map((message) => message.id));
@@ -701,6 +1053,40 @@ export class ChatRepository {
       offset: filters.offset,
       hasMore: filters.offset + rows.length < total,
     };
+  }
+
+  /**
+   * Журнал модерации (протокол v50): append-only запись с cap 1000 строк.
+   * Prune выполняется на каждом insert; ошибки логирует вызывающий код (best-effort).
+   */
+  async appendAuditLog(entry: { id: string; actorId: string; action: AuditAction; targetId?: string | null; detail?: string | null }): Promise<AuditEntry> {
+    const rows = await this.database.query<AuditRow>(
+      "INSERT INTO audit_log (id, actor_id, action, target_id, detail) VALUES ($1, $2, $3, $4, $5) RETURNING id, at, actor_id, action, target_id, detail",
+      [entry.id, entry.actorId, entry.action, entry.targetId ?? null, entry.detail ?? null],
+    );
+    const saved = rows[0] ? mapAudit(rows[0]) : null;
+    await this.database.query(
+      `DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY at DESC, id DESC LIMIT $1)`,
+      [AUDIT_LOG_MAX_ENTRIES],
+    );
+    if (!saved) throw new Error("Audit log insert failed");
+    return saved;
+  }
+
+  async listAuditLog(limit: number, before?: string | null): Promise<{ entries: AuditEntry[]; hasMore: boolean }> {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const rows = await this.database.query<AuditRow>(
+      `SELECT id, at, actor_id, action, target_id, detail FROM audit_log
+       WHERE ($2::timestamptz IS NULL OR at < $2::timestamptz)
+       ORDER BY at DESC, id DESC LIMIT $1`,
+      [safeLimit + 1, before ?? null],
+    );
+    const entries: AuditEntry[] = [];
+    for (const row of rows) {
+      const mapped = mapAuditSafe(row);
+      if (mapped) entries.push(mapped);
+    }
+    return { entries: entries.slice(0, safeLimit), hasMore: entries.length > safeLimit };
   }
 
   private async getMentionsForMessages(messageIds: string[]): Promise<Map<string, { userId: string }[]>> {
@@ -778,23 +1164,52 @@ export class ChatRepository {
 }
 
 export function permissionsForRole(role: MemberRole): Permission[] {
-  if (role === "owner") return ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+  if (role === "owner") return [...ALL_PERMISSIONS];
   if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "KICK_MEMBERS", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
   return ["VOICE_CONNECT", "VOICE_SPEAK"];
 }
 
-async function mapMember(user: UserRow, status: PublicMemberStatus): Promise<Member> {
+function mapRole(row: RoleRow): CustomRole {
+  return { id: row.id, name: row.name, color: row.color, position: Number(row.position), permissions: parseRolePermissions(row.permissions) };
+}
+
+function mapOverwrite(row: OverwriteRow): ChannelOverwrite {
+  return { channelId: row.channel_id, roleId: row.role_id, allow: parseRolePermissions(row.allow), deny: parseRolePermissions(row.deny) };
+}
+
+function mapAudit(row: AuditRow): AuditEntry {
+  return { id: row.id, at: new Date(row.at).toISOString(), actorId: row.actor_id, action: auditActionSchema.parse(row.action), targetId: row.target_id, detail: row.detail };
+}
+
+function mapAuditSafe(row: AuditRow): AuditEntry | null {
+  const parsed = auditActionSchema.safeParse(row.action);
+  if (!parsed.success) return null;
+  return { id: row.id, at: new Date(row.at).toISOString(), actorId: row.actor_id, action: parsed.data, targetId: row.target_id, detail: row.detail };
+}
+
+/** permissions из text[] приходят массивом из pg и строкой `{a,b}` из части драйверов. */
+function parseRolePermissions(value: string[] | string | null | undefined): Permission[] {
+  const known = new Set<Permission>(ALL_PERMISSIONS);
+  const raw: string[] = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.replace(/^[{\[]|[}\]]$/g, "").split(",").map((item) => item.trim().replace(/^"|"$/g, "")).filter(Boolean)
+      : [];
+  return raw.filter((item): item is Permission => known.has(item as Permission));
+}
+
+async function mapMember(user: UserRow, status: PublicMemberStatus, roleIds: string[] = []): Promise<Member> {
   const fingerprint = user.username && user.discriminator ? await publicKeyFingerprint(user.public_key) : "0000-0000-0000-0000";
   const mutedUntil = user.chat_muted_until ? new Date(user.chat_muted_until) : null;
   const chatMuted = user.chat_muted === true && (mutedUntil === null || mutedUntil.getTime() > Date.now());
   // Значение из базы обязано входить в enum протокола: мусор от старых записей
   // не должен ломать snapshot, поэтому неизвестное сводится к дефолту.
   const nameFont: NameFont = (NAME_FONT_VALUES as readonly string[]).includes(user.name_font ?? "") ? (user.name_font as NameFont) : "none";
-  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, bio: user.bio, avatar: user.avatar, banner: user.banner, memberBackground: user.member_background ?? null, status, customStatus: user.custom_status, customStatusEmoji: user.custom_status_emoji ?? "", accentColor: user.accent_color, nameGlow: user.name_glow, nameFont, role: user.role, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null, helpAccepted: user.help_accepted === true };
+  return { id: user.id, username: user.username ?? "unknown", discriminator: user.discriminator ?? "0000", fingerprint, bio: user.bio, avatar: user.avatar, banner: user.banner, memberBackground: user.member_background ?? null, status, customStatus: user.custom_status, customStatusEmoji: user.custom_status_emoji ?? "", accentColor: user.accent_color, nameGlow: user.name_glow, nameFont, role: user.role, roleIds, chatMuted, chatMutedUntil: chatMuted && mutedUntil ? mutedUntil.toISOString() : null, helpAccepted: user.help_accepted === true };
 }
 
 function mapMessage(row: MessageRow, attachments: Attachment[] = [], mentions: { userId: string }[] = [], reactions: MessageReaction[] = []): ChatMessage {
-  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments, mentions, reactions, kind: row.kind, targetUserId: row.target_user_id, anonymous: row.anonymous === true, replyToMessageId: row.reply_to_message_id };
+  return { id: row.id, channelId: row.channel_id, authorId: row.author_id, authorName: row.author_name, authorAvatar: row.author_avatar, content: row.content, createdAt: new Date(row.created_at).toISOString(), editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null, attachments, mentions, reactions, kind: row.kind, targetUserId: row.target_user_id, anonymous: row.anonymous === true, replyToMessageId: row.reply_to_message_id, pinned: row.pinned === true, pinnedAt: row.pinned_at ? new Date(row.pinned_at).toISOString() : null };
 }
 
 /**

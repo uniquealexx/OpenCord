@@ -1,6 +1,22 @@
-# OpenCord Protocol v43 (English)
+# OpenCord Protocol v51 (English)
+
+Protocol v51 adds a Discord-like welcome channel for newcomers (migration `039_welcome_channel`, no new permissions). The new server settings `welcomeChannelId` (nullable uuid of a text channel, `null` disables greetings) and `welcomeMessage` (template of up to 500 characters with `{user}` and `{server}` placeholders, default `Welcome to {server}, {user}!`) travel through `server.settings.update` and `server.snapshot`. Changing them requires `MANAGE_SERVER`; both fields are optional in the update event, so older clients that omit them keep the existing greeting. On the first registration of an identity the server posts a plain `chat` greeting authored by the owner into the welcome channel — a server action posted regardless of overwrites visibility — and broadcasts the usual `message.created`. Re-joins, second connections, and banned identities receive no greeting, and deleting the welcome channel silently disables it. The client offers a welcome page in server settings (text-channel picker, template editor with live preview for a sample name).
+
+Protocol v50 adds a Discord-like moderator audit log (migration `038_audit_log`, no new permissions). The append-only `audit_log` table stores `id`, `at`, `actor_id`, `action` (reusing existing event names: `member.kick`/`member.ban`/`member.unban`, `member.role.set`/`member.roles.set`, `role.create`/`role.update`/`role.delete`, `channel.create`/`channel.update`/`channel.delete`, `channel.overwrites.set`, `channel.slowmode.set`, `message.delete`/`message.bulkDelete`, `server.settings.update`/`server.avatar.update`/`server.banner.update`), nullable `target_id`, and nullable `detail` (JSON/text, 2000 chars max). The server writes rows best-effort inside the existing handlers — a log error never fails the action — and keeps the latest 1000 rows (pruned on insert). `audit.list` (`limit` 1–100, nullable `before` cursor) requires `MANAGE_SERVER` and answers `audit.result` (`entries` newest-first plus `hasMore`). The client offers an audit page in server settings (actor name resolved from members, action, target, time, detail) with load-more pagination.
+
+Protocol v49 adds Discord-like channel permission overwrites, roles only (no member-targets, no new permissions; migration `037_channel_overwrites`). Each `(channelId, roleId)` row carries `allow`/`deny` subsets of the existing 9 values; the effective channel permission is (union role permissions plus union allow) minus union deny — per-channel allow overrides role permissions, deny overrides allow, and a deny from any role wins over an allow from another. The owner is exempt. With no dedicated view/send permissions, `VOICE_CONNECT` is the visibility proxy (snapshot list, history, search, pinned list, attachment download, voice join) and `VOICE_SPEAK` the write proxy (chat.send/pm/apm, message.update, message.react, typing); moderation inside a channel needs the matching effective `MANAGE_MESSAGES`/`MANAGE_CHANNELS`. A channel without effective `VOICE_CONNECT` is hidden from `server.snapshot.channels` for that user. `channel.overwrites.set` (requires `MANAGE_CHANNELS` plus hierarchy: cannot touch roles above your own top, owner exempt) broadcasts `channel.overwrites.updated` plus a fresh personalized snapshot; the snapshot carries `channelOverwrites` only for `MANAGE_CHANNELS` holders. The client offers a per-role allow/deny/neutral tri-state editor in channel settings and drops hidden channels from the list.
+
+Protocol v48 adds custom server roles, Discord-like: `role.create`/`role.update`/`role.delete` (all require `MANAGE_ROLES`) manage rows with `id`, `name` (2-32), `color` (#rrggbb or null), `position` (0-9999) and `permissions` (a subset of the existing 9 values, no new permissions; migration `036_custom_roles`). `member.roles.set` assigns the exact set (up to 32 role ids, `MANAGE_ROLES`); the legacy `member.role.set` keeps working and maps administrator/member onto the seeded rows. Seeds match the previous behavior: administrator (position 10, MANAGE_CHANNELS/MANAGE_MESSAGES/KICK_MEMBERS plus voice) and member (position 0, VOICE_CONNECT/VOICE_SPEAK). The owner stays outside the table, is bound to the deploy public key, is non-transferable, always holds all permissions and sits on top of the hierarchy. Effective permissions are the union of the assigned roles; hierarchy is the max position. Moderator actions (kick/ban/role-set, chat mute, voice disconnect/mute) require a strictly higher top position than the target; the owner is exempt, nobody can touch the owner, and nobody can grant a position above their own top. The snapshot carries the `roles` list and every member carries `roleIds` (both default to empty against older peers); `currentUser.permissions` keeps its shape and is now the computed union. Mutations broadcast `role.created`/`role.updated`/`role.deleted` plus a fresh snapshot; `role.list` answers `role.list.result`. The client offers a roles board in server settings (create/rename/color/position/permission toggles, per-member assignment) and tints member names with the top colored role.
 
 The protocol version describes the compatibility of WebSocket events and does not coincide with the SemVer version of OpenCord Server. The public contract of the version and server state is described in [health.md](./health.md).
+
+Protocol v47 adds moderator bulk message deletion: `message.bulkDelete` requires the `MANAGE_MESSAGES` permission and deletes 2–50 regular messages of one text channel in a single atomic operation; the server broadcasts one `message.deleted` per message and deletes the orphaned attachments. If any id is missing, belongs to another channel, or is a private (`pm`/`apm`) message, nothing is deleted and the server answers `NOT_FOUND`. Bulk deletion is rate limited (3 operations per 20 seconds per identity); single `message.delete` has no separate limit. The client offers a manager-only multi-select mode with a confirm dialog and removes the messages optimistically, restoring them if the server rejects the request.
+
+Protocol v46 adds lightweight presence broadcast: the client sends `presence.set` with a `status` (`online`/`idle`/`dnd`/`invisible`, no `requestId`, no response), and the server broadcasts `presence.updated` (`userId`, public `status`) to all members. Nothing is stored in the database and no migration is needed: presence lives in the memory of the active WebSocket connection, `invisible` is shown to others as `offline`, and closing the last connection broadcasts `offline`. The client switches status from its profile footer without resending the whole profile, marks itself `idle` after 5 minutes without activity (returning to `online` on the first input, unless the status was chosen manually), and updates the member-list dots from `presence.updated` without refetching profiles.
+
+Protocol v45 adds ephemeral typing indicators: the client sends `typing.start`/`typing.stop` with a `channelId` (no `requestId`, no response), and the server broadcasts `typing.updated` (`channelId`, `userId`, `typing`) to the other members of the channel. Nothing is stored in the database and no migration is needed: the server keeps the state in memory with a ~5s TTL that repeated starts refresh and that expires on its own, silently drops more than one `typing.start` per 2s per user and channel, validates that the channel is a text channel and the sender is a member, and clears the state on disconnect and on message send. While composing, the client sends start at most once per 3s and sends stop on submit, blur, or channel switch; the indicator under the composer shows up to three names, then a count.
+
+Protocol v44 adds channel message pins: `message.pin`/`message.unpin` require the `MANAGE_MESSAGES` permission and flip the stored `pinned` flag with its `pinnedAt` timestamp (migration `035_message_pins`); every history, search, and live payload carries both fields, and pinning broadcasts `message.updated` plus the lightweight `message.pinned.updated`. Clients fetch a channel's pins with `message.pinned.list` (answered by `message.pinned.result`) or filter the global search with `pinnedOnly`, and offer a pin action in the message menu with a pinned-only channel view. Only regular channel messages can be pinned — private (`pm`/`apm`) messages answer `NOT_FOUND`.
 
 Protocol v43 adds the rules gate: `api.gate("rules")` forces newcomers to see one page on join, and the server blocks writing (`chat.send`/`chat.pm`/`chat.apm`, `message.update`, `message.react`, `voice.join` with `ACCEPT_REQUIRED`) until `help.accept` records the acceptance with its required controls (`api.button(..., { accept: true, requires: [...] })`). Pages gain `audience` (`always`/`pending`/`accepted`) for display routing, members gain `helpAccepted`. Acceptance lives on the membership row: leaving resets it, so rejoin shows the rules again. Audience is display-only — the snapshot still carries the full spec. Recorded acceptances survive gate toggles and restarts; only leaving, kick or ban resets them.
 
@@ -101,6 +117,10 @@ The client sends:
 - `chat.pm`, `chat.apm`, `chat.mute.set`;
 - `message.update`;
 - `message.delete`;
+- `message.bulkDelete`;
+- `message.pin`, `message.unpin`, `message.pinned.list`;
+- `typing.start`, `typing.stop`;
+- `presence.set`;
 - `profile.update`;
 - `help.accept`;
 - `server.leave`;
@@ -110,10 +130,13 @@ The client sends:
 - `channel.update`;
 - `channel.slowmode.set`;
 - `channel.delete`;
-- `member.role.set`;
+- `member.role.set`, `member.roles.set`;
+- `channel.overwrites.set`;
+- `role.create`, `role.update`, `role.delete`, `role.list`;
 - `member.kick`;
 - `member.ban`;
 - `member.unban`;
+- `audit.list`;
 - `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
 - `server.delete`;
 - `ping`.
@@ -125,8 +148,13 @@ The server sends:
 - `server.deleted`;
 - `history.result`;
 - `message.search.result`;
-- `message.created`, `message.updated`, `message.deleted`;
+- `message.created`, `message.updated`, `message.deleted`, `message.pinned.updated`, `message.pinned.result`;
+- `typing.updated`;
+- `presence.updated`;
 - `member.updated`, `member.removed`, `profile.anonymized`;
+- `role.list.result`, `role.created`, `role.updated`, `role.deleted`;
+- `channel.overwrites.updated`;
+- `audit.result`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
@@ -150,7 +178,7 @@ A voice channel contains `participantLimit`: values `1–25` define a finite cap
 
 `screenShareMaxResolution` and `screenShareMaxFrameRate` are chosen by the owner in the server settings. A LiveKit token cannot constrain the frame at all, and the resolution and bitrate are picked by the client itself, so the resolution limit is applied after the fact: when a screen-share video track is published above the allowed height, the server mutes that track (checked again during reconciliation, in case the webhook was missed). Height is what the setting names — 480/720/1080/1440 — and it is what the client scales by, while the width of an ultrawide monitor is legitimately larger, so only height is compared. The client stops its own share on that mute and explains why, instead of leaving a share that transmits nothing on screen. The frame rate is not reported in the LiveKit track description, so it stays a client-side hint and is not enforced.
 
-`message.update` is allowed exclusively to the message author. Even the owner and an administrator cannot edit someone else's text or attachments. The event contains the final `attachmentIds`: the server accepts the existing attachments of this message and new unused uploads by the author, atomically replaces the relations, and deletes the detached files. After the change the server sets `editedAt` and broadcasts `message.updated`. `message.delete` is allowed to the author, and for others' messages to the owner and administrators with the `MANAGE_MESSAGES` permission; the server broadcasts `message.deleted` and deletes the associated attachments.
+`message.update` is allowed exclusively to the message author. Even the owner and an administrator cannot edit someone else's text or attachments. The event contains the final `attachmentIds`: the server accepts the existing attachments of this message and new unused uploads by the author, atomically replaces the relations, and deletes the detached files. After the change the server sets `editedAt` and broadcasts `message.updated`. `message.delete` is allowed to the author, and for others' messages to the owner and administrators with the `MANAGE_MESSAGES` permission; the server broadcasts `message.deleted` and deletes the associated attachments. `message.bulkDelete` deletes 2–50 regular messages of one text channel atomically for holders of `MANAGE_MESSAGES`, broadcasting one `message.deleted` per message.
 
 `chat.send`, `chat.pm`, and `chat.apm` may include `replyToMessageId`. The server accepts the reference only when the source belongs to the same channel and is visible to the sender; this prevents replies from exposing inaccessible private messages. The stored message and all history/search/live payloads carry only the source ID, while the client resolves the compact quote from messages it already has. The database uses a nullable foreign key with `ON DELETE SET NULL`, so deleting the source keeps the reply without a dangling reference.
 
@@ -166,9 +194,25 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v43 (Русский)
+# OpenCord Protocol v51 (Русский)
+
+Протокол v51 добавляет Discord-подобный welcome-канал для новичков (миграция `039_welcome_channel`, без новых прав). Новые настройки сервера `welcomeChannelId` (nullable uuid текстового канала, `null` выключает приветствия) и `welcomeMessage` (шаблон до 500 символов с плейсхолдерами `{user}` и `{server}`, по умолчанию `Welcome to {server}, {user}!`) путешествуют через `server.settings.update` и `server.snapshot`. Смена требует `MANAGE_SERVER`; оба поля опциональны в событии обновления, поэтому старые клиенты, которые их не шлют, сохраняют текущее приветствие. При первой регистрации идентичности сервер публикует обычное `chat`-приветствие от имени владельца в welcome-канал — серверное действие, публикуемое независимо от видимости через overwrites, — и рассылает обычный `message.created`. Повторные входы, вторые подключения и забаненные идентичности приветствия не получают, а удаление welcome-канала молча его выключает. Клиент предлагает страницу приветствия в настройках сервера (выбор текстового канала, редактор шаблона с живым предпросмотром для примерного имени).
+
+Протокол v50 добавляет Discord-подобный журнал модерации (миграция `038_audit_log`, без новых прав). Append-only таблица `audit_log` хранит `id`, `at`, `actor_id`, `action` (переиспользует существующие имена событий: `member.kick`/`member.ban`/`member.unban`, `member.role.set`/`member.roles.set`, `role.create`/`role.update`/`role.delete`, `channel.create`/`channel.update`/`channel.delete`, `channel.overwrites.set`, `channel.slowmode.set`, `message.delete`/`message.bulkDelete`, `server.settings.update`/`server.avatar.update`/`server.banner.update`), nullable `target_id` и nullable `detail` (JSON/текст до 2000 символов). Сервер пишет строки best-effort внутри существующих обработчиков — ошибка лога никогда не роняет действие — и держит последние 1000 строк (prune на insert). `audit.list` (`limit` 1–100, nullable-курсор `before`) требует `MANAGE_SERVER` и отвечает `audit.result` (`entries` от новых к старым плюс `hasMore`). Клиент предлагает страницу аудита в настройках сервера (имя автора из участников, действие, цель, время, детали) с постраничной догрузкой.
+
+Протокол v49 добавляет Discord-подобные переопределения прав канала, только для ролей (без member-targets, без новых прав; миграция `037_channel_overwrites`). Каждая строка `(channelId, roleId)` несёт `allow`/`deny` — подмножества существующих 9 значений; эффективное право в канале — (union прав ролей плюс union allow) минус union deny: allow канала перекрывает права ролей, deny перекрывает allow, а запрет любой роли побеждает разрешение другой. Владелец вне overwrites. Без отдельных прав просмотра/отправки `VOICE_CONNECT` — прокси видимости (список в snapshot, история, поиск, закрепы, скачивание вложений, вход в голос), а `VOICE_SPEAK` — прокси писанины (chat.send/pm/apm, message.update, message.react, набор текста); модерация внутри канала требует совпадающее эффективное `MANAGE_MESSAGES`/`MANAGE_CHANNELS`. Канал без эффективного `VOICE_CONNECT` скрыт из `server.snapshot.channels` для этого пользователя. `channel.overwrites.set` (требует `MANAGE_CHANNELS` плюс иерархию: роли выше собственной вершины трогать нельзя, владелец вне иерархии) рассылает `channel.overwrites.updated` плюс свежий персонализированный snapshot; snapshot несёт `channelOverwrites` только держателям `MANAGE_CHANNELS`. Клиент предлагает tri-state редактор allow/deny/neutral на роль в настройках канала и убирает скрытые каналы из списка.
+
+Протокол v48 добавляет кастомные роли сервера, как в Discord: `role.create`/`role.update`/`role.delete` (все требуют `MANAGE_ROLES`) управляют строками с `id`, `name` (2-32), `color` (#rrggbb или null), `position` (0-9999) и `permissions` (подмножество существующих 9 значений, новых прав нет; миграция `036_custom_roles`). `member.roles.set` назначает точный набор (до 32 id ролей, `MANAGE_ROLES`); legacy-команда `member.role.set` продолжает работать и маппится на сид-роли administrator/member. Сиды повторяют прежнее поведение: administrator (позиция 10, MANAGE_CHANNELS/MANAGE_MESSAGES/KICK_MEMBERS плюс голос) и member (позиция 0, VOICE_CONNECT/VOICE_SPEAK). Владелец остаётся вне таблицы, привязан к ключу развёртывания, непередаваем, всегда имеет все права и стоит на вершине иерархии. Эффективные права — объединение назначенных ролей; иерархия — max position. Модерационные действия (кик/бан/выдача ролей, мут чата, отключение/мут голоса) требуют строго более высокой вершины, чем у цели; владелец вне иерархии, владельца трогать нельзя, а выше собственной вершины выдавать нельзя. Snapshot несёт список `roles`, каждый участник — `roleIds` (оба default-пустые для старых пиров); `currentUser.permissions` сохраняет форму и теперь является вычисленным объединением. Мутации рассылают `role.created`/`role.updated`/`role.deleted` плюс свежий snapshot; `role.list` отвечает `role.list.result`. Клиент предлагает доску ролей в настройках сервера (создание/переименование/цвет/позиция/переключатели прав, назначение участникам) и подсвечивает ники цветом верхней цветной роли.
 
 Версия протокола описывает совместимость WebSocket-событий и не совпадает с SemVer-версией OpenCord Server. Публичный контракт версии и состояния сервера описан в [health.md](./health.md).
+
+Протокол v47 добавляет массовое удаление сообщений модерацией: `message.bulkDelete` требует разрешения `MANAGE_MESSAGES` и удаляет 2–50 обычных сообщений одного текстового канала одной атомарной операцией; сервер рассылает по одному `message.deleted` на сообщение и удаляет осиротевшие вложения. Если хотя бы один идентификатор отсутствует, лежит в другом канале или является личным (`pm`/`apm`) сообщением — ничего не удаляется, сервер отвечает `NOT_FOUND`. Массовое удаление ограничено по частоте (3 операции за 20 секунд на идентичность); у одиночного `message.delete` отдельного лимита нет. Клиент предлагает режим множественного выбора только для менеджеров с диалогом подтверждения и прячет сообщения оптимистично, возвращая их при отказе сервера.
+
+Протокол v46 добавляет лёгкую рассылку присутствия: клиент отправляет `presence.set` со `status` (`online`/`idle`/`dnd`/`invisible`, без `requestId`, без ответа), а сервер рассылает всем участникам `presence.updated` (`userId`, публичный `status`). В базе ничего не хранится, миграция не нужна: присутствие живёт в памяти активного WebSocket-соединения, `invisible` показывается остальным как `offline`, а закрытие последнего соединения рассылает `offline`. Клиент переключает статус из подвала профиля без повторной отправки всего профиля, сам переходит в `idle` после 5 минут без активности (возвращаясь в `online` при первом вводе, если статус не был выбран вручную) и обновляет точки в списке участников по `presence.updated` без перезапроса профилей.
+
+Протокол v45 добавляет эфемерные индикаторы набора текста: клиент отправляет `typing.start`/`typing.stop` с `channelId` (без `requestId`, без ответа), а сервер рассылает остальным участникам канала `typing.updated` (`channelId`, `userId`, `typing`). В базе ничего не хранится, миграция не нужна: сервер держит состояние в памяти с TTL ~5 с, продлеваемым повторными start и гаснущим самостоятельно, молча отбрасывает чаще одного `typing.start` в 2 с на пользователя и канал, проверяет, что канал текстовый, а отправитель — участник, и гасит состояние при отключении и при отправке сообщения. Во время набора клиент шлёт start не чаще раза в 3 с, а stop — при отправке, потере фокуса или смене канала; индикатор под полем ввода показывает до трёх имён, дальше — счётчик.
+
+Протокол v44 добавляет закреплённые сообщения канала: `message.pin`/`message.unpin` требуют разрешения `MANAGE_MESSAGES` и переключают хранимый флаг `pinned` с меткой времени `pinnedAt` (миграция `035_message_pins`); история, поиск и живые события несут оба поля, а закрепление рассылает `message.updated` плюс лёгкое `message.pinned.updated`. Клиенты забирают закрепы канала через `message.pinned.list` (ответ `message.pinned.result`) или фильтруют глобальный поиск флагом `pinnedOnly`, а в меню сообщения есть действие закрепа и вид «только закреплённые». Закрепляются только обычные сообщения канала — личные (`pm`/`apm`) отвечают `NOT_FOUND`.
 
 Протокол v43 добавляет гейт правил: `api.gate("rules")` принудительно показывает новичку одну страницу при входе, а сервер блокирует писанину (`chat.send`/`chat.pm`/`chat.apm`, `message.update`, `message.react`, `voice.join` с `ACCEPT_REQUIRED`) до `help.accept`, записывающего принятие с обязательными контролами (`api.button(..., { accept: true, requires: [...] })`). Страницы получают `audience` (`always`/`pending`/`accepted`) для маршрутизации показа, участники — `helpAccepted`. Принятие живёт на строке членства: выход его сбрасывает, повторный вход снова показывает правила. Audience — только показ: snapshot по-прежнему несёт полную спеку. Записанные принятия переживают переключения гейта и рестарты; сбрасывают их только выход, кик или бан.
 
@@ -267,6 +311,10 @@ Electron-клиент показывает изображения до 10 МБ �
 - `chat.pm`, `chat.apm`, `chat.mute.set`;
 - `message.update`;
 - `message.delete`;
+- `message.bulkDelete`;
+- `message.pin`, `message.unpin`, `message.pinned.list`;
+- `typing.start`, `typing.stop`;
+- `presence.set`;
 - `profile.update`;
 - `help.accept`;
 - `server.leave`;
@@ -276,10 +324,13 @@ Electron-клиент показывает изображения до 10 МБ �
 - `channel.update`;
 - `channel.slowmode.set`;
 - `channel.delete`;
-- `member.role.set`;
+- `member.role.set`, `member.roles.set`;
+- `channel.overwrites.set`;
+- `role.create`, `role.update`, `role.delete`, `role.list`;
 - `member.kick`;
 - `member.ban`;
 - `member.unban`;
+- `audit.list`;
 - `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
 - `server.delete`;
 - `ping`.
@@ -291,8 +342,13 @@ Electron-клиент показывает изображения до 10 МБ �
 - `server.deleted`;
 - `history.result`;
 - `message.search.result`;
-- `message.created`, `message.updated`, `message.deleted`;
+- `message.created`, `message.updated`, `message.deleted`, `message.pinned.updated`, `message.pinned.result`;
+- `typing.updated`;
+- `presence.updated`;
 - `member.updated`, `member.removed`, `profile.anonymized`;
+- `role.list.result`, `role.created`, `role.updated`, `role.deleted`;
+- `channel.overwrites.updated`;
+- `audit.result`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
@@ -316,7 +372,7 @@ Electron-клиент показывает изображения до 10 МБ �
 
 `screenShareMaxResolution` и `screenShareMaxFrameRate` задаёт владелец в настройках сервера. Токен LiveKit ограничить кадр не позволяет, а разрешение и битрейт выбирает сам клиент, поэтому предел разрешения применяется по факту: когда видеодорожка демонстрации публикуется выше разрешённой высоты, сервер её глушит (повторно проверяется при сверке, если вебхук был пропущен). Сравнивается высота — именно её задаёт настройка (480/720/1080/1440) и по ней же клиент масштабирует кадр, тогда как ширина у широких мониторов законно больше. Клиент по этой заглушке останавливает собственную демонстрацию и объясняет причину, вместо того чтобы оставлять на экране демонстрацию, которая ничего не передаёт. Частоту кадров LiveKit в описании дорожки не сообщает, поэтому она остаётся подсказкой клиенту и не проверяется.
 
-`message.update` разрешён исключительно автору сообщения. Даже владелец и администратор не могут редактировать чужой текст или вложения. Событие содержит итоговый `attachmentIds`: сервер принимает существующие вложения этого сообщения и новые незанятые загрузки автора, атомарно заменяет связи и удаляет откреплённые файлы. После изменения сервер устанавливает `editedAt` и рассылает `message.updated`. `message.delete` разрешён автору, а для чужих сообщений — владельцу и администраторам с правом `MANAGE_MESSAGES`; сервер рассылает `message.deleted` и удаляет связанные вложения.
+`message.update` разрешён исключительно автору сообщения. Даже владелец и администратор не могут редактировать чужой текст или вложения. Событие содержит итоговый `attachmentIds`: сервер принимает существующие вложения этого сообщения и новые незанятые загрузки автора, атомарно заменяет связи и удаляет откреплённые файлы. После изменения сервер устанавливает `editedAt` и рассылает `message.updated`. `message.delete` разрешён автору, а для чужих сообщений — владельцу и администраторам с правом `MANAGE_MESSAGES`; сервер рассылает `message.deleted` и удаляет связанные вложения. `message.bulkDelete` атомарно удаляет 2–50 обычных сообщений одного текстового канала для держателей `MANAGE_MESSAGES`, рассылая по одному `message.deleted` на сообщение.
 
 `chat.send`, `chat.pm` и `chat.apm` могут содержать `replyToMessageId`. Сервер принимает ссылку, только если исходное сообщение находится в том же канале и доступно отправителю; так ответ не раскрывает недоступное личное сообщение. В хранилище и протоколе передаётся только ID, а компактную цитату клиент собирает из уже загруженных сообщений. Внешний ключ имеет `ON DELETE SET NULL`, поэтому удаление исходного сообщения сохраняет сам ответ без битой ссылки.
 
@@ -332,9 +388,25 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v43 (中文)
+# OpenCord 协议 v51 (中文)
+
+协议 v51 新增类似 Discord 的新成员欢迎频道（迁移 `039_welcome_channel`，不新增权限）。新增服务器设置 `welcomeChannelId`（文本频道的可空 uuid，`null` 表示关闭欢迎语）和 `welcomeMessage`（最多 500 字符的模板，支持 `{user}` 和 `{server}` 占位符，默认为 `Welcome to {server}, {user}!`），经由 `server.settings.update` 和 `server.snapshot` 传输。修改需要 `MANAGE_SERVER`；两个字段在更新事件中均为可选，因此省略它们的老客户端会保留现有欢迎语。身份首次注册时，服务器以所有者名义向欢迎频道发送一条普通 `chat` 欢迎语——这是服务器行为，不受 overwrites 可见性限制——并照常广播 `message.created`。重复加入、第二连接和被封禁身份不会收到欢迎语；删除欢迎频道会静默关闭该功能。客户端在服务器设置中提供欢迎语页面（文本频道选择器、模板编辑器及示例名称实时预览）。
+
+协议 v50 新增类似 Discord 的管理审计日志（迁移 `038_audit_log`，不新增权限）。只追加的 `audit_log` 表保存 `id`、`at`、`actor_id`、`action`（复用现有事件名：`member.kick`/`member.ban`/`member.unban`、`member.role.set`/`member.roles.set`、`role.create`/`role.update`/`role.delete`、`channel.create`/`channel.update`/`channel.delete`、`channel.overwrites.set`、`channel.slowmode.set`、`message.delete`/`message.bulkDelete`、`server.settings.update`/`server.avatar.update`/`server.banner.update`）、可空 `target_id` 和可空 `detail`（JSON/文本，最多 2000 字符）。服务器在现有处理器内以 best-effort 写入——日志错误绝不导致主操作失败——并仅保留最近 1000 条（写入时裁剪）。`audit.list`（`limit` 1–100、可空游标 `before`）需要 `MANAGE_SERVER`，以 `audit.result`（`entries` 按时间倒序及 `hasMore`）应答。客户端在服务器设置中提供审计页面（操作者名取自成员列表、操作、目标、时间、详情），支持加载更多分页。
+
+协议 v49 新增类似 Discord 的频道权限覆盖，仅针对角色（无成员目标，不新增权限；迁移 `037_channel_overwrites`）。每个 `(channelId, roleId)` 行携带 `allow`/`deny`（现有 9 个权限值的子集）；频道有效权限为（角色权限并集加 allow 并集）减去 deny 并集——频道 allow 覆盖角色权限，deny 覆盖 allow，任一角色的 deny 优先于另一角色的 allow。所有者不受覆盖限制。在没有独立查看/发言权限的情况下，`VOICE_CONNECT` 为可见性代理（snapshot 列表、历史、搜索、置顶、附件下载、语音加入），`VOICE_SPEAK` 为发言代理（chat.send/pm/apm、message.update、message.react、输入状态）；频道内管理操作需要该频道内有效的对应权限（`MANAGE_MESSAGES`/`MANAGE_CHANNELS`）。没有有效 `VOICE_CONNECT` 的频道会从该用户的 `server.snapshot.channels` 中隐藏。`channel.overwrites.set`（需要 `MANAGE_CHANNELS` 及层级校验：不得操作高于自身顶点的角色，所有者除外）会广播 `channel.overwrites.updated` 并附带全新的个性化 snapshot；snapshot 仅向持有 `MANAGE_CHANNELS` 的用户携带 `channelOverwrites`。客户端在频道设置中提供按角色的 allow/deny/neutral 三态编辑器，并从列表中移除被隐藏的频道。
+
+协议 v48 新增类似 Discord 的自定义服务器角色：`role.create`/`role.update`/`role.delete`（均需 `MANAGE_ROLES`）管理具有 `id`、`name`（2–32 字符）、`color`（#rrggbb 或 null）、`position`（0–9999）和 `permissions`（现有 9 个权限值的子集，不新增权限；迁移 `036_custom_roles`）的行。`member.roles.set` 分配精确集合（最多 32 个角色 id，需 `MANAGE_ROLES`）；旧版 `member.role.set` 继续有效，并映射到 administrator/member 种子角色。种子与此前行为一致：administrator（位置 10，MANAGE_CHANNELS/MANAGE_MESSAGES/KICK_MEMBERS 及语音权限）和 member（位置 0，VOICE_CONNECT/VOICE_SPEAK）。所有者保留在表外，绑定部署公钥、不可转让、始终拥有全部权限并位于层级顶端。有效权限为已分配角色的并集；层级取最大位置。管理操作（踢出/封禁/授角、聊天禁言、语音断开/禁言）要求自身最高位置严格高于目标；所有者不受层级限制，无人可操作所有者，无人可授予高于自身最高位置的角色。snapshot 携带 `roles` 列表，每个成员携带 `roleIds`（对旧端默认为空）；`currentUser.permissions` 保持原形状，现为计算出的并集。变更会广播 `role.created`/`role.updated`/`role.deleted` 并附带全新 snapshot；`role.list` 以 `role.list.result` 应答。客户端在服务器设置中提供角色面板（创建/重命名/颜色/位置/权限开关、按成员分配），并以最高有色角色的颜色渲染成员昵称。
 
 协议版本描述了 WebSocket 事件的兼容性，并且与 OpenCord Server 的 SemVer 版本不一致。版本和服务器状态的公共契约在 [health.md](./health.md) 中描述。
+
+协议 v47 新增管理批量删除消息：`message.bulkDelete` 需要 `MANAGE_MESSAGES` 权限，可在一个原子操作中删除同一文字频道的 2–50 条普通消息；服务器为每条消息广播一个 `message.deleted`，并删除孤立的附件。如果任一 ID 不存在、属于其他频道或是私聊（`pm`/`apm`）消息，则不删除任何消息，服务器返回 `NOT_FOUND`。批量删除受频率限制（每个身份每 20 秒最多 3 次）；单条 `message.delete` 没有单独限制。客户端为管理员提供带确认对话框的多选模式，并乐观地移除消息，若服务器拒绝则恢复它们。
+
+协议 v46 新增轻量在线状态广播：客户端发送带 `status` 的 `presence.set`（`online`/`idle`/`dnd`/`invisible`，无 `requestId`、无应答），服务器向所有成员广播 `presence.updated`（`userId`、公开 `status`）。数据库不存储任何内容，也无需迁移：在线状态只保存在活跃 WebSocket 连接的内存中，`invisible` 对其他人显示为 `offline`，关闭最后一个连接时会广播 `offline`。客户端可直接在个人资料栏切换状态，无需重发整个资料；5 分钟无操作后自动标为 `idle`（除非状态是手动选择的，否则首次操作即恢复 `online`），并根据 `presence.updated` 更新成员列表圆点，无需重新拉取资料。
+
+协议 v45 新增临时输入状态指示：客户端发送带 `channelId` 的 `typing.start`/`typing.stop`（无 `requestId`、无应答），服务器向频道内其他成员广播 `typing.updated`（`channelId`、`userId`、`typing`）。数据库不存储任何内容，也无需迁移：服务器将状态保存在内存中，TTL 约 5 秒，可被重复的 start 续期，到期自动熄灭；同一用户在同一频道每 2 秒最多接受一次 `typing.start`，超出部分会被静默丢弃；服务器校验频道为文字频道且发送者为成员，并在断开连接和发送消息时清除状态。输入期间客户端每 3 秒最多发送一次 start，在发送、失焦或切换频道时发送 stop；输入框下方的指示器最多显示三个名字，超出则显示人数。
+
+协议 v44 新增频道消息置顶：`message.pin`/`message.unpin` 需要 `MANAGE_MESSAGES` 权限，用于切换存储的 `pinned` 标志及其 `pinnedAt` 时间戳（迁移 `035_message_pins`）；历史记录、搜索和实时事件都携带这两个字段，置顶操作会广播 `message.updated` 和轻量事件 `message.pinned.updated`。客户端通过 `message.pinned.list` 获取某频道的置顶消息（以 `message.pinned.result` 应答），或用 `pinnedOnly` 过滤全局搜索；消息菜单提供置顶操作，频道内提供仅看置顶视图。只有普通频道消息可以置顶——私聊（`pm`/`apm`）消息返回 `NOT_FOUND`。
 
 协议 v43 新增规则门禁：`api.gate("rules")` 强制新成员进入时只看到一个页面；在 `help.accept` 记录接受（含必填控件，`api.button(..., { accept: true, requires: [...] })`）之前，服务器会阻止发言（`chat.send`/`chat.pm`/`chat.apm`、`message.update`、`message.react`、`voice.join`，返回 `ACCEPT_REQUIRED`）。页面新增 `audience`（`always`/`pending`/`accepted`）用于展示路由，成员新增 `helpAccepted`。接受状态保存在成员资格行：退出即清零，重进会再次看到规则。Audience 仅控制展示——snapshot 仍携带完整规范。已记录的接受在开关门禁和重启后依然有效；只有退出、移出或封禁会将其清零。
 
@@ -433,6 +505,10 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `chat.pm`, `chat.apm`, `chat.mute.set`;
 - `message.update`;
 - `message.delete`;
+- `message.bulkDelete`;
+- `message.pin`, `message.unpin`, `message.pinned.list`;
+- `typing.start`, `typing.stop`;
+- `presence.set`;
 - `profile.update`;
 - `help.accept`;
 - `server.leave`;
@@ -442,10 +518,13 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `channel.update`;
 - `channel.slowmode.set`;
 - `channel.delete`;
-- `member.role.set`;
+- `member.role.set`, `member.roles.set`;
+- `channel.overwrites.set`;
+- `role.create`, `role.update`, `role.delete`, `role.list`;
 - `member.kick`;
 - `member.ban`;
 - `member.unban`;
+- `audit.list`;
 - `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
 - `server.delete`;
 - `ping`.
@@ -457,8 +536,13 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `server.deleted`;
 - `history.result`;
 - `message.search.result`;
-- `message.created`, `message.updated`, `message.deleted`;
+- `message.created`, `message.updated`, `message.deleted`, `message.pinned.updated`, `message.pinned.result`;
+- `typing.updated`;
+- `presence.updated`;
 - `member.updated`, `member.removed`, `profile.anonymized`;
+- `role.list.result`, `role.created`, `role.updated`, `role.deleted`;
+- `channel.overwrites.updated`;
+- `audit.result`;
 - `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
 - `pong`, `error`.
 
@@ -482,7 +566,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 
 `screenShareMaxResolution` 和 `screenShareMaxFrameRate` 由所有者在服务器设置中指定。LiveKit 令牌无法约束画面，而分辨率和码率由客户端自行选择，因此分辨率限制在事后生效：当屏幕共享视频轨道以超出允许高度发布时，服务器会将其静音（若遗漏了 webhook，则在对账时再次检查）。比较的是高度——设置指定的正是它（480/720/1080/1440），客户端也按它缩放画面，而超宽显示器的宽度理应更大。客户端会依据该静音停止自己的共享并说明原因，而不是在屏幕上留下一个什么都不传输的共享。LiveKit 不会在轨道描述中报告帧率，因此帧率仍是客户端提示，不做强制。
 
-`message.update` 仅允许消息作者使用。即使是所有者和管理员也无法编辑他人的文本或附件。该事件包含最终的 `attachmentIds`：服务器接受该消息现有的附件以及作者新上传且未被占用的文件，原子地替换关联并删除已分离的文件。更改后，服务器设置 `editedAt` 并广播 `message.updated`。`message.delete` 对作者开放，对于他人的消息，对具有 `MANAGE_MESSAGES` 权限的所有者和管理员开放；服务器广播 `message.deleted` 并删除关联的附件。
+`message.update` 仅允许消息作者使用。即使是所有者和管理员也无法编辑他人的文本或附件。该事件包含最终的 `attachmentIds`：服务器接受该消息现有的附件以及作者新上传且未被占用的文件，原子地替换关联并删除已分离的文件。更改后，服务器设置 `editedAt` 并广播 `message.updated`。`message.delete` 对作者开放，对于他人的消息，对具有 `MANAGE_MESSAGES` 权限的所有者和管理员开放；服务器广播 `message.deleted` 并删除关联的附件。`message.bulkDelete` 允许具有 `MANAGE_MESSAGES` 权限的用户原子地删除同一文字频道的 2–50 条普通消息，并为每条消息广播一个 `message.deleted`。
 
 `chat.send`、`chat.pm` 和 `chat.apm` 可以包含 `replyToMessageId`。只有当原消息位于同一频道且对发送者可见时，服务器才会接受该引用，从而避免通过回复泄露无权访问的私聊消息。存储和协议中只传输原消息 ID，紧凑引用由客户端从已加载消息中解析。数据库外键使用 `ON DELETE SET NULL`，删除原消息时会保留回复，且不会留下无效引用。
 

@@ -515,6 +515,102 @@ const migrations = [
       ALTER TABLE server_members ADD COLUMN IF NOT EXISTS help_accepted_at timestamptz;
     `,
   },
+  {
+    // Закреплённые сообщения канала (протокол v44). pinned_at фиксирует момент
+    // закрепления для сортировки; индекс частичный, чтобы обычные сообщения его не трогали.
+    id: "035_message_pins",
+    sql: `
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned_at timestamptz;
+      CREATE INDEX IF NOT EXISTS messages_pinned_idx ON messages(channel_id, pinned_at DESC) WHERE pinned = true;
+    `,
+  },
+  {
+    // Кастомные роли сервера (протокол v48): Discord-подобная модель поверх legacy-роли.
+    // Владелец остаётся вне таблицы (привязка к ключу развёртывания, непередаваем).
+    // Сиды administrator/member повторяют текущее поведение; legacy-колонка role
+    // продолжает работать, member_roles — источник union-прав и иерархии (max position).
+    id: "036_custom_roles",
+    sql: `
+      CREATE TABLE IF NOT EXISTS server_roles (
+        id uuid PRIMARY KEY,
+        server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        name text NOT NULL CHECK (char_length(name) BETWEEN 2 AND 32),
+        color text CHECK (color IS NULL OR color ~ '^#[0-9a-fA-F]{6}$'),
+        position integer NOT NULL DEFAULT 0 CHECK (position BETWEEN 0 AND 9999),
+        permissions text[] NOT NULL DEFAULT '{}',
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS server_roles_server_position_idx ON server_roles(server_id, position DESC);
+      CREATE TABLE IF NOT EXISTS member_roles (
+        server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role_id uuid NOT NULL REFERENCES server_roles(id) ON DELETE CASCADE,
+        PRIMARY KEY (server_id, user_id, role_id)
+      );
+      CREATE INDEX IF NOT EXISTS member_roles_user_idx ON member_roles(server_id, user_id);
+      INSERT INTO server_roles (id, server_id, name, color, position, permissions) VALUES
+        ('00000000-0000-4000-8000-00000000a001', '${SERVER_ID}', 'administrator', NULL, 10, ARRAY['MANAGE_CHANNELS', 'MANAGE_MESSAGES', 'KICK_MEMBERS', 'VOICE_CONNECT', 'VOICE_SPEAK', 'VOICE_MODERATE']),
+        ('00000000-0000-4000-8000-00000000a002', '${SERVER_ID}', 'member', NULL, 0, ARRAY['VOICE_CONNECT', 'VOICE_SPEAK'])
+      ON CONFLICT (id) DO NOTHING;
+      INSERT INTO member_roles (server_id, user_id, role_id)
+      SELECT sm.server_id, sm.user_id, '00000000-0000-4000-8000-00000000a001'
+      FROM server_members sm WHERE sm.role = 'administrator'
+      ON CONFLICT DO NOTHING;
+      INSERT INTO member_roles (server_id, user_id, role_id)
+      SELECT sm.server_id, sm.user_id, '00000000-0000-4000-8000-00000000a002'
+      FROM server_members sm WHERE sm.role = 'member'
+      ON CONFLICT DO NOTHING;
+    `,
+  },
+  {
+    // Переопределения прав канала (протокол v49): Discord-подобные overwrites,
+    // только для ролей (member-targets нет — roles only). Новых прав не вводится:
+    // allow/deny — подмножества существующих значений permissionSchema.
+    // Правило: allow канала перекрывает права ролей, deny перекрывает allow.
+    id: "037_channel_overwrites",
+    sql: `
+      CREATE TABLE IF NOT EXISTS channel_overwrites (
+        channel_id uuid NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+        role_id uuid NOT NULL REFERENCES server_roles(id) ON DELETE CASCADE,
+        allow text[] NOT NULL DEFAULT '{}',
+        deny text[] NOT NULL DEFAULT '{}',
+        PRIMARY KEY (channel_id, role_id)
+      );
+      CREATE INDEX IF NOT EXISTS channel_overwrites_channel_idx ON channel_overwrites(channel_id);
+      CREATE INDEX IF NOT EXISTS channel_overwrites_role_idx ON channel_overwrites(role_id);
+    `,
+  },
+  {
+    // Журнал модерации (протокол v50): append-only, без новых прав.
+    // action переиспользует существующие имена событий; target_id покрывает
+    // и user id, и uuid целей; detail — JSON/текст до 2000 символов.
+    // Cap: последние 1000 строк, prune выполняется на insert в репозитории.
+    // Один SQL для PG и PGlite, идемпотентный (IF NOT EXISTS).
+    id: "038_audit_log",
+    sql: `
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id uuid PRIMARY KEY,
+        at timestamptz NOT NULL DEFAULT now(),
+        actor_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        action text NOT NULL,
+        target_id text NULL,
+        detail text NULL CHECK (detail IS NULL OR char_length(detail) <= 2000)
+      );
+      CREATE INDEX IF NOT EXISTS audit_log_at_idx ON audit_log(at DESC);
+    `,
+  },
+  {
+    // Welcome-канал (протокол v51): nullable uuid текстового канала (null выключает)
+    // и шаблон приветствия до 500 символов с плейсхолдерами {user} и {server}.
+    // FK с ON DELETE SET NULL: удаление канала молча выключает приветствие.
+    // Один SQL для PG и PGlite, идемпотентный (IF NOT EXISTS).
+    id: "039_welcome_channel",
+    sql: `
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS welcome_channel_id uuid REFERENCES channels(id) ON DELETE SET NULL;
+      ALTER TABLE servers ADD COLUMN IF NOT EXISTS welcome_message text NOT NULL DEFAULT 'Welcome to {server}, {user}!';
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, nameFontSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, serverHelpSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
+import { attachmentSchema, attachmentUploadLimitSchema, bannedMemberSchema, channelOverwriteSchema, customRoleSchema, CUSTOM_STATUS_EMOJI_MAX_LENGTH, CUSTOM_STATUS_MAX_LENGTH, DEFAULT_ATTACHMENT_LIMIT_BYTES, discriminatorSchema, nameFontSchema, profileAccentColorSchema, publicMemberStatusSchema, screenShareFrameRateSchema, screenShareResolutionSchema, serverHelpSchema, userStatusSchema, usernameSchema } from "@opencord/shared";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../lib/i18n/languages";
 import { keybindMapSchema } from "./keybinds";
 import { savedDeploymentConfigurationSchema } from "./deployment";
@@ -57,6 +57,8 @@ export const mockMemberSchema = z.object({
   bio: z.string().max(160).optional(),
   role: z.string().max(32),
   serverRole: z.enum(["owner", "administrator", "member"]).optional(),
+  roleIds: z.array(z.string().uuid()).max(32).optional(),
+  roleColor: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
   status: publicMemberStatusSchema,
   customStatus: z.string().max(CUSTOM_STATUS_MAX_LENGTH).optional(),
   customStatusEmoji: z.string().max(CUSTOM_STATUS_EMOJI_MAX_LENGTH).optional(),
@@ -86,8 +88,13 @@ export const mockServerSchema = z.object({
   screenShareMaxFrameRate: screenShareFrameRateSchema.optional(),
   // Справочные страницы кнопки `?`: приходят со снапшотом, отсутствуют у демо-серверов.
   helpPage: serverHelpSchema.optional(),
+  // Welcome-канал (протокол v51): приходит со снапшотом, отсутствует у демо-серверов.
+  welcomeChannelId: z.string().uuid().nullable().optional(),
+  welcomeMessage: z.string().max(500).optional(),
   channels: z.array(mockChannelSchema),
   members: z.array(mockMemberSchema),
+  roles: z.array(customRoleSchema).optional(),
+  channelOverwrites: z.array(channelOverwriteSchema).optional(),
   bannedMembers: z.array(bannedMemberSchema).optional(),
   deployment: savedDeploymentConfigurationSchema.optional(),
 });
@@ -109,6 +116,8 @@ export const mockMessageSchema = z.object({
   targetUserId: z.string().min(1).max(200).nullable().optional(),
   anonymous: z.boolean().optional(),
   replyToMessageId: z.string().min(1).nullable().optional(),
+  pinned: z.boolean().optional(),
+  pinnedAt: z.string().datetime().nullable().optional(),
 }).superRefine((message, context) => {
   if (!message.content && !message.attachments?.length) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
@@ -138,6 +147,56 @@ export const channelNotificationSettingsSchema = z.object({
 });
 export type ChannelNotificationSettings = z.infer<typeof channelNotificationSettingsSchema>;
 
+export const MAX_MESSAGE_DRAFTS = 50 as const;
+export const MAX_MESSAGE_DRAFT_LENGTH = 4_000 as const;
+export const messageDraftsSchema = z.record(z.string().min(1).max(200), z.string().max(MAX_MESSAGE_DRAFT_LENGTH)).default({});
+export type MessageDrafts = z.infer<typeof messageDraftsSchema>;
+
+export function normalizeMessageDrafts(input: unknown): MessageDrafts {
+  const parsed = messageDraftsSchema.safeParse(input);
+  if (!parsed.success) return {};
+  const entries = Object.entries(parsed.data).filter(([, text]) => text.trim().length > 0);
+  return Object.fromEntries(entries.slice(-MAX_MESSAGE_DRAFTS));
+}
+
+export function setMessageDraft(drafts: MessageDrafts, channelId: string, text: string): MessageDrafts {
+  if (!text.trim()) return clearMessageDraft(drafts, channelId);
+  const next: MessageDrafts = { ...drafts, [channelId]: text };
+  const keys = Object.keys(next);
+  if (keys.length <= MAX_MESSAGE_DRAFTS) return next;
+  const pruned: MessageDrafts = {};
+  for (const key of keys.slice(keys.length - MAX_MESSAGE_DRAFTS)) {
+    const value = next[key];
+    if (value !== undefined) pruned[key] = value;
+  }
+  return pruned;
+}
+
+export function clearMessageDraft(drafts: MessageDrafts, channelId: string): MessageDrafts {
+  if (!(channelId in drafts)) return drafts;
+  const next = { ...drafts };
+  delete next[channelId];
+  return next;
+}
+
+export function pruneMessageDrafts(drafts: MessageDrafts, removedChannelIds: ReadonlySet<string>): MessageDrafts {
+  if (!removedChannelIds.size || !Object.keys(drafts).some((channelId) => removedChannelIds.has(channelId))) return drafts;
+  const next: MessageDrafts = {};
+  for (const [channelId, text] of Object.entries(drafts)) {
+    if (!removedChannelIds.has(channelId)) next[channelId] = text;
+  }
+  return next;
+}
+
+export const VOICE_INPUT_MODES = ["voice", "push-to-talk"] as const;
+export type VoiceInputMode = (typeof VOICE_INPUT_MODES)[number];
+export const DEFAULT_VOICE_INPUT_MODE: VoiceInputMode = "voice";
+// Код физической клавиши PTT (KeyboardEvent.code): любой непустой код из
+// набора keybind-триггеров, чтобы в настройках ловилась произвольная клавиша,
+// а не только KeyA–KeyZ. Модификаторы не храним: PTT срабатывает по коду.
+export const DEFAULT_PUSH_TO_TALK_KEY = "KeyV" as const;
+export const pushToTalkKeySchema = z.string().regex(/^[A-Z][A-Za-z0-9]{0,23}$/).default(DEFAULT_PUSH_TO_TALK_KEY);
+
 export const clientPreferencesSchema = z.object({
   language: z.enum(LANGUAGES).default(DEFAULT_LANGUAGE),
   colorTheme: z.enum(COLOR_THEMES).default(DEFAULT_COLOR_THEME),
@@ -145,16 +204,17 @@ export const clientPreferencesSchema = z.object({
   darkShade: z.enum(DARK_SHADES).default(DEFAULT_DARK_SHADE),
   compactMode: z.boolean(),
   showMemberList: z.boolean(),
+  showLinkPreviews: z.boolean().default(true),
   notifications: z.boolean(),
   notificationOverrides: z.record(z.string(), channelNotificationSettingsSchema).default({}),
   uiScale: z.number().min(0.8).max(1.4).default(1),
-  voiceInputMode: z.enum(["voice", "push-to-talk"]),
-  voiceInputDeviceId: z.string().max(500).nullable(),
-  voiceOutputDeviceId: z.string().max(500).nullable(),
-  pushToTalkKey: z.string().regex(/^Key[A-Z]$/).default("KeyV"),
-  echoCancellation: z.boolean(),
-  noiseSuppression: z.boolean(),
-  autoGainControl: z.boolean(),
+  voiceInputMode: z.enum(VOICE_INPUT_MODES).default(DEFAULT_VOICE_INPUT_MODE),
+  voiceInputDeviceId: z.string().max(500).nullable().default(null),
+  voiceOutputDeviceId: z.string().max(500).nullable().default(null),
+  pushToTalkKey: pushToTalkKeySchema,
+  echoCancellation: z.boolean().default(true),
+  noiseSuppression: z.boolean().default(true),
+  autoGainControl: z.boolean().default(true),
   automaticInputSensitivity: z.boolean().default(true),
   manualInputSensitivityDb: z.number().int().min(-80).max(-10).default(-45),
   voiceParticipantSettings: z.record(z.string().min(1).max(256), z.object({ muted: z.boolean(), volume: z.number().min(0).max(1) })).default({}),
@@ -170,6 +230,7 @@ const persistedStateFields = {
   messages: z.array(mockMessageSchema),
   activeServerId: z.string().nullable(),
   activeChannelId: z.string().nullable(),
+  messageDrafts: messageDraftsSchema,
   preferences: clientPreferencesSchema,
 };
 function validateStateRelations(state: { servers: MockServer[]; activeServerId: string | null; activeChannelId: string | null }, context: z.RefinementCtx): void {
@@ -206,13 +267,14 @@ export function createDefaultState(): PersistedClientState {
     messages: [],
     activeServerId: null,
     activeChannelId: null,
-    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, notifications: true, notificationOverrides: {}, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {}, keybinds: {} },
+    messageDrafts: {},
+    preferences: { language: DEFAULT_LANGUAGE, colorTheme: DEFAULT_COLOR_THEME, themeMode: DEFAULT_THEME_MODE, darkShade: DEFAULT_DARK_SHADE, compactMode: false, showMemberList: true, showLinkPreviews: true, notifications: true, notificationOverrides: {}, uiScale: 1, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, automaticInputSensitivity: true, manualInputSensitivityDb: -45, voiceParticipantSettings: {}, keybinds: {} },
   };
 }
 
 export function parsePersistedState(input: unknown): PersistedClientState {
   const current = persistedClientStateSchema.safeParse(input);
-  if (current.success) return current.data;
+  if (current.success) return { ...current.data, messageDrafts: normalizeMessageDrafts(current.data.messageDrafts) };
   const legacyV3 = persistedClientStateV3Schema.safeParse(input);
   const legacyV2 = persistedClientStateV2Schema.safeParse(input);
   const legacyV1 = persistedClientStateV1Schema.safeParse(input);
@@ -228,7 +290,7 @@ export function parsePersistedState(input: unknown): PersistedClientState {
   // Профиль v1–v3: username выводится из отображаемого имени, дискриминатор генерируется
   // случайно; при первом подключении к серверу клиент сверит его с дискриминатором ключей.
   const profile = legacy.profile ? { ...legacy.profile, username: deriveUsername(legacy.profile.displayName), discriminator: randomDiscriminator() } : null;
-  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, profile, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {}, keybinds: {} } });
+  return persistedClientStateSchema.parse({ ...legacy, version: STATE_VERSION, profile, servers, messages: legacy.messages.filter((message) => !removedChannelIds.has(message.channelId)), activeServerId, activeChannelId, messageDrafts: normalizeMessageDrafts((legacy as { messageDrafts?: unknown }).messageDrafts), preferences: { ...legacy.preferences, voiceInputMode: "voice", voiceInputDeviceId: null, voiceOutputDeviceId: null, pushToTalkKey: "KeyV", echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceParticipantSettings: {}, keybinds: {} } });
 }
 
 function deriveUsername(displayName: string): string {

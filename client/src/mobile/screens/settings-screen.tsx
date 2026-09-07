@@ -86,6 +86,7 @@ export function MobileSettingsScreen({
         <ListGroup>
           <ListToggle label={t.settings.compact} hint={t.settings.compactHint} checked={preferences.compactMode} onChange={(compactMode) => update({ compactMode })} />
           <ListToggle label={t.settings.members} checked={preferences.showMemberList} onChange={(showMemberList) => update({ showMemberList })} />
+          <ListToggle label={t.settings.linkPreviews} hint={t.settings.linkPreviewsHint} checked={preferences.showLinkPreviews} onChange={(showLinkPreviews) => update({ showLinkPreviews })} />
           <ListToggle label={t.settings.notifications} checked={preferences.notifications} onChange={(notifications) => update({ notifications })} />
         </ListGroup>
       </Screen>
@@ -215,6 +216,13 @@ export function MobileSettingsScreen({
   if (stack.current === "sensitivity") {
     return (
       <Screen title={t.settings.sensitivity} onBack={back}>
+        {preferences.voiceInputMode === "push-to-talk" && (
+          <ListGroup>
+            <ListBlock>
+              <p role="note" className="text-xs leading-5 text-slate-400">{t.settings.sensitivityPttNote}</p>
+            </ListBlock>
+          </ListGroup>
+        )}
         <ListGroup>
           <ListToggle label={t.settings.automaticSensitivity} hint={t.settings.automaticSensitivityHint} checked={preferences.automaticInputSensitivity} onChange={(automaticInputSensitivity) => update({ automaticInputSensitivity })} />
         </ListGroup>

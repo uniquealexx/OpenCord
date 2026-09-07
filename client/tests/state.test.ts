@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDefaultState, parsePersistedState, safePersistedState, STATE_VERSION } from "@/shared/state";
+import { clearMessageDraft, createDefaultState, MAX_MESSAGE_DRAFTS, normalizeMessageDrafts, parsePersistedState, pruneMessageDrafts, safePersistedState, setMessageDraft, STATE_VERSION } from "@/shared/state";
 
 describe("persisted client state", () => {
   it("creates a valid versioned initial state", () => {
@@ -126,6 +126,37 @@ describe("persisted client state", () => {
   it("falls back for unsupported or corrupt state", () => {
     const fallback = safePersistedState({ version: 999, profile: "invalid" });
     expect(fallback).toEqual(createDefaultState());
+  });
+
+  it("defaults per-channel drafts to empty for older states and persists them", () => {
+    const state = createDefaultState();
+    expect(state.messageDrafts).toEqual({});
+    const older: Partial<typeof state> = { ...state };
+    delete older.messageDrafts;
+    expect(parsePersistedState(older).messageDrafts).toEqual({});
+
+    const restored = parsePersistedState({ ...state, messageDrafts: { welcome: "черновик" } });
+    expect(restored.messageDrafts).toEqual({ welcome: "черновик" });
+  });
+
+  it("drops empty drafts and caps the map at 50 entries", () => {
+    expect(normalizeMessageDrafts({ a: "  ", b: "текст" })).toEqual({ b: "текст" });
+    const overflowing = Object.fromEntries(Array.from({ length: MAX_MESSAGE_DRAFTS + 10 }, (_, index) => [`channel-${index}`, `draft-${index}`]));
+    const normalized = normalizeMessageDrafts(overflowing);
+    expect(Object.keys(normalized)).toHaveLength(MAX_MESSAGE_DRAFTS);
+    expect(normalized["channel-9"]).toBeUndefined();
+    expect(normalized[`channel-${MAX_MESSAGE_DRAFTS + 9}`]).toBeDefined();
+    expect(normalizeMessageDrafts("invalid")).toEqual({});
+  });
+
+  it("sets, clears and prunes per-channel drafts", () => {
+    expect(setMessageDraft({}, "welcome", "  ")).toEqual({});
+    const drafts = setMessageDraft(setMessageDraft({}, "welcome", "a"), "general", "b");
+    expect(drafts).toEqual({ welcome: "a", general: "b" });
+    expect(clearMessageDraft(drafts, "welcome")).toEqual({ general: "b" });
+    expect(clearMessageDraft(drafts, "missing")).toBe(drafts);
+    expect(pruneMessageDrafts(drafts, new Set(["welcome"]))).toEqual({ general: "b" });
+    expect(pruneMessageDrafts(drafts, new Set(["missing"]))).toBe(drafts);
   });
 
   it("defaults per-channel notification overrides to empty and all-enabled", () => {

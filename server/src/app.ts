@@ -3,12 +3,12 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { stripBidiControls, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, VOICE_PARTICIPANT_LIMIT_MAX, clientEventSchema, serverHealthSchema, unmetHelpRequires, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
+import { stripBidiControls, BULK_DELETE_BURST, BULK_DELETE_REFILL_MS, MESSAGE_FLOOD_BURST, MESSAGE_FLOOD_SUSTAINED, MESSAGE_FLOOD_WINDOW_MS, PROTOCOL_VERSION, TYPING_START_COOLDOWN_MS, TYPING_TTL_MS, VOICE_JOIN_BURST, VOICE_JOIN_REFILL_MS, VOICE_MODERATED_REJOIN_COOLDOWN_MS, VOICE_ORPHAN_GRACE_MS, VOICE_PARTICIPANT_LIMIT_MAX, clientEventSchema, renderWelcomeMessage, serverHealthSchema, unmetHelpRequires, type AuditAction, type ChatMessage, type ClientEvent, type Permission, type PublicMemberStatus, type ServerEvent, type UserStatus } from "@opencord/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Database } from "./database/database";
 import { runMigrations } from "./database/migrations";
-import { ChatRepository, messageForViewer, permissionsForRole } from "./database/repository";
+import { ChatRepository, messageForViewer, SEEDED_ADMINISTRATOR_ROLE_ID, SEEDED_MEMBER_ROLE_ID } from "./database/repository";
 import { userIdFromPublicKey, verifyChallenge } from "./identity";
 import { AttachmentSizeError, FileSystemAttachmentStorage, type AttachmentStorage } from "./attachments/storage";
 import { createFloodLimiter, WS_AUTH_FAILURE_BURST, WS_AUTH_FAILURE_REFILL_MS, WS_CONNECT_BURST, WS_CONNECT_REFILL_MS, WS_HANDSHAKE_TIMEOUT_MS, WS_MAX_CONNECTIONS } from "./rate-limit";
@@ -42,6 +42,8 @@ export interface BuildAppOptions {
   voiceService?: VoiceService;
   /** Пауза перед освобождением голоса после потери соединения; переопределяется в тестах. */
   voiceOrphanGraceMs?: number;
+  /** Время жизни индикатора набора текста; переопределяется в тестах. */
+  typingTtlMs?: number;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -62,6 +64,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const voiceMuteVerifications = new Map<string, NodeJS.Timeout>();
   // Отложенное освобождение голоса после потери управляющего соединения.
   const voiceOrphanTimers = new Map<string, NodeJS.Timeout>();
+  // Индикаторы набора текста (протокол v45): только память, без базы и миграций.
+  // Ключ — `${channelId}:${userId}`, значение — таймер авто-гашения записи.
+  const typingTimers = new Map<string, NodeJS.Timeout>();
+  // Последний принятый typing.start на ключ: чаще раза в 2 с на канал — молча мимо.
+  const typingLastStart = new Map<string, number>();
   // Настройки, которые голосовой сервис читает в момент события: держать их копию
   // внутри сервиса значило бы дублировать источник истины и разъезжаться с ним.
   const voiceLookups: VoiceLookups = {
@@ -72,8 +79,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     },
     mayBeInVoice: async (userId: string) => {
       if (await repository.findActiveBan(userId)) return false;
-      // getMemberRole бросает для того, кто на сервере не состоит: исключённый — не участник.
-      try { return permissionsForRole(await repository.getMemberRole(userId)).includes("VOICE_CONNECT"); } catch { return false; }
+      // getMemberPermissions бросает для того, кто на сервере не состоит: исключённый — не участник.
+      try { return (await repository.getMemberPermissions(userId)).includes("VOICE_CONNECT"); } catch { return false; }
     },
   };
   // Предел на идентичность, а не на канал: медленный режим настраивают модераторы,
@@ -82,6 +89,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   // Отдельный ограничитель: вход в голосовой канал стоит дороже сообщения (обращения
   // к LiveKit и рассылка всем), но и случается несопоставимо реже.
   const voiceJoinLimiter = createFloodLimiter({ capacity: VOICE_JOIN_BURST, refillIntervalMs: VOICE_JOIN_REFILL_MS });
+  // Массовое удаление — редкая разрушительная операция модерации: лимит заметно
+  // строже одиночного удаления (у которого отдельного лимита нет вовсе).
+  const bulkDeleteLimiter = createFloodLimiter({ capacity: BULK_DELETE_BURST, refillIntervalMs: BULK_DELETE_REFILL_MS });
   // Ограничители до аутентификации: новые WebSocket-подключения и неудачные попытки auth.respond.
   const wsConnectLimiter = createFloodLimiter({ capacity: WS_CONNECT_BURST, refillIntervalMs: WS_CONNECT_REFILL_MS });
   const authFailureLimiter = createFloodLimiter({ capacity: WS_AUTH_FAILURE_BURST, refillIntervalMs: WS_AUTH_FAILURE_REFILL_MS });
@@ -152,6 +162,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!userId) return reply.code(401).send({ error: "AUTH_REQUIRED" });
     const attachment = await repository.getAccessibleAttachment(request.params.attachmentId, userId);
     if (!attachment) return reply.code(404).send({ error: "NOT_FOUND" });
+    // Скрытый overwrites-канал (v49) закрывает и файлы своих сообщений.
+    const attachmentChannelId = await repository.getAttachmentChannelId(request.params.attachmentId);
+    if (attachmentChannelId && !(await hasChannelPermission(userId, attachmentChannelId, "VOICE_CONNECT"))) return reply.code(404).send({ error: "NOT_FOUND" });
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(attachment.fileName)}`);
     reply.header("Content-Length", attachment.sizeBytes);
@@ -198,7 +211,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (state.handshakeTimer) { clearTimeout(state.handshakeTimer); state.handshakeTimer = null; }
       if (state.sessionToken) sessions.delete(state.sessionToken);
       if (!state.userId) return;
-      void broadcastMember(state.userId, publicUserStatuses().get(state.userId) ?? "offline");
+      // Индикатор набора не переживает потерю соединения: остальные видят «печатает…»
+      // только пока автор действительно в сети. Проверка нужна, чтобы второе
+      // подключение той же идентичности не гасило чужой живой индикатор.
+      if (!hasAuthenticatedConnection(state.userId)) clearUserTyping(state.userId);
+      const remainingStatus = publicUserStatuses().get(state.userId) ?? "offline";
+      void broadcastMember(state.userId, remainingStatus);
+      // Последнее соединение закрыто — остальные видят offline (протокол v46).
+      if (!hasAuthenticatedConnection(state.userId)) broadcast({ type: "presence.updated", userId: state.userId, status: "offline" });
       // Соединение с LiveKit живёт отдельно от этого WebSocket, поэтому голос надо
       // освободить самим — иначе участник остаётся в канале и слышен, числясь офлайн.
       scheduleVoiceOrphanRelease(state.userId);
@@ -212,6 +232,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     voiceMuteVerifications.clear();
     for (const timer of voiceOrphanTimers.values()) clearTimeout(timer);
     voiceOrphanTimers.clear();
+    for (const timer of typingTimers.values()) clearTimeout(timer);
+    typingTimers.clear();
+    typingLastStart.clear();
     for (const connection of connections) connection.socket.close(1001, "Server shutdown");
     connections.clear();
     sessions.clear();
@@ -228,7 +251,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     const event = parsed.data;
     if (event.type === "auth.respond") return authenticate(connection, event);
-    if (!connection.userId) return sendError(connection.socket, event.requestId, "AUTH_REQUIRED", "Сначала необходимо подтвердить идентичность");
+    // typing.start/stop — эфемерные события без requestId, поэтому идентификатор
+    // запроса здесь извлекается условно, а не из типа напрямую.
+    if (!connection.userId) return sendError(connection.socket, "requestId" in event ? event.requestId : null, "AUTH_REQUIRED", "Сначала необходимо подтвердить идентичность");
     if (connection.sessionToken) {
       const session = sessions.get(connection.sessionToken);
       if (session) session.expiresAt = Date.now() + 15 * 60_000;
@@ -246,7 +271,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "profile.update") {
       if (!(await repository.updateUserProfile(connection.userId, event.profile))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Профиль пользователя не найден");
       connection.presenceStatus = event.profile.status;
-      await broadcastMember(connection.userId, publicStatus(event.profile.status));
+      const profilePublicStatus = publicStatus(event.profile.status);
+      await broadcastMember(connection.userId, profilePublicStatus);
+      broadcast({ type: "presence.updated", userId: connection.userId, status: profilePublicStatus });
+      return;
+    }
+    if (event.type === "presence.set") {
+      // Лёгкая смена присутствия (протокол v46): без записи в базу, только память
+      // соединения и рассылка. invisible сервер показывает остальным как offline.
+      if (!connection.userId) return;
+      connection.presenceStatus = event.status;
+      broadcast({ type: "presence.updated", userId: connection.userId, status: publicStatus(event.status) });
       return;
     }
     if (event.type === "help.accept") {
@@ -281,28 +316,39 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "history.request") {
       await runRetentionCleanup();
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (!(await canSeeChannel(connection.userId, event.channelId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет доступа к этому каналу");
       const messages = await repository.getHistory(event.channelId, event.limit, connection.userId);
       return send(connection.socket, { type: "history.result", requestId: event.requestId, channelId: event.channelId, messages });
     }
     if (event.type === "message.search") {
       await runRetentionCleanup();
-      const result = await repository.searchMessages(event.filters);
+      const visibleIds = await repository.getVisibleChannelIds(connection.userId);
+      if (event.filters.channelId && !visibleIds.has(event.filters.channelId)) {
+        return send(connection.socket, { type: "message.search.result", requestId: event.requestId, result: { messages: [], total: 0, offset: event.filters.offset, hasMore: false } });
+      }
+      const result = await repository.searchMessages(event.filters, [...visibleIds]);
       return send(connection.socket, { type: "message.search.result", requestId: event.requestId, result });
     }
     if (event.type === "chat.send") {
       if (await blockedByHelpGate(connection, event.requestId)) return;
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (!(await canSeeChannel(connection.userId, event.channelId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет доступа к этому каналу");
+      if (!(await hasChannelPermission(connection.userId, event.channelId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Писать в этот канал запрещено");
       const waitMs = await slowmodeDelay(connection.userId, event.channelId);
       if (waitMs > 0) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Медленный режим канала: следующее сообщение можно отправить через ${formatDelay(waitMs)}`, waitMs);
       if (event.replyToMessageId && !(await repository.canReplyToMessage(event.replyToMessageId, event.channelId, connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Исходное сообщение для ответа не найдено или недоступно");
       const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, event.attachmentIds, event.mentions, "chat", null, false, event.replyToMessageId);
       if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Одно или несколько вложений недоступны или уже отправлены");
       broadcast({ type: "message.created", message });
+      // Отправивший уже не печатает: клиент шлёт typing.stop сам, это — страховка.
+      clearTyping(event.channelId, connection.userId, true);
       return;
     }
     if (event.type === "chat.pm" || event.type === "chat.apm") {
       if (await blockedByHelpGate(connection, event.requestId)) return;
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (!(await canSeeChannel(connection.userId, event.channelId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет доступа к этому каналу");
+      if (!(await hasChannelPermission(connection.userId, event.channelId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Писать в этот канал запрещено");
       if (event.targetUserId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя отправить личное сообщение самому себе");
       if (event.replyToMessageId && !(await repository.canReplyToMessage(event.replyToMessageId, event.channelId, connection.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Исходное сообщение для ответа не найдено или недоступно");
       try { await repository.getMemberRole(event.targetUserId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Получатель не найден"); }
@@ -310,15 +356,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const message = await repository.createMessage(randomUUID(), event.channelId, connection.userId, event.content, [], [], anonymous ? "apm" : "pm", event.targetUserId, anonymous, event.replyToMessageId);
       if (!message) return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось отправить личное сообщение");
       routeMessageEvent(message, (current) => ({ type: "message.created", message: current }));
+      clearTyping(event.channelId, connection.userId, true);
       return;
     }
     if (event.type === "chat.mute.set") {
       if (!(await hasPermission(connection.userId, "MANAGE_MESSAGES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления чатом");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя замьютить самого себя");
-      let targetRole: import("@opencord/shared").MemberRole;
-      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
-      const actorRole = await repository.getMemberRole(connection.userId);
-      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить мут этого участника");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить мут этого участника");
       if (!(await repository.setChatMuted(event.userId, event.muted, event.durationMinutes))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден");
       await broadcastMember(event.userId, publicUserStatuses().get(event.userId) ?? "offline");
       return;
@@ -328,6 +373,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const existing = await repository.getMessageAccess(event.messageId);
       if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       if (existing.authorId !== connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Редактировать можно только собственные сообщения");
+      if (!(await hasChannelPermission(connection.userId, existing.channelId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Писать в этот канал запрещено");
       const updated = await repository.updateMessage(event.messageId, connection.userId, event.content, event.attachmentIds, event.mentions);
       if (!updated) return sendError(connection.socket, event.requestId, "CONFLICT", "Сообщение должно содержать текст или доступное вложение");
       await Promise.all(updated.removedStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
@@ -337,13 +383,30 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "message.delete") {
       const existing = await repository.getMessageAccess(event.messageId);
       if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
-      const canDeleteAny = await hasPermission(connection.userId, "MANAGE_MESSAGES");
+      if (!(await canSeeChannel(connection.userId, existing.channelId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет доступа к этому каналу");
+      const canDeleteAny = await hasChannelPermission(connection.userId, existing.channelId, "MANAGE_MESSAGES");
       if (existing.authorId !== connection.userId && !canDeleteAny) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для удаления чужого сообщения");
       const deleted = await repository.deleteMessage(event.messageId, connection.userId, canDeleteAny);
       if (!deleted) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение уже удалено");
       await Promise.all(deleted.storageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
       if (existing.kind === "chat") broadcast({ type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
       else sendToParticipants(existing.authorId, existing.targetUserId, { type: "message.deleted", messageId: event.messageId, channelId: deleted.channelId });
+      void writeAudit(connection.userId, "message.delete", event.messageId, deleted.channelId);
+      return;
+    }
+    if (event.type === "message.bulkDelete") {
+      // Массовое удаление (протокол v47): только модерация, владение не требуется.
+      // Лимит проверяется до прав, как и у входа в голос: дорогая операция режется рано.
+      const flood = bulkDeleteLimiter.consume(`bulkDelete:${connection.userId}`);
+      if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком частое массовое удаление, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
+      if (!(await hasChannelPermission(connection.userId, event.channelId, "MANAGE_MESSAGES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для массового удаления сообщений");
+      const channel = await repository.getChannel(event.channelId);
+      if (!channel || channel.kind !== "text") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      const result = await repository.deleteMessages(event.messageIds, event.channelId);
+      if (!result) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Одно или несколько сообщений не найдены в этом канале");
+      await Promise.all(result.storageKeys.map((storageKey) => attachmentStorage.remove(storageKey).catch((error: unknown) => app.log.error(error))));
+      for (const messageId of result.deletedIds) broadcast({ type: "message.deleted", messageId, channelId: result.channelId });
+      void writeAudit(connection.userId, "message.bulkDelete", event.channelId, `deleted ${result.deletedIds.length} messages in channel "${channel.name}"`);
       return;
     }
     if (event.type === "message.react") {
@@ -356,6 +419,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       }
       if (access.kind === "apm" && access.authorId === connection.userId) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя реагировать на собственное анонимное сообщение");
+      if (!(await canSeeChannel(connection.userId, access.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      if (!(await hasChannelPermission(connection.userId, access.channelId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Реагировать в этом канале запрещено");
       const reactions = await repository.toggleReaction(event.messageId, connection.userId, event.emoji);
       if (reactions === null) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
       const payload = { type: "message.reactions.updated" as const, messageId: event.messageId, channelId: access.channelId, reactions };
@@ -363,34 +428,73 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       else sendToParticipants(access.authorId, access.targetUserId, payload);
       return;
     }
+    if (event.type === "message.pin" || event.type === "message.unpin") {
+      const access = await repository.getMessageAccess(event.messageId);
+      if (access && !(await hasChannelPermission(connection.userId, access.channelId, "MANAGE_MESSAGES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для закрепления сообщений");
+      if (!access || access.kind !== "chat") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      const updated = await repository.setMessagePinned(event.messageId, event.type === "message.pin");
+      if (!updated) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Сообщение не найдено");
+      broadcast({ type: "message.updated", message: updated });
+      broadcast({ type: "message.pinned.updated", messageId: updated.id, channelId: updated.channelId, pinned: updated.pinned, pinnedAt: updated.pinnedAt });
+      return;
+    }
+    if (event.type === "message.pinned.list") {
+      await runRetentionCleanup();
+      if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      if (!(await canSeeChannel(connection.userId, event.channelId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет доступа к этому каналу");
+      const messages = await repository.listPinnedMessages(event.channelId, event.limit, connection.userId);
+      return send(connection.socket, { type: "message.pinned.result", requestId: event.requestId, channelId: event.channelId, messages });
+    }
+    if (event.type === "typing.start") {
+      await handleTypingStart(connection, event.channelId);
+      return;
+    }
+    if (event.type === "typing.stop") {
+      if (connection.userId) clearTyping(event.channelId, connection.userId, true);
+      return;
+    }
     if (event.type === "channel.create") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для создания каналов");
       // Старые клиенты лимит не присылают: голосовым — дефолт 25, текстовым — null.
       const participantLimit = event.participantLimit ?? (event.kind === "voice" ? VOICE_PARTICIPANT_LIMIT_MAX : null);
-      await repository.createChannel(randomUUID(), event.name, event.kind, event.description, participantLimit);
+      const created = await repository.createChannel(randomUUID(), event.name, event.kind, event.description, participantLimit);
+      void writeAudit(connection.userId, "channel.create", created.id, `channel "${created.name}"`);
       await broadcastSnapshots();
       return;
     }
     if (event.type === "channel.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения каналов");
+      if (!(await hasChannelPermission(connection.userId, event.channelId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для изменения этого канала");
       const existingChannel = await repository.getChannel(event.channelId);
       if (!existingChannel) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       if (existingChannel.kind === "voice" && event.participantLimit === null) return sendError(connection.socket, event.requestId, "INVALID_EVENT", "Для голосового канала необходим лимит участников");
       if (!(await repository.updateChannel(event.channelId, event.name, event.description, event.participantLimit, event.slowmodeSeconds))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      void writeAudit(connection.userId, "channel.update", event.channelId, existingChannel.name === event.name ? `channel "${event.name}"` : `"${existingChannel.name}" → "${event.name}"`);
       await broadcastSnapshots();
       return;
     }
     if (event.type === "channel.slowmode.set") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения каналов");
-      const updated = await repository.setChannelsSlowmode(event.channelIds, event.slowmodeSeconds);
+      const editable = [];
+      for (const channelId of event.channelIds) {
+        if (await hasChannelPermission(connection.userId, channelId, "MANAGE_CHANNELS")) editable.push(channelId);
+      }
+      if (!editable.length) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для изменения этих каналов");
+      const updated = await repository.setChannelsSlowmode(editable, event.slowmodeSeconds);
       if (!updated.length) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Не найдено ни одного текстового канала из списка");
+      const slowmodeChannels = await Promise.all(updated.map((channelId) => repository.getChannel(channelId)));
+      const slowmodeNames = slowmodeChannels.map((entry, index) => entry?.name ?? updated[index] ?? "?");
+      const slowmodeLabel = event.slowmodeSeconds === 0 ? "slowmode off" : `slowmode ${event.slowmodeSeconds}s`;
+      void writeAudit(connection.userId, "channel.slowmode.set", null, `${slowmodeLabel} in ${updated.length} channel(s): ${slowmodeNames.join(", ")}`);
       await broadcastSnapshots();
       return;
     }
     if (event.type === "channel.delete") {
       if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для удаления каналов");
+      if (!(await hasChannelPermission(connection.userId, event.channelId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для удаления этого канала");
       const channel = await repository.getChannel(event.channelId);
       if (!(await repository.deleteChannel(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      void writeAudit(connection.userId, "channel.delete", event.channelId, channel?.name ? `channel "${channel.name}"` : null);
       if (channel?.kind === "voice") {
         const disconnected = await voice.removeChannel(channel.id);
         for (const participant of disconnected) broadcast({ type: "voice.participant.disconnected", userId: participant.userId, channelId: participant.channelId, reason: "channel_deleted" });
@@ -398,17 +502,107 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await broadcastSnapshots();
       return;
     }
+    if (event.type === "channel.overwrites.set") {
+      // Переопределения прав канала (протокол v49): только для ролей, новых прав нет.
+      if (!(await hasPermission(connection.userId, "MANAGE_CHANNELS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для настройки канала");
+      const targetChannel = await repository.getChannel(event.channelId);
+      if (!targetChannel) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
+      const targetRole = await repository.getRole(event.roleId);
+      if (!targetRole) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Роль не найдена");
+      // Иерархия: чужие overwrites нельзя трогать для ролей выше собственной вершины.
+      if (!(await canGrantPosition(connection.userId, targetRole.position))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя настраивать права роли выше собственной");
+      const saved = await repository.setChannelOverwrite(event.channelId, event.roleId, event.allow, event.deny);
+      void writeAudit(connection.userId, "channel.overwrites.set", event.channelId, `role "${targetRole.name}": allow ${event.allow.join(", ") || "none"} · deny ${event.deny.join(", ") || "none"}`);
+      broadcast({ type: "channel.overwrites.updated", channelId: event.channelId, roleId: event.roleId, allow: saved?.allow ?? [], deny: saved?.deny ?? [] });
+      await broadcastSnapshots();
+      return;
+    }
     if (event.type === "member.role.set") {
-      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может управлять администраторами");
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления ролями");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя изменить собственную роль этой командой");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить роль этого участника");
+      // Legacy-команда маппится на сид-роли: выдаваемая позиция обязана быть
+      // не выше собственной вершины (владелец вне иерархии — ему можно всё).
+      if (!(await canGrantPosition(connection.userId, event.role === "administrator" ? 10 : 0))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя выдать роль выше собственной");
       const result = await repository.setMemberRole(event.userId, event.role);
       if (result === "not_found") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден");
       if (result === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Роль владельца нельзя изменить этой командой");
+      void writeAudit(connection.userId, "member.role.set", event.userId, event.role);
       await broadcastSnapshots();
       return;
+    }
+    if (event.type === "member.roles.set") {
+      // Точное назначение кастомных ролей (протокол v48): union-прав и max-позиция.
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления ролями");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя изменить собственные роли этой командой");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить роли этого участника");
+      const roles = await repository.listRoles();
+      const known = new Map(roles.map((role) => [role.id, role]));
+      for (const roleId of event.roleIds) {
+        if (!known.has(roleId)) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Роль не найдена");
+      }
+      const grantedTop = Math.max(0, ...event.roleIds.map((roleId) => known.get(roleId)?.position ?? 0));
+      if (!(await canGrantPosition(connection.userId, grantedTop))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя выдать роль выше собственной");
+      const result = await repository.setMemberRoles(event.userId, event.roleIds);
+      if (result === "not_found") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден");
+      if (result === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Роли владельца нельзя изменить этой командой");
+      void writeAudit(connection.userId, "member.roles.set", event.userId, event.roleIds.length ? `roles: ${event.roleIds.map((roleId) => known.get(roleId)?.name ?? roleId).join(", ")}` : "roles cleared");
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "role.create") {
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления ролями");
+      if (!(await canGrantPosition(connection.userId, event.position))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя создать роль выше собственной");
+      const role = await repository.createRole(randomUUID(), event.name, event.color, event.position, event.permissions);
+      void writeAudit(connection.userId, "role.create", role.id, `role "${role.name}" at position ${role.position}`);
+      broadcast({ type: "role.created", role });
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "role.update") {
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления ролями");
+      const existing = await repository.getRole(event.roleId);
+      if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Роль не найдена");
+      const nextPosition = event.position ?? existing.position;
+      if (!(await canGrantPosition(connection.userId, nextPosition))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя поднять роль выше собственной");
+      const updated = await repository.updateRole(event.roleId, { name: event.name, color: event.color, position: event.position, permissions: event.permissions });
+      if (!updated) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Роль не найдена");
+      void writeAudit(connection.userId, "role.update", event.roleId, describeRoleChange(existing, updated));
+      broadcast({ type: "role.updated", role: updated });
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "role.delete") {
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления ролями");
+      const existing = await repository.getRole(event.roleId);
+      if (!existing) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Роль не найдена");
+      // Сиды administrator/member — опора legacy-маппинга: их удаление сломало бы
+      // member.role.set внешним ключом, поэтому они неудаляемы (переименование — можно).
+      if (event.roleId === SEEDED_ADMINISTRATOR_ROLE_ID || event.roleId === SEEDED_MEMBER_ROLE_ID) {
+        return sendError(connection.socket, event.requestId, "CONFLICT", "Встроенные роли нельзя удалить");
+      }
+      if (!(await canGrantPosition(connection.userId, existing.position))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя удалить роль выше собственной");
+      if (!(await repository.deleteRole(event.roleId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Роль не найдена");
+      void writeAudit(connection.userId, "role.delete", event.roleId, `role "${existing.name}"`);
+      broadcast({ type: "role.deleted", roleId: event.roleId });
+      await broadcastSnapshots();
+      return;
+    }
+    if (event.type === "role.list") {
+      if (!(await hasPermission(connection.userId, "MANAGE_ROLES"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для управления ролями");
+      return send(connection.socket, { type: "role.list.result", requestId: event.requestId, roles: await repository.listRoles() });
+    }
+    if (event.type === "audit.list") {
+      if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для просмотра журнала");
+      const { entries, hasMore } = await repository.listAuditLog(event.limit, event.before);
+      return send(connection.socket, { type: "audit.result", requestId: event.requestId, entries, hasMore });
     }
     if (event.type === "server.avatar.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может изменить аватар сервера");
       await repository.updateServerAvatar(event.avatar);
+      void writeAudit(connection.userId, "server.avatar.update", null, null);
       const server = await repository.getServer();
       broadcast({ type: "server.avatar.updated", serverId: server.id, avatar: server.avatar });
       return;
@@ -416,6 +610,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "server.banner.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может изменить обложку сервера");
       await repository.updateServerBanner(event.banner);
+      void writeAudit(connection.userId, "server.banner.update", null, null);
       const server = await repository.getServer();
       broadcast({ type: "server.banner.updated", serverId: server.id, banner: server.banner });
       return;
@@ -423,14 +618,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "member.kick") {
       if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для исключения участников");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя исключить самого себя");
-      let targetRole: import("@opencord/shared").MemberRole;
-      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
-      const actorRole = await repository.getMemberRole(connection.userId);
-      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя исключить этого участника");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя исключить этого участника");
       const voicePresence = await voice.disconnect(event.userId, "moderated");
       if (voicePresence) broadcast({ type: "voice.participant.disconnected", userId: voicePresence.userId, channelId: voicePresence.channelId, reason: "moderated" });
       const removedRole = await repository.leaveServer(event.userId, "kick");
       if (!removedRole || removedRole === "owner") return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось исключить участника");
+      void writeAudit(connection.userId, "member.kick", event.userId, null);
       broadcast({ type: "member.removed", userId: event.userId });
       for (const targetConnection of connections) {
         if (targetConnection.userId !== event.userId) continue;
@@ -444,13 +638,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "member.ban") {
       if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для блокировки участников");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Нельзя заблокировать самого себя");
-      let targetRole: import("@opencord/shared").MemberRole;
-      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
-      const actorRole = await repository.getMemberRole(connection.userId);
-      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя заблокировать этого участника");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя заблокировать этого участника");
       const voicePresence = await voice.disconnect(event.userId, "moderated");
       if (voicePresence) broadcast({ type: "voice.participant.disconnected", userId: voicePresence.userId, channelId: voicePresence.channelId, reason: "moderated" });
       if (!(await repository.banMember(event.userId, connection.userId, event.durationMinutes))) return sendError(connection.socket, event.requestId, "CONFLICT", "Не удалось заблокировать участника");
+      void writeAudit(connection.userId, "member.ban", event.userId, event.durationMinutes == null ? "duration: permanent" : `duration: ${event.durationMinutes} minutes`);
       // Самому забаненному member.removed не отправляется: иначе его клиент удалил бы сервер
       // из списка и показал бы «вас исключили» вместо экрана блокировки со сроком.
       broadcast({ type: "member.removed", userId: event.userId }, event.userId);
@@ -469,12 +662,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "member.unban") {
       if (!(await hasPermission(connection.userId, "KICK_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для разблокировки участников");
       if (!(await repository.unbanMember(event.userId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Заблокированный участник не найден");
+      void writeAudit(connection.userId, "member.unban", event.userId, null);
       await broadcastSnapshots();
       return;
     }
     if (event.type === "server.settings.update") {
       if (!(await hasPermission(connection.userId, "MANAGE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Недостаточно прав для изменения настроек сервера");
-      await repository.updateServerSettings({ name: event.name, description: event.description, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate, helpPage: event.helpPage });
+      // Welcome-канал обязан быть текстовым каналом этого сервера; null выключает приветствие.
+      if (event.welcomeChannelId !== undefined && event.welcomeChannelId !== null) {
+        const welcomeChannel = await repository.getChannel(event.welcomeChannelId);
+        if (!welcomeChannel) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Welcome-канал не найден");
+        if (welcomeChannel.kind !== "text") return sendError(connection.socket, event.requestId, "INVALID_EVENT", "Welcome-каналом может быть только текстовый канал");
+      }
+      await repository.updateServerSettings({ name: event.name, description: event.description, maxAttachmentBytes: event.maxAttachmentBytes, screenShareMaxResolution: event.screenShareMaxResolution, screenShareMaxFrameRate: event.screenShareMaxFrameRate, helpPage: event.helpPage, welcomeChannelId: event.welcomeChannelId, welcomeMessage: event.welcomeMessage });
+      void writeAudit(connection.userId, "server.settings.update", null, `name "${event.name}"`);
       await broadcastSnapshots();
       return;
     }
@@ -484,9 +685,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const flood = voiceJoinLimiter.consume(`voice.join:${connection.userId}`);
       if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком частые подключения к голосовым каналам, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
       if (await blockedByHelpGate(connection, event.requestId)) return;
-      if (!(await hasPermission(connection.userId, "VOICE_CONNECT")) || !(await hasPermission(connection.userId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для подключения к голосовому каналу");
       const channel = await repository.getChannel(event.channelId);
       if (!channel || channel.kind !== "voice") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Голосовой канал не найден");
+      if (!(await hasChannelPermission(connection.userId, event.channelId, "VOICE_CONNECT")) || !(await hasChannelPermission(connection.userId, event.channelId, "VOICE_SPEAK"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для подключения к голосовому каналу");
       const cooldownRemaining = voiceRejoinCooldownRemaining(connection.userId);
       if (cooldownRemaining > 0) return sendError(connection.socket, event.requestId, "FORBIDDEN", `Модератор отключил вас от голосового канала. Вернуться можно через ${formatDelay(cooldownRemaining)}`, cooldownRemaining);
       try {
@@ -522,10 +723,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "voice.member.disconnect") {
       if (!(await hasPermission(connection.userId, "VOICE_MODERATE"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для управления голосовым каналом");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Выйдите из канала самостоятельно");
-      let targetRole: import("@opencord/shared").MemberRole;
-      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
-      const actorRole = await repository.getMemberRole(connection.userId);
-      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя отключить этого участника");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя отключить этого участника");
       const presence = await voice.disconnect(event.userId, "moderated");
       // Пауза ставится только по факту отключения: иначе модератор мог бы закрыть
       // голос участнику, который в канал и не заходил.
@@ -538,10 +737,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (event.type === "voice.member.mute") {
       if (!(await hasPermission(connection.userId, "VOICE_MODERATE"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для управления голосовым каналом");
       if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Используйте собственную кнопку микрофона");
-      let targetRole: import("@opencord/shared").MemberRole;
-      try { targetRole = await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
-      const actorRole = await repository.getMemberRole(connection.userId);
-      if (targetRole === "owner" || (actorRole === "administrator" && targetRole !== "member")) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить серверный мут этого участника");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя изменить серверный мут этого участника");
       try {
         const presence = await voice.setModeratorMuted(event.userId, event.muted);
         if (!presence) return sendError(connection.socket, event.requestId, "CONFLICT", "Участник не подключён к голосовому каналу");
@@ -581,8 +778,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (connection.handshakeTimer) { clearTimeout(connection.handshakeTimer); connection.handshakeTimer = null; }
     const userId = userIdFromPublicKey(event.publicKey);
     await runRetentionCleanup();
-    const activeBan = await repository.findActiveBan(userId);
-    if (activeBan) {
+    const activeBan = await repository.findActiveBan(userId);    if (activeBan) {
       // Клиент показывает постоянный экран блокировки, поэтому вместе с кодом уходит и срок:
       // null означает перманентный бан.
       send(connection.socket, { type: "error", requestId: event.requestId, code: "BANNED", message: "Ваша идентичность заблокирована на этом сервере", banExpiresAt: activeBan.expiresAt });
@@ -595,6 +791,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       connection.socket.close(4001, "Server deleted");
       return;
     }
+    const existedUser = await repository.userExists(userId);
+    const existedMember = await repository.isMember(userId);
     await repository.upsertUser(userId, event.publicKey, event.profile);
     await repository.ensureMembership(userId, event.publicKey, options.bootstrapOwnerPublicKey, options.allowInsecureFirstUserOwner === true);
     connection.userId = userId;
@@ -607,11 +805,126 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     connection.sessionToken = sessionToken;
     send(connection.socket, { type: "auth.ok", requestId: event.requestId, userId, serverId: server.id, sessionToken, sessionExpiresAt: new Date(sessionExpiresAt).toISOString() });
     await sendSnapshot(connection);
-    await broadcastMember(userId, publicStatus(event.profile.status));
+    const authPublicStatus = publicStatus(event.profile.status);
+    await broadcastMember(userId, authPublicStatus);
+    broadcast({ type: "presence.updated", userId, status: authPublicStatus });
+    // Приветствие новичка (протокол v51): только первая регистрация идентичности.
+    // Повторный вход, выход-заход и разбан приветствия не получают.
+    if (!existedUser && !existedMember) void postWelcomeGreeting(userId, event.profile.username);
   }
 
   async function hasPermission(userId: string, permission: Permission): Promise<boolean> {
-    return permissionsForRole(await repository.getMemberRole(userId)).includes(permission);
+    try {
+      return (await repository.getMemberPermissions(userId)).includes(permission);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Эффективные права в канале (протокол v49): union ролей ± overwrites.
+   * Владелец вне overwrites — ему всегда всё видно и разрешено.
+   */
+  async function hasChannelPermission(userId: string, channelId: string, permission: Permission): Promise<boolean> {
+    try {
+      return (await repository.getMemberChannelPermissions(userId, channelId)).includes(permission);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Видимость канала (v49): эффективный VOICE_CONNECT в канале (см. authorization.md). */
+  async function canSeeChannel(userId: string, channelId: string): Promise<boolean> {
+    return hasChannelPermission(userId, channelId, "VOICE_CONNECT");
+  }
+
+  /**
+   * Иерархия модерации (протокол v48): действовать можно только против цели
+   * с более низкой вершиной (max position). Владелец вне иерархии: ему можно
+   * всё, против него — ничего. Равная позиция действие блокирует, как и в Discord.
+   */
+  async function canActOnTarget(actorId: string, targetId: string): Promise<boolean> {
+    let targetRole: string;
+    try {
+      targetRole = await repository.getMemberRole(targetId);
+    } catch {
+      return false;
+    }
+    if (targetRole === "owner") return false;
+    let actorRole: string;
+    try {
+      actorRole = await repository.getMemberRole(actorId);
+    } catch {
+      return false;
+    }
+    if (actorRole === "owner") return true;
+    try {
+      return (await repository.getMemberTopPosition(actorId)) > (await repository.getMemberTopPosition(targetId));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Выдача ролей: позиция выдаваемого не может превышать собственную вершину.
+   * Владелец (OWNER_TOP_POSITION) выдаёт любые позиции из диапазона.
+   */
+  async function canGrantPosition(actorId: string, position: number): Promise<boolean> {
+    try {
+      return (await repository.getMemberTopPosition(actorId)) >= position;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Журнал модерации (протокол v50): best-effort запись, никогда не роняет
+   * основное действие при ошибке лога. Detail — короткий JSON/текст ≤2000.
+   */
+  async function writeAudit(actorId: string, action: AuditAction, targetId?: string | null, detail?: string | null): Promise<void> {
+    try {
+      await repository.appendAuditLog({ id: randomUUID(), actorId, action, targetId: targetId ?? null, detail: detail ? detail.slice(0, 2000) : null });
+    } catch (error) {
+      app.log.error(error);
+    }
+  }
+
+  /**
+   * Краткая сводка изменения роли для audit detail (только текст, схема не
+   * меняется): переименование `old → new` плюс позиция, цвет и дельта прав.
+   */
+  function describeRoleChange(before: { name: string; color: string | null; position: number; permissions: Permission[] }, after: { name: string; color: string | null; position: number; permissions: Permission[] }): string {
+    const parts = before.name === after.name ? [`role "${after.name}"`] : [`"${before.name}" → "${after.name}"`];
+    if (before.position !== after.position) parts.push(`position ${before.position} → ${after.position}`);
+    if (before.color !== after.color) parts.push(`color ${before.color ?? "none"} → ${after.color ?? "none"}`);
+    const granted = after.permissions.filter((permission) => !before.permissions.includes(permission));
+    const revoked = before.permissions.filter((permission) => !after.permissions.includes(permission));
+    if (granted.length) parts.push(`+${granted.join(", +")}`);
+    if (revoked.length) parts.push(`-${revoked.join(", -")}`);
+    return parts.join(" · ");
+  }
+
+  /**
+   * Приветствие новичка (протокол v51): plain chat-сообщение от имени сервера
+   * (автор — владелец) в welcome-канал. Серверное действие: видимость через
+   * overwrites не проверяется, рассылка — обычным message.created.
+   * Ошибка приветствия никогда не роняет аутентификацию.
+   */
+  async function postWelcomeGreeting(userId: string, username: string): Promise<void> {
+    try {
+      const server = await repository.getServer();
+      const channelId = server.welcomeChannelId;
+      if (!channelId) return;
+      if (!(await repository.channelExists(channelId))) return;
+      const content = renderWelcomeMessage(server.welcomeMessage, username, server.name).trim();
+      if (!content) return;
+      const authorId = (await repository.getOwnerId()) ?? userId;
+      if (authorId === userId) return;
+      const message = await repository.createMessage(randomUUID(), channelId, authorId, content);
+      if (message) broadcast({ type: "message.created", message });
+    } catch (error) {
+      app.log.error(error);
+    }
   }
 
   /**
@@ -636,7 +949,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   async function slowmodeDelay(userId: string, channelId: string): Promise<number> {
     const channel = await repository.getChannel(channelId);
     if (!channel || channel.kind !== "text" || channel.slowmodeSeconds <= 0) return 0;
-    if (await hasPermission(userId, "MANAGE_MESSAGES")) return 0;
+    if (await hasChannelPermission(userId, channelId, "MANAGE_MESSAGES")) return 0;
     const lastAt = await repository.lastChatMessageAt(channelId, userId);
     if (!lastAt) return 0;
     return Math.max(0, channel.slowmodeSeconds * 1_000 - (Date.now() - lastAt.getTime()));
@@ -646,10 +959,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!connection.userId || connection.socket.readyState !== connection.socket.OPEN) return;
     const server = await repository.getServer();
     const role = await repository.getMemberRole(connection.userId);
-    const permissions = permissionsForRole(role);
+    const permissions = await repository.getMemberPermissions(connection.userId);
+    const roles = await repository.listRoles();
+    // Скрытые overwrites-каналы (нет эффективного VOICE_CONNECT) из списка исключаются.
+    const visibleIds = await repository.getVisibleChannelIds(connection.userId);
+    const channels = server.channels.filter((channel) => visibleIds.has(channel.id));
+    // Полный список overwrites — только держателям MANAGE_CHANNELS, остальным — пусто.
+    const channelOverwrites = permissions.includes("MANAGE_CHANNELS") ? await repository.listChannelOverwrites() : [];
     send(connection.socket, {
       type: "server.snapshot",
-      server: { ...server, members: await repository.listMembers(publicUserStatuses()), bannedMembers: permissions.includes("KICK_MEMBERS") ? await repository.listBannedMembers() : [], currentUser: { id: connection.userId, role, permissions }, voice: await voice.capability(), voiceParticipants: voice.presence() },
+      server: { ...server, channels, members: await repository.listMembers(publicUserStatuses()), roles, channelOverwrites, bannedMembers: permissions.includes("KICK_MEMBERS") ? await repository.listBannedMembers() : [], currentUser: { id: connection.userId, role, permissions }, voice: await voice.capability(), voiceParticipants: voice.presence() },
     });
   }
 
@@ -751,6 +1070,72 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   async function broadcastMember(userId: string, status: PublicMemberStatus): Promise<void> {
     try { broadcast({ type: "member.updated", member: await repository.getMember(userId, status) }); } catch (error) { app.log.error(error); }
+  }
+
+  /**
+   * Индикаторы набора текста (протокол v45). Состояние живёт только в памяти:
+   * запись гаснет сама через TTL, при typing.stop, при отправке сообщения
+   * и при потере последнего соединения. Невалидные события (чужой или
+   * голосовой канал, не-участник) и частые повторы молча отбрасываются —
+   * эфемерному событию не положены тосты об ошибках.
+   */
+  function typingKey(channelId: string, userId: string): string {
+    return `${channelId}:${userId}`;
+  }
+
+  function typingTtl(): number {
+    return options.typingTtlMs ?? TYPING_TTL_MS;
+  }
+
+  /** Гасит запись; announce шлёт typing.updated(false), только если запись была. */
+  function clearTyping(channelId: string, userId: string, announce: boolean): void {
+    const key = typingKey(channelId, userId);
+    const timer = typingTimers.get(key);
+    if (!timer) return;
+    clearTimeout(timer);
+    typingTimers.delete(key);
+    if (announce) broadcast({ type: "typing.updated", channelId, userId, typing: false }, userId);
+  }
+
+  /** Гасит все записи пользователя — при потере последнего соединения. */
+  function clearUserTyping(userId: string): void {
+    const suffix = `:${userId}`;
+    for (const [key, timer] of typingTimers) {
+      if (!key.endsWith(suffix)) continue;
+      clearTimeout(timer);
+      typingTimers.delete(key);
+      broadcast({ type: "typing.updated", channelId: key.slice(0, -suffix.length), userId, typing: false }, userId);
+    }
+  }
+
+  async function handleTypingStart(connection: ConnectionState, channelId: string): Promise<void> {
+    const userId = connection.userId;
+    if (!userId) return;
+    const channel = await repository.getChannel(channelId);
+    if (!channel || channel.kind !== "text") return;
+    try { await repository.getMemberRole(userId); } catch { return; }
+    if (!(await hasChannelPermission(userId, channelId, "VOICE_SPEAK"))) return;
+    const key = typingKey(channelId, userId);
+    const existing = typingTimers.get(key);
+    if (existing) {
+      // Живая запись просто продлевается молча, без новой рассылки.
+      clearTimeout(existing);
+      typingTimers.set(key, armTypingExpiry(channelId, userId));
+      return;
+    }
+    if (Date.now() - (typingLastStart.get(key) ?? 0) < TYPING_START_COOLDOWN_MS) return;
+    typingLastStart.set(key, Date.now());
+    typingTimers.set(key, armTypingExpiry(channelId, userId));
+    broadcast({ type: "typing.updated", channelId, userId, typing: true }, userId);
+  }
+
+  function armTypingExpiry(channelId: string, userId: string): NodeJS.Timeout {
+    const timer = setTimeout(() => {
+      typingTimers.delete(typingKey(channelId, userId));
+      broadcast({ type: "typing.updated", channelId, userId, typing: false }, userId);
+    }, typingTtl());
+    timer.unref();
+    return timer;
   }
 
   function broadcast(event: ServerEvent, excludeUserId?: string): void {

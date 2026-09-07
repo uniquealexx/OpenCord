@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { File, FileText, Film, Hash, ImageIcon, LoaderCircle, Paperclip, Play, RotateCcw, Search, User, X } from "lucide-react";
+import { File, FileText, Film, Hash, ImageIcon, LoaderCircle, Paperclip, Pin, Play, RotateCcw, Search, User, X } from "lucide-react";
 import { MENTION_TOKEN_PATTERN, type Attachment, type MessageContentType, type MessageSearchFilters, type MessageSearchResult } from "@opencord/shared";
 import { Avatar } from "@/components/avatar";
 import { Combobox } from "@/components/ui/combobox";
@@ -27,6 +27,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
   const [authorId, setAuthorId] = useState("");
   const [channelId, setChannelId] = useState("");
   const [contentTypes, setContentTypes] = useState<MessageContentType[]>([]);
+  const [pinnedOnly, setPinnedOnly] = useState(false);
   const rootRef = useRef<HTMLElement | null>(null);
   // Закрытие поиска кликом вне панели (внутри панели клики не считаются внешними).
   useEffect(() => {
@@ -40,21 +41,22 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
   // Сброс «сессии» поиска при закрытии: условный render-phase update (документированный паттерн
   // React для сброса состояния по пропу) — при следующем открытии панель начинается с чистых фильтров.
   if (!open) {
-    if (query !== "" || authorId !== "" || channelId !== "" || contentTypes.length > 0) {
+    if (query !== "" || authorId !== "" || channelId !== "" || contentTypes.length > 0 || pinnedOnly) {
       setQuery("");
       setAuthorId("");
       setChannelId("");
       setContentTypes([]);
+      setPinnedOnly(false);
     }
     return null;
   }
 
   const contentTypeLabels: Record<MessageContentType, string> = { text: t.search.text, image: t.search.images, video: t.search.video, file: t.search.files };
-  const canSearch = Boolean(query.trim() || authorId || channelId || contentTypes.length);
+  const canSearch = Boolean(query.trim() || authorId || channelId || contentTypes.length || pinnedOnly);
   const hasSession = canSearch || Boolean(result) || loading;
   function submit(offset = 0): void {
     if (!canSearch || loading) return;
-    onSearch({ query: query.trim(), authorId: authorId || null, channelId: channelId || null, contentTypes, offset, limit: 25 });
+    onSearch({ query: query.trim(), authorId: authorId || null, channelId: channelId || null, contentTypes, pinnedOnly, offset, limit: 25 });
   }
   /** Сброс «сессии» поиска: фильтры панели и результаты в родителе, панель остаётся открытой. */
   function resetFilters(): void {
@@ -62,6 +64,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
     setAuthorId("");
     setChannelId("");
     setContentTypes([]);
+    setPinnedOnly(false);
     onReset();
   }
   function toggleType(type: MessageContentType): void {
@@ -81,7 +84,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
         <Combobox label={t.search.author} value={authorId} placeholder={t.search.anyAuthor} icon={User} options={members.map((member) => ({ value: member.id, label: member.username }))} onChange={setAuthorId} />
         <Combobox label={t.search.channel} value={channelId} placeholder={t.search.allChannels} icon={Hash} options={channels.filter((channel) => channel.kind === "text").map((channel) => ({ value: channel.id, label: `#${channel.name}` }))} onChange={setChannelId} />
       </div>
-      <div className="mt-2 flex flex-wrap gap-1.5"><button type="button" aria-pressed={attachmentTypes.every((type) => contentTypes.includes(type))} onClick={toggleAttachments} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", attachmentTypes.every((type) => contentTypes.includes(type)) ? "border-cyan-400/35 bg-cyan-400/12 text-cyan-100" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Paperclip className="size-3" />{t.search.attachments}</button>{contentTypeOptions.map((option) => { const Icon = option.icon; const active = contentTypes.includes(option.id); return <button key={option.id} type="button" aria-pressed={active} onClick={() => toggleType(option.id)} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", active ? "border-violet-400/35 bg-violet-400/15 text-violet-200" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Icon className="size-3" />{contentTypeLabels[option.id]}</button>; })}</div>
+      <div className="mt-2 flex flex-wrap gap-1.5"><button type="button" aria-pressed={attachmentTypes.every((type) => contentTypes.includes(type))} onClick={toggleAttachments} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", attachmentTypes.every((type) => contentTypes.includes(type)) ? "border-cyan-400/35 bg-cyan-400/12 text-cyan-100" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Paperclip className="size-3" />{t.search.attachments}</button><button type="button" aria-pressed={pinnedOnly} onClick={() => setPinnedOnly((current) => !current)} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", pinnedOnly ? "border-violet-400/35 bg-violet-400/15 text-violet-200" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Pin className="size-3" />{t.search.pinnedOnly}</button>{contentTypeOptions.map((option) => { const Icon = option.icon; const active = contentTypes.includes(option.id); return <button key={option.id} type="button" aria-pressed={active} onClick={() => toggleType(option.id)} className={cn("flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] transition", active ? "border-violet-400/35 bg-violet-400/15 text-violet-200" : "border-white/[.07] bg-white/[.025] text-slate-500 hover:text-slate-300")}><Icon className="size-3" />{contentTypeLabels[option.id]}</button>; })}</div>
       <button type="submit" disabled={!canSearch || loading} className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary text-xs font-semibold text-white shadow-[0_1px_3px_rgba(0,0,0,.4)] transition-colors hover:bg-violet-400 disabled:opacity-35">{loading ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}{t.search.submit}</button>
     </form>
 
@@ -92,7 +95,7 @@ export function ServerSearchPanel({ open, serverName, channels, members, result,
         const channel = channels.find((item) => item.id === message.channelId);
         const member = members.find((item) => item.id === message.authorId);
         return <button key={message.id} type="button" onClick={() => onOpenMessage(toLocalSearchMessage(message))} className="group w-full rounded-xl border border-white/[.065] bg-panel p-3 text-left hover:border-violet-400/25 hover:bg-raised">
-          <div className="flex items-center gap-2"><Avatar name={message.authorName} image={message.authorAvatar} color={member?.avatarColor} size="sm" /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{message.authorName}</span>{message.kind && message.kind !== "chat" && <span className="shrink-0 rounded-md bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</span>}<span className="text-[10px] text-slate-600">#{channel?.name ?? t.search.removedChannel}</span></div>
+          <div className="flex items-center gap-2"><Avatar name={message.authorName} image={message.authorAvatar} color={member?.avatarColor} size="sm" /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{message.authorName}</span>{message.kind && message.kind !== "chat" && <span className="shrink-0 rounded-md bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</span>}{message.pinned && <Pin className="size-3 shrink-0 text-violet-300/80" aria-label={t.chat.pinned} />}<span className="text-[10px] text-slate-600">#{channel?.name ?? t.search.removedChannel}</span></div>
           {message.content && <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-400 group-hover:text-slate-300">{readableContent(message.content, members, t.chat.unknownUser)}</p>}
           {message.attachments.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{message.attachments.map((attachment) => <SearchAttachment key={attachment.id} attachment={attachment} previewAvailable={previewAvailable} onPreview={onPreview} />)}</div>}
           <time className="mt-2 block whitespace-nowrap text-[9px] text-slate-600">{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(message.createdAt))}</time>

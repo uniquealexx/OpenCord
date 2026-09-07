@@ -634,6 +634,16 @@ export function useVoiceSession(authorization: VoiceAuthorization | null, prefer
     setMutedState(value);
   }, [configureLocalMicrophone, deafened, publishActiveSpeakers, setIncomingAudioMuted, setIncomingAudioSubscribed, startResponsiveDetector]);
 
+  // Переход в push-to-talk глушит микрофон сразу: передавать можно только пока
+  // зажата PTT-клавиша. Без этого микрофон, открытый в режиме voice-activation,
+  // остался бы открытым после переключения — гейт в PTT принудительно открыт.
+  const previousInputModeRef = useRef(preferences.voiceInputMode);
+  useEffect(() => {
+    const previous = previousInputModeRef.current;
+    previousInputModeRef.current = preferences.voiceInputMode;
+    if (previous !== "push-to-talk" && preferences.voiceInputMode === "push-to-talk") void setMuted(true);
+  }, [preferences.voiceInputMode, setMuted]);
+
   useEffect(() => {
     if (preferences.voiceInputMode !== "push-to-talk" || status !== "connected") return;
     const shouldIgnore = (target: EventTarget | null): boolean => target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);

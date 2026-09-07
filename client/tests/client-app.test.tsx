@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { PROTOCOL_VERSION } from "@opencord/shared";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyServerSnapshot, AttachmentView, ChannelDialog, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelNotificationPopover, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
+import { applyServerSnapshot, AttachmentView, ChannelDialog, ChannelSlowmodeDialog, canDisconnectVoiceParticipant, formatMuteRemaining, canKickServerMember, ChannelNotificationPopover, ChannelSidebar, ClientApp, Composer, deploymentPresetFromServer, EditChannelDialog, focusMessage, LeaveServerDialog, Message, privateMessageStackPosition, ProtocolNotice, shouldRequestVoiceJoin, sortMessagesChronologically, topRoleColor, upsertDeployedServer, VoiceChannelView, VoiceParticipantRow } from "@/components/client-app";
 import type { ScreenShareStream } from "@/hooks/use-voice-session";
 import type { MentionCandidate } from "@/lib/mentions";
 import { createDefaultState, type MockMessage, type PersistedClientState } from "@/shared/state";
@@ -251,6 +251,45 @@ describe("ClientApp", () => {
     expect(save).toHaveBeenCalled();
   });
 
+  it("keeps a separate draft per channel, restores it and clears it after sending", async () => {
+    const user = userEvent.setup();
+    render(<ClientApp />);
+    await screen.findByText("Тестовый сервер");
+
+    const welcomeComposer = screen.getByLabelText(/написать в #добро-пожаловать/i);
+    await user.type(welcomeComposer, "Черновик A");
+
+    await user.click(screen.getByRole("button", { name: /общий/i }));
+    expect(screen.getByLabelText(/написать в #общий/i)).toHaveValue("");
+
+    const generalComposer = screen.getByLabelText(/написать в #общий/i);
+    await user.type(generalComposer, "Черновик B");
+
+    await user.click(screen.getByRole("button", { name: /добро-пожаловать/i }));
+    expect(screen.getByLabelText(/написать в #добро-пожаловать/i)).toHaveValue("Черновик A");
+
+    const persisted = save.mock.calls.at(-1)?.[0] as PersistedClientState | undefined;
+    expect(persisted?.messageDrafts).toMatchObject({ welcome: "Черновик A", general: "Черновик B" });
+
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(await screen.findByText("Черновик A")).toBeInTheDocument();
+    expect(screen.getByLabelText(/написать в #добро-пожаловать/i)).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: /общий/i }));
+    expect(screen.getByLabelText(/написать в #общий/i)).toHaveValue("Черновик B");
+    const afterSend = save.mock.calls.at(-1)?.[0] as PersistedClientState | undefined;
+    expect(afterSend?.messageDrafts.welcome).toBeUndefined();
+    expect(afterSend?.messageDrafts.general).toBe("Черновик B");
+  });
+
+  it("restores a persisted draft into the composer after reload", async () => {
+    const state = readyState();
+    state.messageDrafts = { welcome: "Сохранённый черновик" };
+    window.openCord!.storage.load = vi.fn(async () => state);
+    render(<ClientApp />);
+    expect(await screen.findByLabelText(/написать в #добро-пожаловать/i)).toHaveValue("Сохранённый черновик");
+  });
+
   const AUTH_UUID = "11111111-1111-4111-8111-111111111111";
 
   /** Рендерит ClientApp с сетевым сервером и доводит фейковый сокет до auth.ok (сессия есть). */
@@ -328,7 +367,7 @@ describe("ClientApp", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Максимальная частота кадров демонстрации экрана" }), { target: { value: "0" } });
     expect(screen.getAllByText("∞")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", description: "", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] } });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Новый OpenCord", description: "", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 15, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] }, welcomeChannelId: null, welcomeMessage: "Welcome to {server}, {user}!" });
   });
 
   it("saves a manually entered bounded attachment limit", async () => {
@@ -341,7 +380,7 @@ describe("ClientApp", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Максимальное качество демонстрации экрана" }), { target: { value: "3" } });
     expect(screen.getAllByText("Источник")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Сохранить настройки" }));
-    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", description: "", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] } });
+    expect(onSaveSettings).toHaveBeenCalledWith({ name: "Тестовый сервер", description: "", maxAttachmentBytes: 1500 * 1024 * 1024, screenShareMaxResolution: 1440, screenShareMaxFrameRate: 60, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] }, welcomeChannelId: null, welcomeMessage: "Welcome to {server}, {user}!" });
   });
 
   it("shows server settings read-only to an administrator", () => {
@@ -758,8 +797,12 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 720,
       screenShareMaxFrameRate: 30,
       helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
+      welcomeChannelId: null,
+      welcomeMessage: "Welcome to {server}, {user}!",
       channels: [{ id: "12959e6f-7ea9-41d9-8be3-f412354d3e95", name: "общий", kind: "text", description: "Основной канал", participantLimit: null, slowmodeSeconds: 0 }],
-      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", memberBackground: "data:image/webp;base64,Ag==", status: "online", role: "administrator", chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false }],
+      roles: [],
+      channelOverwrites: [],
+      members: [{ id: "server-admin", username: "anna", discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "Администрирую сообщество", avatar: "data:image/webp;base64,AA==", banner: "data:image/webp;base64,AQ==", memberBackground: "data:image/webp;base64,Ag==", status: "online", role: "administrator", roleIds: [], chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false }],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
 
@@ -793,11 +836,15 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 1080,
       screenShareMaxFrameRate: 60,
       helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
+      welcomeChannelId: null,
+      welcomeMessage: "Welcome to {server}, {user}!",
       channels: state.servers[0]!.channels.map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
+      roles: [],
+      channelOverwrites: [],
       // Тег 4242 уже занят другой идентичностью, поэтому сервер выдал локальному профилю свой.
       members: [
-        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "member", chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false },
-        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "owner", chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false },
+        { id: "someone-else", username: state.profile!.username, discriminator: "4242", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "member", roleIds: [], chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false },
+        { id: "local-user", username: state.profile!.username, discriminator: "0731", fingerprint: "1234-5678-9abc-def0", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "owner", roleIds: [], chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false },
       ],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
@@ -817,8 +864,12 @@ describe("ClientApp", () => {
       screenShareMaxResolution: 1080,
       screenShareMaxFrameRate: 60,
       helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
+      welcomeChannelId: null,
+      welcomeMessage: "Welcome to {server}, {user}!",
       channels: state.servers[0]!.channels.slice(1).map((channel) => ({ id: channel.id, name: channel.name, kind: channel.kind, description: channel.description, participantLimit: channel.participantLimit, slowmodeSeconds: channel.slowmodeSeconds })),
       members: [],
+      roles: [],
+      channelOverwrites: [],
       currentUser: { id: "local-user", role: "owner", permissions: ["MANAGE_CHANNELS", "MANAGE_ROLES", "DELETE_SERVER"] },
     });
     expect(next.messages.some((message) => message.channelId === removedId)).toBe(false);
@@ -1171,7 +1222,7 @@ describe("ClientApp", () => {
     const { container } = render(<Message message={message} members={[member]} compact={false} grouped={false} ownAvatar={null} currentUserId="local-user" canManageMessages={false} previewAvailable={false} canAttach={false} uploading={false} onAttach={vi.fn(async () => null)} onEdit={vi.fn()} onDelete={vi.fn()} onDownload={vi.fn()} onPreview={vi.fn()} onToggleReaction={vi.fn()} />);
 
     // Текст сообщения выделяется (остальной UI — нет, см. user-select в globals.css).
-    expect(container.querySelector("p.whitespace-pre-wrap")).toHaveClass("select-text", "cursor-text");
+    expect(container.querySelector("div.whitespace-pre-wrap")).toHaveClass("select-text", "cursor-text");
     // Чип упоминания несёт text-blue-200: в светлой теме CSS красит его в чёрный.
     expect(screen.getByRole("button", { name: "Упоминание: mark" })).toHaveClass("text-blue-200");
   });
@@ -1252,7 +1303,9 @@ describe("ClientApp", () => {
     await user.type(composer, "/pm привет без адресата");
     await user.click(screen.getByRole("button", { name: "Отправить" }));
     expect(await screen.findByText("Укажите получателя через @username")).toBeInTheDocument();
-    expect(save).not.toHaveBeenCalled();
+    const persisted = save.mock.calls.at(-1)?.[0] as PersistedClientState | undefined;
+    expect(persisted?.messages ?? []).toHaveLength(1);
+    expect(persisted?.messageDrafts).toMatchObject({ welcome: "/pm привет без адресата" });
   });
 
   it("stores a local private message with a badge in the demo mode", async () => {
@@ -1558,6 +1611,45 @@ describe("ChannelNotificationPopover", () => {
     expect(onPreferences).toHaveBeenCalledWith(expect.objectContaining({
       notificationOverrides: { general: { enabled: true, everyone: true, mentions: true } },
     }));
+  });
+});
+
+describe("CustomRoles", () => {
+  it("picks the color of the top positioned colored role", () => {
+    const roles = new Map([
+      ["low", { position: 1, color: "#ff0000" }],
+      ["high", { position: 9, color: "#00ff00" }],
+      ["plain", { position: 99, color: null }],
+    ]);
+    expect(topRoleColor(["low", "high", "plain"], roles)).toBe("#00ff00");
+    expect(topRoleColor(["plain"], roles)).toBeNull();
+    expect(topRoleColor([], roles)).toBeNull();
+  });
+
+  it("stores snapshot roles, member roleIds and the top role color", () => {
+    const state = createDefaultState();
+    state.servers.push({ id: "server-1", name: "Server", address: null, accent: "#4d6bfe", maxAttachmentBytes: 10 * 1024 * 1024, channels: [], members: [] });
+    state.activeServerId = "server-1";
+    const roleId = "11111111-1111-4111-8111-111111111111";
+    const next = applyServerSnapshot(state, {
+      id: "7b2f5502-d465-41c2-b794-ef4031e2217a",
+      name: "Server",
+      avatar: null,
+      banner: null,
+      maxAttachmentBytes: null,
+      screenShareMaxResolution: 1080,
+      screenShareMaxFrameRate: 60,
+      helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] },
+      welcomeChannelId: null,
+      welcomeMessage: "Welcome to {server}, {user}!",
+      channels: [],
+      roles: [{ id: roleId, name: "Moderator", color: "#ff0000", position: 5, permissions: ["KICK_MEMBERS"] }],
+      channelOverwrites: [],
+      members: [{ id: "member-1", username: "mira", discriminator: "0002", fingerprint: "abcd-ef01-2345-6789", bio: "", avatar: null, banner: null, memberBackground: null, status: "online", role: "member", roleIds: [roleId], chatMuted: false, chatMutedUntil: null, nameFont: "none", helpAccepted: false }],
+      currentUser: { id: "member-1", role: "member", permissions: ["KICK_MEMBERS", "VOICE_CONNECT", "VOICE_SPEAK"] },
+    });
+    expect(next.servers[0]?.roles).toHaveLength(1);
+    expect(next.servers[0]?.members[0]).toMatchObject({ roleIds: [roleId], roleColor: "#ff0000" });
   });
 });
 

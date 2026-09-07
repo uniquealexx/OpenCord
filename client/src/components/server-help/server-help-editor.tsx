@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
-import { DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, type ServerHelp, type ServerSettings } from "@opencord/shared";
+import { DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, DEFAULT_WELCOME_MESSAGE, type ServerHelp, type ServerSettings } from "@opencord/shared";
 import { DEFAULT_HELP_PAGE_SOURCE, parseHelpSource, specToSource } from "@/components/server-help/builder";
 import { ServerHelpBody } from "@/components/server-help/server-help-dialog";
 import { ScriptEditor, parseErrorLine } from "@/components/server-help/script-editor";
@@ -72,6 +72,8 @@ export function ServerHelpEditor({ server, canManage, onSaveSettings }: { server
       screenShareMaxResolution: server.screenShareMaxResolution ?? DEFAULT_SCREEN_SHARE_MAX_RESOLUTION,
       screenShareMaxFrameRate: server.screenShareMaxFrameRate ?? DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE,
       helpPage: { enabled, gate: result.spec.gate, pages: result.spec.pages },
+      welcomeChannelId: server.welcomeChannelId ?? null,
+      welcomeMessage: server.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE,
     });
   }
 

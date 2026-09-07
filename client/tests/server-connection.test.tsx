@@ -181,7 +181,7 @@ describe("server connection", () => {
       expect(result.current.leaveServer()).toBe(true);
       expect(result.current.updateServerAvatar("data:image/png;base64,AA==")).toBe(true);
       expect(result.current.updateServerBanner("data:image/webp;base64,AQ==")).toBe(true);
-      expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] } })).toBe(true);
+      expect(result.current.updateServerSettings({ name: "Новая команда", maxAttachmentBytes: null, screenShareMaxResolution: 720, screenShareMaxFrameRate: 30, helpPage: { enabled: false, gate: { enabled: false, pageId: null }, pages: [] }, welcomeChannelId: null, welcomeMessage: "Welcome to {server}, {user}!" })).toBe(true);
       expect(result.current.updateVoiceState(true, false, "screen-owner")).toBe(true);
       expect(result.current.disconnectVoiceMember("voice-member")).toBe(true);
       expect(result.current.setVoiceMemberMuted("voice-member", true)).toBe(true);
@@ -189,7 +189,7 @@ describe("server connection", () => {
       expect(result.current.kickMember("server-member")).toBe(true);
       expect(result.current.banMember("banned-member", 30)).toBe(true);
       expect(result.current.unbanMember("unbanned-member")).toBe(true);
-      searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], offset: 0, limit: 25 });
+      searchRequestId = result.current.searchMessages({ query: "важное", authorId: null, channelId: null, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     });
     const sentEvents = first?.sent.map((event) => JSON.parse(event) as { type: string; attachmentIds?: string[]; mentions?: string[]; name?: string; userId?: string; durationMinutes?: number | null; muted?: boolean; viewingScreenShareUserId?: string | null; profile?: { status?: string; bio?: string; banner?: string | null }; screenShareMaxResolution?: number; screenShareMaxFrameRate?: number }) ?? [];
     expect(sentEvents.some((event) => event.type === "channel.update")).toBe(true);
@@ -229,7 +229,7 @@ describe("server connection", () => {
     act(() => first?.receive({ type: "voice.participant.disconnected", userId: "voice-member", channelId, reason: "moderated" }));
     expect(callbacks.onVoiceDisconnected).toHaveBeenCalledWith("voice-member", channelId, "moderated");
 
-    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [], mentions: [], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null };
+    const message = { id: channelId, channelId, authorId: "user-id", authorName: "Лина", authorAvatar: null, content: "Исправлено", createdAt: "2026-07-22T12:00:00.000Z", editedAt: "2026-07-22T12:01:00.000Z", attachments: [], mentions: [], reactions: [], kind: "chat" as const, targetUserId: null, anonymous: false, replyToMessageId: null, pinned: false, pinnedAt: null };
     act(() => {
       first?.receive({ type: "message.updated", message });
       first?.receive({ type: "message.deleted", messageId: channelId, channelId });

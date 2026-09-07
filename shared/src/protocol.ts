@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 43 as const;
+export const PROTOCOL_VERSION = 51 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -281,6 +281,17 @@ export function unmetHelpRequires(page: ServerHelpPage, controls: Record<string,
   return unmet;
 }
 
+/**
+ * Приветствие новичков (протокол v51): Discord-подобный welcome-канал.
+ * `welcomeChannelId` — nullable uuid текстового канала (null выключает),
+ * `welcomeMessage` — шаблон до 500 символов с плейсхолдерами {user} и {server}.
+ */
+export const WELCOME_MESSAGE_MAX_LENGTH = 500 as const;
+export const DEFAULT_WELCOME_MESSAGE = "Welcome to {server}, {user}!" as const;
+export function renderWelcomeMessage(template: string, user: string, server: string): string {
+  return template.replaceAll("{user}", user).replaceAll("{server}", server);
+}
+
 export const serverSettingsSchema = z.object({
   name: serverNameSchema,
   description: z.string().trim().max(SERVER_DESCRIPTION_MAX_LENGTH).optional(),
@@ -288,6 +299,8 @@ export const serverSettingsSchema = z.object({
   screenShareMaxResolution: screenShareResolutionSchema,
   screenShareMaxFrameRate: screenShareFrameRateSchema,
   helpPage: serverHelpSchema.default({ enabled: false, gate: { enabled: false, pageId: null }, pages: [] }),
+  welcomeChannelId: z.string().uuid().nullable().default(null),
+  welcomeMessage: z.string().max(WELCOME_MESSAGE_MAX_LENGTH).default(DEFAULT_WELCOME_MESSAGE),
 });
 
 export const VOICE_PARTICIPANT_LIMIT_MAX = 25 as const;
@@ -311,6 +324,31 @@ export const CHANNEL_BULK_LIMIT = 100 as const;
 export const MESSAGE_FLOOD_BURST = 10 as const;
 export const MESSAGE_FLOOD_WINDOW_MS = 5_000 as const;
 export const MESSAGE_FLOOD_SUSTAINED = 5 as const;
+
+/**
+ * Индикаторы набора текста (протокол v45): эфемерное состояние, без хранения
+ * в базе. Сервер держит запись в памяти TYPING_TTL_MS и гасит её сам;
+ * повторный typing.start чаще TYPING_START_COOLDOWN_MS на канал молча отбрасывается.
+ */
+export const TYPING_TTL_MS = 5_000 as const;
+export const TYPING_START_COOLDOWN_MS = 2_000 as const;
+
+/**
+ * Массовое удаление сообщений (протокол v47): только модерация, только обычные
+ * сообщения одного текстового канала. Одиночное удаление без лимита, массовое —
+ * редкая разрушительная операция, поэтому лимит заметно строже.
+ */
+export const MESSAGE_BULK_DELETE_MIN = 2 as const;
+export const MESSAGE_BULK_DELETE_MAX = 50 as const;
+export const BULK_DELETE_BURST = 3 as const;
+export const BULK_DELETE_REFILL_MS = 20_000 as const;
+
+/**
+ * Присутствие (протокол v46): лёгкая рассылка статуса без записи в базу.
+ * Клиент шлёт `presence.set`, сервер отвечает всем `presence.updated`.
+ * Автопереход в idle — локальная политика клиента: 5 минут без активности.
+ */
+export const PRESENCE_IDLE_MS = 300_000;
 
 /**
  * Пауза перед возвращением в голос после отключения модератором. Без неё действие
@@ -349,6 +387,103 @@ export const VOICE_ORPHAN_GRACE_MS = 30_000 as const;
 
 export const memberRoleSchema = z.enum(["owner", "administrator", "member"]);
 export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
+
+/**
+ * Кастомные роли сервера (протокол v48): Discord-подобная модель поверх
+ * legacy-роли owner/administrator/member. Владелец остаётся вне таблицы —
+ * он привязан к ключу развёртывания, непередаваем и всегда имеет все права.
+ * Права участника — объединение (union) назначенных ролей; иерархия — max position.
+ */
+export const CUSTOM_ROLE_NAME_MIN_LENGTH = 2 as const;
+export const CUSTOM_ROLE_NAME_MAX_LENGTH = 32 as const;
+export const CUSTOM_ROLE_POSITION_MIN = 0 as const;
+export const CUSTOM_ROLE_POSITION_MAX = 9999 as const;
+export const CUSTOM_ROLE_PERMISSIONS_MAX = 9 as const;
+export const MEMBER_ROLES_MAX = 32 as const;
+export const customRoleColorSchema = z.string().regex(/^#[0-9a-f]{6}$/u).nullable().default(null);
+export const customRoleSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(CUSTOM_ROLE_NAME_MIN_LENGTH).max(CUSTOM_ROLE_NAME_MAX_LENGTH),
+  color: customRoleColorSchema,
+  position: z.number().int().min(CUSTOM_ROLE_POSITION_MIN).max(CUSTOM_ROLE_POSITION_MAX),
+  permissions: z.array(permissionSchema).max(CUSTOM_ROLE_PERMISSIONS_MAX).refine((permissions) => new Set(permissions).size === permissions.length, "Role permissions must be unique").default([]),
+});
+export type CustomRole = z.infer<typeof customRoleSchema>;
+export const memberRoleIdsSchema = z.array(z.string().uuid()).max(MEMBER_ROLES_MAX).refine((ids) => new Set(ids).size === ids.length, "Member role IDs must be unique").default([]);
+
+/**
+ * Переопределения прав канала (протокол v49): Discord-подобные overwrites,
+ * только для ролей (member-targets нет — roles only). Новых прав не вводится:
+ * allow/deny — подмножества существующих значений permissionSchema.
+ *
+ * Правило (как в Discord): allow канала перекрывает права ролей, deny
+ * перекрывает allow. Конфликт поперёк ролей решает deny: итог =
+ * (union прав ролей ∪ union allow) − union deny.
+ */
+export const channelOverwritePermissionsSchema = z.array(permissionSchema).max(CUSTOM_ROLE_PERMISSIONS_MAX).refine((permissions) => new Set(permissions).size === permissions.length, "Overwrite permissions must be unique").default([]);
+export const channelOverwriteSchema = z.object({
+  channelId: z.string().uuid(),
+  roleId: z.string().uuid(),
+  allow: channelOverwritePermissionsSchema,
+  deny: channelOverwritePermissionsSchema,
+}).refine((overwrite) => !overwrite.allow.some((permission) => overwrite.deny.includes(permission)), "Allow and deny must not overlap");
+export type ChannelOverwrite = z.infer<typeof channelOverwriteSchema>;
+
+/**
+ * Эффективные права в канале: база (union ролей) плюс все allow минус все deny.
+ * Deny побеждает allow при конфликте поперёк ролей — как в Discord.
+ */
+export function resolveChannelPermissions(basePermissions: readonly Permission[], overwrites: readonly { allow: readonly Permission[]; deny: readonly Permission[] }[]): Permission[] {
+  const allowed = new Set<Permission>();
+  const denied = new Set<Permission>();
+  for (const overwrite of overwrites) {
+    for (const permission of overwrite.allow) allowed.add(permission);
+    for (const permission of overwrite.deny) denied.add(permission);
+  }
+  const result = new Set<Permission>();
+  for (const permission of basePermissions) if (!denied.has(permission)) result.add(permission);
+  for (const permission of allowed) if (!denied.has(permission)) result.add(permission);
+  return [...result];
+}
+
+/**
+ * Журнал модерации (протокол v50): append-only таблица audit_log, без новых прав.
+ * Действия переиспользуют существующие имена событий; чтение требует MANAGE_SERVER.
+ * Таблица capped: хранятся последние AUDIT_LOG_MAX_ENTRIES записей, prune на insert.
+ */
+export const AUDIT_LOG_MAX_ENTRIES = 1000 as const;
+export const AUDIT_LIST_LIMIT_MAX = 100 as const;
+export const AUDIT_DETAIL_MAX_LENGTH = 2000 as const;
+export const auditActionSchema = z.enum([
+  "member.kick",
+  "member.ban",
+  "member.unban",
+  "member.role.set",
+  "member.roles.set",
+  "role.create",
+  "role.update",
+  "role.delete",
+  "channel.create",
+  "channel.update",
+  "channel.delete",
+  "channel.overwrites.set",
+  "channel.slowmode.set",
+  "message.delete",
+  "message.bulkDelete",
+  "server.settings.update",
+  "server.avatar.update",
+  "server.banner.update",
+]);
+export type AuditAction = z.infer<typeof auditActionSchema>;
+export const auditEntrySchema = z.object({
+  id: z.string().uuid(),
+  at: z.string().datetime(),
+  actorId: z.string().min(1).max(200),
+  action: auditActionSchema,
+  targetId: z.string().min(1).max(200).nullable().default(null),
+  detail: z.string().max(AUDIT_DETAIL_MAX_LENGTH).nullable().default(null),
+});
+export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
 export const serverAvatarSchema = z.string().max(1_500_000).regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/u).nullable();
 
@@ -440,6 +575,7 @@ export const memberSchema = z.object({
   nameGlow: profileAccentColorSchema.nullish(),
   nameFont: nameFontSchema.default("none"),
   role: memberRoleSchema,
+  roleIds: memberRoleIdsSchema,
   chatMuted: z.boolean().default(false),
   chatMutedUntil: z.string().datetime().nullable().default(null),
   // Принял ли участник правила через гейт справки (`help.accept`).
@@ -534,6 +670,8 @@ export const chatMessageSchema = z.object({
   targetUserId: privateMessageTargetSchema.nullable().default(null),
   anonymous: z.boolean().default(false),
   replyToMessageId: messageReplyIdSchema,
+  pinned: z.boolean().default(false),
+  pinnedAt: z.string().datetime().nullable().default(null),
 }).superRefine((message, context) => {
   if (!message.content && message.attachments.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
 });
@@ -544,9 +682,10 @@ export const messageSearchFiltersSchema = z.object({
   authorId: z.string().min(1).max(200).nullable().default(null),
   channelId: z.string().uuid().nullable().default(null),
   contentTypes: z.array(messageContentTypeSchema).max(4).refine((types) => new Set(types).size === types.length, "Content types must be unique").default([]),
+  pinnedOnly: z.boolean().default(false),
   offset: z.number().int().min(0).max(10_000).default(0),
   limit: z.number().int().min(1).max(50).default(25),
-}).refine((filters) => Boolean(filters.query || filters.authorId || filters.channelId || filters.contentTypes.length), "At least one search filter is required");
+}).refine((filters) => Boolean(filters.query || filters.authorId || filters.channelId || filters.contentTypes.length || filters.pinnedOnly), "At least one search filter is required");
 
 export const messageSearchResultSchema = z.object({
   messages: z.array(chatMessageSchema).max(50),
@@ -586,7 +725,18 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("chat.mute.set"), requestId: requestIdSchema, userId: z.string().min(1), muted: z.boolean(), durationMinutes: z.number().int().min(1).max(10_080).nullable().default(null) }),
   z.object({ type: z.literal("message.update"), requestId: requestIdSchema, messageId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]) }),
   z.object({ type: z.literal("message.delete"), requestId: requestIdSchema, messageId: z.string().uuid() }),
+  z.object({ type: z.literal("message.bulkDelete"), requestId: requestIdSchema, channelId: z.string().uuid(), messageIds: z.array(z.string().uuid()).min(MESSAGE_BULK_DELETE_MIN).max(MESSAGE_BULK_DELETE_MAX).refine((ids) => new Set(ids).size === ids.length, "Message IDs must be unique") }),
   z.object({ type: z.literal("message.react"), requestId: requestIdSchema, messageId: z.string().uuid(), emoji: reactionEmojiSchema }),
+  // Индикаторы набора: эфемерные, без requestId и без ответов — невалидные
+  // события сервер молча отбрасывает, чтобы не спамить автора тостами.
+  z.object({ type: z.literal("typing.start"), channelId: z.string().uuid() }),
+  z.object({ type: z.literal("typing.stop"), channelId: z.string().uuid() }),
+  // Присутствие (протокол v46): эфемерное, без requestId и без ответов —
+  // невалидные события сервер молча отбрасывает, как и индикаторы набора.
+  z.object({ type: z.literal("presence.set"), status: userStatusSchema }),
+  z.object({ type: z.literal("message.pin"), requestId: requestIdSchema, messageId: z.string().uuid() }),
+  z.object({ type: z.literal("message.unpin"), requestId: requestIdSchema, messageId: z.string().uuid() }),
+  z.object({ type: z.literal("message.pinned.list"), requestId: requestIdSchema, channelId: z.string().uuid(), limit: z.number().int().min(1).max(50).default(25) }),
   z.object({ type: z.literal("profile.update"), requestId: requestIdSchema, profile: publicProfileSchema }),
   z.object({ type: z.literal("help.accept"), requestId: requestIdSchema, controls: helpAcceptControlsSchema }),
   z.object({ type: z.literal("server.leave"), requestId: requestIdSchema }),
@@ -598,12 +748,19 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   // Массовая настройка: один медленный режим сразу на выбранные текстовые каналы.
   z.object({ type: z.literal("channel.slowmode.set"), requestId: requestIdSchema, channelIds: z.array(z.string().uuid()).min(1).max(CHANNEL_BULK_LIMIT).refine((ids) => new Set(ids).size === ids.length, "Channel IDs must be unique"), slowmodeSeconds: slowmodeSecondsSchema }),
   z.object({ type: z.literal("member.role.set"), requestId: requestIdSchema, userId: z.string().min(1), role: z.enum(["administrator", "member"]) }),
+  z.object({ type: z.literal("member.roles.set"), requestId: requestIdSchema, userId: z.string().min(1), roleIds: memberRoleIdsSchema }),
+  z.object({ type: z.literal("role.create"), requestId: requestIdSchema, name: z.string().trim().min(CUSTOM_ROLE_NAME_MIN_LENGTH).max(CUSTOM_ROLE_NAME_MAX_LENGTH), color: customRoleColorSchema, position: z.number().int().min(CUSTOM_ROLE_POSITION_MIN).max(CUSTOM_ROLE_POSITION_MAX), permissions: z.array(permissionSchema).max(CUSTOM_ROLE_PERMISSIONS_MAX).refine((permissions) => new Set(permissions).size === permissions.length, "Role permissions must be unique").default([]) }),
+  z.object({ type: z.literal("role.update"), requestId: requestIdSchema, roleId: z.string().uuid(), name: z.string().trim().min(CUSTOM_ROLE_NAME_MIN_LENGTH).max(CUSTOM_ROLE_NAME_MAX_LENGTH).optional(), color: customRoleColorSchema.optional(), position: z.number().int().min(CUSTOM_ROLE_POSITION_MIN).max(CUSTOM_ROLE_POSITION_MAX).optional(), permissions: z.array(permissionSchema).max(CUSTOM_ROLE_PERMISSIONS_MAX).refine((permissions) => new Set(permissions).size === permissions.length, "Role permissions must be unique").optional() }),
+  z.object({ type: z.literal("role.delete"), requestId: requestIdSchema, roleId: z.string().uuid() }),
+  z.object({ type: z.literal("role.list"), requestId: requestIdSchema }),
+  z.object({ type: z.literal("channel.overwrites.set"), requestId: requestIdSchema, channelId: z.string().uuid(), roleId: z.string().uuid(), allow: channelOverwritePermissionsSchema, deny: channelOverwritePermissionsSchema }).refine((event) => !event.allow.some((permission) => event.deny.includes(permission)), "Allow and deny must not overlap"),
   z.object({ type: z.literal("member.kick"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("member.ban"), requestId: requestIdSchema, userId: z.string().min(1), durationMinutes: banDurationMinutesSchema }),
   z.object({ type: z.literal("member.unban"), requestId: requestIdSchema, userId: z.string().min(1) }),
+  z.object({ type: z.literal("audit.list"), requestId: requestIdSchema, limit: z.number().int().min(1).max(AUDIT_LIST_LIMIT_MAX).default(50), before: z.string().datetime().nullable().default(null) }),
   z.object({ type: z.literal("server.avatar.update"), requestId: requestIdSchema, avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.banner.update"), requestId: requestIdSchema, banner: serverBannerSchema }),
-  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape, helpPage: serverHelpSchema.optional() }),
+  z.object({ type: z.literal("server.settings.update"), requestId: requestIdSchema, ...serverSettingsSchema.shape, helpPage: serverHelpSchema.optional(), welcomeChannelId: z.string().uuid().nullable().optional(), welcomeMessage: z.string().max(WELCOME_MESSAGE_MAX_LENGTH).optional() }),
   z.object({ type: z.literal("server.delete"), requestId: requestIdSchema }),
   z.object({ type: z.literal("voice.join"), requestId: requestIdSchema, channelId: z.string().uuid() }),
   z.object({ type: z.literal("voice.leave"), requestId: requestIdSchema }),
@@ -618,7 +775,12 @@ export const clientEventSchema = z.discriminatedUnion("type", [
 export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("auth.challenge"), requestId: requestIdSchema, protocolVersion: z.literal(PROTOCOL_VERSION), challenge: z.string(), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("auth.ok"), requestId: requestIdSchema, userId: z.string(), serverId: z.string().uuid(), sessionToken: z.string().min(40).max(200), sessionExpiresAt: z.string().datetime() }),
-  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), avatar: serverAvatarSchema.default(null), banner: serverBannerSchema.default(null), ...serverSettingsSchema.shape, channels: z.array(channelSchema), members: z.array(memberSchema), bannedMembers: z.array(bannedMemberSchema).optional(), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
+  z.object({ type: z.literal("server.snapshot"), server: z.object({ id: z.string().uuid(), avatar: serverAvatarSchema.default(null), banner: serverBannerSchema.default(null), ...serverSettingsSchema.shape, channels: z.array(channelSchema), members: z.array(memberSchema), roles: z.array(customRoleSchema).default([]), channelOverwrites: z.array(channelOverwriteSchema).default([]), bannedMembers: z.array(bannedMemberSchema).optional(), currentUser: z.object({ id: z.string().min(1), role: memberRoleSchema, permissions: z.array(permissionSchema) }), voice: voiceCapabilitySchema.optional(), voiceParticipants: z.array(voicePresenceSchema).optional() }) }),
+  z.object({ type: z.literal("role.list.result"), requestId: requestIdSchema, roles: z.array(customRoleSchema) }),
+  z.object({ type: z.literal("role.created"), role: customRoleSchema }),
+  z.object({ type: z.literal("role.updated"), role: customRoleSchema }),
+  z.object({ type: z.literal("role.deleted"), roleId: z.string().uuid() }),
+  z.object({ type: z.literal("channel.overwrites.updated"), channelId: z.string().uuid(), roleId: z.string().uuid(), allow: channelOverwritePermissionsSchema, deny: channelOverwritePermissionsSchema }),
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.banner.updated"), serverId: z.string().uuid(), banner: serverBannerSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
@@ -628,8 +790,13 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.updated"), message: chatMessageSchema }),
   z.object({ type: z.literal("message.deleted"), messageId: z.string().uuid(), channelId: z.string().uuid() }),
   z.object({ type: z.literal("message.reactions.updated"), messageId: z.string().uuid(), channelId: z.string().uuid(), reactions: z.array(messageReactionSchema) }),
+  z.object({ type: z.literal("typing.updated"), channelId: z.string().uuid(), userId: z.string().min(1), typing: z.boolean() }),
+  z.object({ type: z.literal("presence.updated"), userId: z.string().min(1), status: publicMemberStatusSchema }),
+  z.object({ type: z.literal("message.pinned.updated"), messageId: z.string().uuid(), channelId: z.string().uuid(), pinned: z.boolean(), pinnedAt: z.string().datetime().nullable() }),
+  z.object({ type: z.literal("message.pinned.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema).max(50) }),
   z.object({ type: z.literal("member.updated"), member: memberSchema }),
   z.object({ type: z.literal("member.removed"), userId: z.string().min(1) }),
+  z.object({ type: z.literal("audit.result"), requestId: requestIdSchema, entries: z.array(auditEntrySchema).max(AUDIT_LIST_LIMIT_MAX), hasMore: z.boolean() }),
   z.object({ type: z.literal("profile.anonymized"), userId: z.string().min(1) }),
   z.object({ type: z.literal("voice.join.authorized"), requestId: requestIdSchema, channelId: z.string().uuid(), endpoint: z.string().url(), token: z.string().min(20).max(4_000), expiresAt: z.string().datetime() }),
   z.object({ type: z.literal("voice.participant.joined"), participant: voicePresenceSchema }),
@@ -651,6 +818,7 @@ export type BannedMember = z.infer<typeof bannedMemberSchema>;
 export type BanDurationMinutes = z.infer<typeof banDurationMinutesSchema>;
 export type MemberRole = z.infer<typeof memberRoleSchema>;
 export type Permission = z.infer<typeof permissionSchema>;
+export type CustomRoleInput = { name: string; color?: string | null; position?: number; permissions?: Permission[] };
 export type VoiceCapability = z.infer<typeof voiceCapabilitySchema>;
 export type VoicePresence = z.infer<typeof voicePresenceSchema>;
 export type ScreenShareResolution = z.infer<typeof screenShareResolutionSchema>;

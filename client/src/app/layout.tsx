@@ -16,7 +16,11 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, view
  * Реальные потребности приложения: превью и аватары приходят как `data:`, кэш видео —
  * как `file:`, rnnoise компилирует WebAssembly и подключает AudioWorklet через `blob:`
  * (см. `shared/rnnoise-processor.ts`). `connect-src` открыт для ws/wss/http/https:
- * сервер задаёт пользователь, поэтому список хостов заранее неизвестен.
+ * сервер задаёт пользователь, поэтому список хостов заранее неизвестен. `img-src`
+ * дополнительно разрешает http:/https: только ради миниатюр клиентских
+ * предпросмотров прямых ссылок на изображения (`components/link-preview.tsx`):
+ * `<img>` грузится лениво, без referrer и credentials; произвольный HTML/JS
+ * по-прежнему не исполняется и не встраивается.
  *
  * Заголовок передаётся через meta: renderer грузится с `file://`, где HTTP-заголовков
  * и `onHeadersReceived` нет.
@@ -32,7 +36,7 @@ const contentSecurityPolicy = [
   "default-src 'none'",
   "script-src 'self' 'wasm-unsafe-eval' blob:",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: file:",
+  "img-src 'self' data: blob: file: http: https:",
   "media-src 'self' data: blob: file:",
   "font-src 'self' data:",
   "connect-src 'self' data: blob: file: ws: wss: http: https:",

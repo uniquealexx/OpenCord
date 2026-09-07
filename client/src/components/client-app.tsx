@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, DEFAULT_SERVER_HELP_PAGE, MEBIBYTE, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type
-BanDurationMinutes, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
+import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, DEFAULT_SERVER_HELP_PAGE, DEFAULT_WELCOME_MESSAGE, MEBIBYTE, PRESENCE_IDLE_MS, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type
+BanDurationMinutes, type AuditEntry, type ChannelOverwrite, type CustomRole, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
 PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type
 UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Download, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Plus, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Square, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Code, Download, EyeOff, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Pin, PinOff, Plus, Quote, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Square, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -37,7 +37,8 @@ import { useKeybindActions } from "@/hooks/use-keybind-actions";
 import { useVoiceRecorder, voiceFileName, type VoiceRecorderError } from "@/hooks/use-voice-recorder";
 import { setActiveLanguage, currentDictionary, useI18n, type Dictionary } from "@/lib/i18n";
 import { nicknameStyle } from "@/lib/name-font";
-import { commandQueryAtCursor, containsEveryoneMention, EVERYONE_MENTION, EVERYONE_TOKEN, everyoneCandidate, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, splitMessageContent, type MentionCandidate } from "@/lib/mentions";
+import { commandQueryAtCursor, containsEveryoneMention, EVERYONE_MENTION, EVERYONE_TOKEN, everyoneCandidate, expandMentionsForEditing, matchMentionCandidates, mentionQueryAtCursor, parseSlashCommand, resolveDraftMentions, type MentionCandidate } from "@/lib/mentions";
+import { MessageContent } from "@/components/message-content";
 import { buildToastForMessage, getChannelNotificationSettings } from "@/lib/channel-notifications";
 import { NotificationToasts, type NotificationToast } from "@/components/notification-toasts";
 import { installPlatformBridge, isMobilePlatform } from "@/platform";
@@ -45,7 +46,7 @@ import { registerBackHandler, setExitHintHandler } from "@/platform/native-shell
 import { cn, createId, initials } from "@/lib/utils";
 import { sameServerAddress } from "@/lib/server-address";
 import { playVoiceSound, primeVoiceSounds } from "@/lib/voice-sounds";
-import { createDefaultState, DEFAULT_COLOR_THEME, DEFAULT_DARK_SHADE, DEFAULT_THEME_MODE, type ChannelNotificationSettings, type ClientPreferences, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
+import { clearMessageDraft, createDefaultState, DEFAULT_COLOR_THEME, DEFAULT_DARK_SHADE, DEFAULT_THEME_MODE, pruneMessageDrafts, setMessageDraft, type ChannelNotificationSettings, type ClientPreferences, type LocalProfile, type MockChannel, type MockMember, type MockMessage, type MockServer, type PersistedClientState } from "@/shared/state";
 import { resolveAppearance, useSystemDark } from "@/lib/appearance";
 import type { SavedDeploymentConfiguration } from "@/shared/deployment";
 
@@ -60,6 +61,10 @@ type CurrentAccess = {
   permissions: Permission[];
 };
 const VOICE_PARTICIPANT_LIMIT_MAX = 25;
+/** Пауза между typing.start одного автора: не чаще раза в 3 с, пока набирается текст. */
+const TYPING_SEND_DEBOUNCE_MS = 3_000;
+/** Сколько клиент показывает чужой индикатор без подтверждений (серверный TTL — 5 с). */
+const TYPING_CLIENT_TTL_MS = 6_000;
 const userStatusLabels: Record<UserStatus, keyof Dictionary["statuses"]> = {
   online: "online",
   idle: "idle",
@@ -96,6 +101,65 @@ export function shouldRequestVoiceJoin(status: "idle" | "connecting" | "connecte
   return !alreadyJoiningOrConnected || (connectedChannelId !== targetChannelId && authorizedChannelId !== targetChannelId);
 }
 
+export interface TypingIndicatorStrings {
+  typingOne: (name: string) => string;
+  typingTwo: (first: string, second: string) => string;
+  typingThree: (first: string, second: string, third: string) => string;
+  typingMany: (count: number) => string;
+}
+
+/**
+ * Текст индикатора «печатает…» под полем ввода: до трёх имён, дальше — счётчик.
+ * Пустой список — null (индикатор скрыт).
+ */
+export function formatTypingIndicator(strings: TypingIndicatorStrings, names: string[]): string | null {
+  if (!names.length) return null;
+  if (names.length === 1) return strings.typingOne(names[0]!);
+  if (names.length === 2) return strings.typingTwo(names[0]!, names[1]!);
+  if (names.length === 3) return strings.typingThree(names[0]!, names[1]!, names[2]!);
+  return strings.typingMany(names.length);
+}
+
+/**
+ * Пора ли перевести присутствие в idle (протокол v46): только из online
+ * и только после PRESENCE_IDLE_MS без активности. Чистая функция ради тестов.
+ */
+export function shouldMarkIdle(lastActivityMs: number, nowMs: number, status: UserStatus | undefined): boolean {
+  return (status ?? "online") === "online" && nowMs - lastActivityMs >= PRESENCE_IDLE_MS;
+}
+
+/** Лимит выбора массового удаления (протокол v47): сервер принимает 2–50 за раз. */
+export const BULK_DELETE_SELECT_LIMIT = 50 as const;
+/** Минимум массового удаления: одиночное удаляется через меню сообщения. */
+export const BULK_DELETE_SELECT_MIN = 2 as const;
+
+/** Массово удаляются только обычные сообщения канала — личные (pm/apm) сервер отвергает. */
+export function isBulkDeletableMessage(message: Pick<MockMessage, "kind">): boolean {
+  return !message.kind || message.kind === "chat";
+}
+
+export function toggleBulkSelection(selected: string[], id: string, limit: number = BULK_DELETE_SELECT_LIMIT): string[] {
+  if (selected.includes(id)) return selected.filter((item) => item !== id);
+  if (selected.length >= limit) return selected;
+  return [...selected, id];
+}
+
+export function bulkSelectAllIds(messages: { id: string }[], limit: number = BULK_DELETE_SELECT_LIMIT): string[] {
+  return messages.slice(0, limit).map((message) => message.id);
+}
+
+/** Оптимистичное удаление: прячет выбранное до ответа сервера; неуспех откатывает. */
+export function applyBulkDeleteOptimistic(messages: MockMessage[], ids: readonly string[]): MockMessage[] {
+  const doomed = new Set(ids);
+  return messages.filter((message) => !doomed.has(message.id));
+}
+
+/** Откат оптимистичного удаления: возвращает спрятанное, не дублируя пришедшее. */
+export function restoreBulkDeleteRollback(messages: MockMessage[], rollback: readonly MockMessage[]): MockMessage[] {
+  const known = new Set(messages.map((message) => message.id));
+  return [...messages, ...rollback.filter((message) => !known.has(message.id))];
+}
+
 export function canDisconnectVoiceParticipant(canModerate: boolean, actorRole: MemberRole | undefined, targetRole: MemberRole | undefined, currentUserId: string, targetUserId: string): boolean {
   if (!canModerate || currentUserId === targetUserId || !actorRole || !targetRole || targetRole === "owner") return false;
   return actorRole === "owner" || (actorRole === "administrator" && targetRole === "member");
@@ -112,7 +176,6 @@ export function ClientApp(): React.ReactElement {
   const [modal, setModal] = useState<Modal>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId | null>(null);
-  const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [replyingToId, setReplyingToId] = useState<string | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
@@ -127,6 +190,18 @@ export function ClientApp(): React.ReactElement {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResult, setSearchResult] = useState<MessageSearchResult | null>(null);
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [auditHasMore, setAuditHasMore] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [pinnedOnly, setPinnedOnly] = useState(false);
+  // Массовое удаление (протокол v47): режим выбора виден только менеджерам чата.
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState<string[]>([]);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const bulkRollbackRef = useRef<MockMessage[] | null>(null);
+  const bulkRequestRef = useRef<string | null>(null);
+  // Индикаторы набора (протокол v45): канал → автор → время протухания записи.
+  const [typingByChannel, setTypingByChannel] = useState<Record<string, Record<string, number>>>({});
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [viewingScreenShareId, setViewingScreenShareId] = useState<string | null>(null);
   const [mobilePanel, setMobilePanel] = useState<"channels" | "members" | null>(null);
@@ -146,11 +221,25 @@ export function ClientApp(): React.ReactElement {
   const swipeStartRef = useRef<{ x: number; y: number; edge: "left" | "right" | "panel" } | null>(null);
   const dragDepthRef = useRef(0);
   const searchRequestRef = useRef<string | null>(null);
+  const auditRequestRef = useRef<string | null>(null);
+  const auditAppendRef = useRef(false);
+  // Дебаунс typing.start: не чаще одного события в 3 с на канал, пока набирается текст.
+  const typingLastSentRef = useRef<Record<string, number>>({});
+  // Автопереход в idle (протокол v46): последняя активность и флаг «отошли сами».
+  // Флаг отличает авто-idle (возвращаем online при активности) от ручного idle/dnd.
+  const lastActivityRef = useRef(0);
+  const autoIdleRef = useRef(false);
+  // Зеркало статуса для интервальной проверки idle без подписки на ре-рендеры.
+  const profileStatusRef = useRef<UserStatus | undefined>(undefined);
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const serverMuteStateRef = useRef(false);
   const voiceSoundStatusRef = useRef<VoiceSessionStatus>("idle");
   const mutedBeforeServerMuteRef = useRef(false);
   const connectionServer = state?.servers.find((server) => server.id === state.activeServerId);
+  // Зеркало статуса для интервальной проверки idle — эффектом, а не в рендере.
+  useEffect(() => {
+    profileStatusRef.current = state?.profile?.status;
+  });
   // Toast trigger lives above the connection callbacks: it only reads bindings
   // declared above it, which keeps the hooks/immutability analysis stable.
   function pushToastForMessage(message: import("@opencord/shared").ChatMessage): void {
@@ -182,7 +271,6 @@ export function ClientApp(): React.ReactElement {
     {
       onSnapshot: (snapshot) => {
         if (!snapshot.channels.some((channel) => channel.id === state?.activeChannelId)) {
-          setDraft("");
           setPendingAttachments([]);
         }
         if (connectionServer)
@@ -250,6 +338,15 @@ export function ClientApp(): React.ReactElement {
         })),
       onMessageDeleted: (messageId) => {
         setReplyingToId((current) => (current === messageId ? null : current));
+        // Успешное удаление гасит ожидающий bulk-запрос: остальные message.deleted — его же эхо.
+        if (bulkRollbackRef.current?.some((message) => message.id === messageId)) {
+          bulkRollbackRef.current = bulkRollbackRef.current.filter((message) => message.id !== messageId);
+          if (!bulkRollbackRef.current.length) {
+            bulkRollbackRef.current = null;
+            bulkRequestRef.current = null;
+          }
+        }
+        setBulkSelected((current) => (current.includes(messageId) ? current.filter((id) => id !== messageId) : current));
         commit((current) => ({
           ...current,
           messages: current.messages.filter((message) => message.id !== messageId),
@@ -259,6 +356,47 @@ export function ClientApp(): React.ReactElement {
         commit((current) => ({
           ...current,
           messages: current.messages.map((message) => (message.id === messageId && message.channelId === channelId ? { ...message, reactions } : message)),
+        })),
+      onMessagePinnedUpdated: (messageId, channelId, pinned, pinnedAt) =>
+        commit((current) => ({
+          ...current,
+          messages: current.messages.map((message) => (message.id === messageId && message.channelId === channelId ? { ...message, pinned, pinnedAt } : message)),
+        })),
+      onPinnedResult: (_requestId, _channelId, messages) =>
+        commit((current) => ({
+          ...current,
+          messages: [...current.messages.filter((message) => !messages.some((pinned) => pinned.id === message.id)), ...messages.map(toLocalMessage)],
+        })),
+      onTyping: (channelId, userId, typing) =>
+        setTypingByChannel((current) => {
+          if (typing) {
+            const channel = current[channelId] ?? {};
+            return { ...current, [channelId]: { ...channel, [userId]: Date.now() + TYPING_CLIENT_TTL_MS } };
+          }
+          const channel = current[channelId];
+          if (!channel || !(userId in channel)) return current;
+          const next = { ...channel };
+          delete next[userId];
+          if (!Object.keys(next).length) {
+            const rest = { ...current };
+            delete rest[channelId];
+            return rest;
+          }
+          return { ...current, [channelId]: next };
+        }),
+      // Лёгкое присутствие (протокол v46): точка в списке участников обновляется
+      // без перезапроса профиля — member.updated для этого не нужен.
+      onPresence: (userId, status) =>
+        commit((current) => ({
+          ...current,
+          servers: current.servers.map((server) =>
+            server.id !== current.activeServerId
+              ? server
+              : {
+                  ...server,
+                  members: server.members.map((member) => (member.id === userId ? { ...member, status } : member)),
+                },
+          ),
         })),
       onSearchResult: (requestId, result) => {
         if (requestId !== searchRequestRef.current) return;
@@ -277,8 +415,21 @@ export function ClientApp(): React.ReactElement {
           messages: [...current.messages.filter((message) => !result.messages.some((found) => found.id === message.id)), ...result.messages.map(toLocalMessage)],
         }));
       },
+      onOverwritesChanged: () => {
+        // Полное состояние приезжает следующим snapshot; лёгкое событие —
+        // лишь намёк не ждать. Отдельного запроса не нужно.
+      },
+      onAuditResult: (requestId, entries, hasMore) => {
+        if (requestId !== auditRequestRef.current) return;
+        auditRequestRef.current = null;
+        setAuditLoading(false);
+        setAuditHasMore(hasMore);
+        if (auditAppendRef.current) setAuditEntries((current) => [...current, ...entries.filter((entry) => !current.some((item) => item.id === entry.id))]);
+        else setAuditEntries(entries);
+      },
       onMember: (member) => {
-        if (member.id === currentAccess?.id && member.helpAccepted === true) {
+        const selfId = state?.activeServerId ? accessByServer[state.activeServerId]?.id : undefined;
+        if (member.id === selfId && member.helpAccepted === true) {
           helpAcceptPendingRef.current = false;
           setHelpAcceptPending(false);
           setHelpAcceptError(null);
@@ -288,7 +439,7 @@ export function ClientApp(): React.ReactElement {
           // Тег username#1234 закрепляет за идентичностью сервер, поэтому подтверждённый
           // им дискриминатор возвращается в локальный профиль.
           profile:
-            current.profile && member.id === currentAccess?.id && member.discriminator !== current.profile.discriminator
+            current.profile && member.id === selfId && member.discriminator !== current.profile.discriminator
               ? { ...current.profile, discriminator: member.discriminator }
               : current.profile,
           servers: current.servers.map((server) =>
@@ -335,7 +486,7 @@ export function ClientApp(): React.ReactElement {
         }));
       },
       onMemberRemoved: (userId) => {
-        if (connectionServer && userId === currentAccess?.id) {
+        if (connectionServer && userId === (state?.activeServerId ? accessByServer[state.activeServerId]?.id : undefined)) {
           const removedServerId = connectionServer.id;
           const removedAddress = connectionServer.address;
           commit((current) => removeServers(current, (server) => server.id === removedServerId || sameServerAddress(server.address, removedAddress)));
@@ -394,7 +545,7 @@ export function ClientApp(): React.ReactElement {
             [connectionServer.id]: (current[connectionServer.id] ?? []).filter((item) => item.userId !== userId || item.channelId !== channelId),
           }));
         setViewingScreenShareId((current) => (current === userId ? null : current));
-        if (userId === currentAccess?.id) {
+        if (userId === (state?.activeServerId ? accessByServer[state.activeServerId]?.id : undefined)) {
           setVoiceAuthorization(null);
           setNotice(currentDictionary().notices.voiceDisconnected);
         }
@@ -406,7 +557,17 @@ export function ClientApp(): React.ReactElement {
           setHelpAcceptPending(false);
           setHelpAcceptError(message);
         }
+        // Ошибка bulk-запроса дойдёт следующим тиком через onRequestError и заменит общий тост.
         setNotice(message);
+      },
+      onRequestError: (requestId) => {
+        if (!requestId || requestId !== bulkRequestRef.current) return;
+        const rollback = bulkRollbackRef.current;
+        bulkRequestRef.current = null;
+        bulkRollbackRef.current = null;
+        if (rollback?.length) commit((current) => ({ ...current, messages: restoreBulkDeleteRollback(current.messages, rollback) }));
+        // onError того же события ставит общий тост синхронно позже — наш идёт следующим тиком.
+        queueMicrotask(() => setNotice(currentDictionary().notices.bulkDeleteFailed));
       },
       onAcceptRequired: () => {
         setHelpAcceptError(currentDictionary().connectionErrors.acceptRequired);
@@ -541,6 +702,65 @@ export function ClientApp(): React.ReactElement {
     if (language) setActiveLanguage(language);
   }, [state?.preferences.language]);
 
+  // Страховка от зависших индикаторов: сервер гасит записи сам и рассылает
+  // typing.updated(false), но пропущенное событие не должно висеть вечно.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTypingByChannel((current) => {
+        const now = Date.now();
+        let changed = false;
+        const next: Record<string, Record<string, number>> = {};
+        for (const [channelId, users] of Object.entries(current)) {
+          const alive = Object.fromEntries(Object.entries(users).filter(([, until]) => until > now));
+          if (Object.keys(alive).length !== Object.keys(users).length) changed = true;
+          if (Object.keys(alive).length) next[channelId] = alive;
+          else changed = true;
+        }
+        return changed ? next : current;
+      });
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Автоприсутствие (протокол v46): 5 минут без активности переводят online в idle,
+  // первая же активность возвращает online только после авто-idle — ручной выбор
+  // idle/dnd/invisible остаётся до решения пользователя. Без записи в базу:
+  // статус живёт в соединении и в локальном профиле для следующего подключения.
+  useEffect(() => {
+    if (connection.status !== "connected") return;
+    // Подключение (и переподключение) — тоже активность: отсчёт idle начинается заново.
+    lastActivityRef.current = Date.now();
+    const markActivity = (): void => {
+      lastActivityRef.current = Date.now();
+      if (!autoIdleRef.current) return;
+      autoIdleRef.current = false;
+      commit((current) =>
+        current.profile?.status === "idle" ? { ...current, profile: { ...current.profile, status: "online" } } : current,
+      );
+      connection.setStatus("online");
+    };
+    const checkIdle = (): void => {
+      if (autoIdleRef.current) return;
+      if (!shouldMarkIdle(lastActivityRef.current, Date.now(), profileStatusRef.current)) return;
+      autoIdleRef.current = true;
+      commit((current) =>
+        (current.profile?.status ?? "online") === "online"
+          ? { ...current, profile: current.profile ? { ...current.profile, status: "idle" } : current.profile }
+          : current,
+      );
+      connection.setStatus("idle");
+    };
+    const activityEvents = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const type of activityEvents) window.addEventListener(type, markActivity, { passive: true });
+    const timer = window.setInterval(checkIdle, 30_000);
+    return () => {
+      for (const type of activityEvents) window.removeEventListener(type, markActivity);
+      window.clearInterval(timer);
+    };
+    // Статус соединения — строка, объект connection пересоздаётся каждый рендер.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection.status]);
+
   // Системная кнопка «Назад» Android закрывает верхний слой интерфейса и только на
   // главном экране сворачивает приложение (нативная часть просит подтверждение).
   // Порядок соответствует визуальной вложенности: оверлей → диалог → панель → чат.
@@ -665,7 +885,6 @@ export function ClientApp(): React.ReactElement {
   }
 
   function resetComposer(): void {
-    setDraft("");
     setPendingAttachments([]);
     setReplyingToId(null);
   }
@@ -722,6 +941,16 @@ export function ClientApp(): React.ReactElement {
   const updatePreset = activeServer ? (activeServer.deployment ?? deploymentPresetFromServer(activeServer)) : undefined;
   const activeChannel = activeServer?.channels.find((channel) => channel.id === state.activeChannelId) ?? activeServer?.channels.find((channel) => channel.kind === "text");
   const messages = activeChannel ? sortMessagesChronologically(state.messages.filter((message) => message.channelId === activeChannel.id)) : [];
+  const draft = activeChannel ? (state.messageDrafts[activeChannel.id] ?? "") : "";
+  const visibleMessages = pinnedOnly ? messages.filter((message) => message.pinned) : messages;
+  // Чужой индикатор набора для активного канала: до трёх имён, дальше — счётчик.
+  const selfTypingId = currentAccess?.id ?? profile.id;
+  const typingNames = activeChannel
+    ? Object.keys(typingByChannel[activeChannel.id] ?? {})
+        .filter((userId) => userId !== selfTypingId)
+        .map((userId) => activeServer?.members.find((member) => member.id === userId)?.username ?? t.chat.unknownUser)
+    : [];
+  const typingText = formatTypingIndicator(t.chat, typingNames);
   const replyingTo = replyingToId ? (messages.find((message) => message.id === replyingToId) ?? null) : null;
   const searchMembers =
     activeServer && !activeServer.members.some((member) => member.id === (currentAccess?.id ?? profile.id))
@@ -777,8 +1006,48 @@ export function ClientApp(): React.ReactElement {
       setHelpAcceptError(currentDictionary().connectionErrors.reconnectFailed);
     }
   }
+  /** Гасит собственный индикатор набора: отправка, blur, смена канала. No-op без соединения. */
+  function stopTyping(channelId: string | null | undefined): void {
+    if (!channelId || !activeServer?.address || connection.status !== "connected") return;
+    delete typingLastSentRef.current[channelId];
+    connection.sendTypingStop(channelId);
+  }
+
+  /** Дебаунс typing.start: одно событие в 3 с, пока набирается текст; пустой черновик — stop. */
+  function noteTyping(channelId: string | null | undefined, value: string): void {
+    if (!channelId || !activeServer?.address || connection.status !== "connected") return;
+    if (!value.trim()) {
+      stopTyping(channelId);
+      return;
+    }
+    const now = Date.now();
+    if (now - (typingLastSentRef.current[channelId] ?? 0) < TYPING_SEND_DEBOUNCE_MS) return;
+    typingLastSentRef.current[channelId] = now;
+    connection.sendTypingStart(channelId);
+  }
+
+  function handleDraft(value: string): void {
+    if (!activeChannel) return;
+    const channelId = activeChannel.id;
+    commit((current) => ({
+      ...current,
+      messageDrafts: setMessageDraft(current.messageDrafts, channelId, value),
+    }));
+    noteTyping(channelId, value);
+  }
+
+  function clearDraft(channelId: string | null | undefined): void {
+    if (!channelId) return;
+    commit((current) => ({
+      ...current,
+      messageDrafts: clearMessageDraft(current.messageDrafts, channelId),
+    }));
+  }
+
   function selectServer(server: MockServer): void {
     const channel = server.channels.find((item) => item.kind === "text");
+    stopTyping(state?.activeChannelId);
+    exitBulkSelect();
     commit((current) => ({
       ...current,
       activeServerId: server.id,
@@ -792,6 +1061,8 @@ export function ClientApp(): React.ReactElement {
   }
 
   function openHome(): void {
+    stopTyping(state?.activeChannelId);
+    exitBulkSelect();
     commit((current) => ({
       ...current,
       activeServerId: null,
@@ -804,9 +1075,12 @@ export function ClientApp(): React.ReactElement {
   }
 
   function selectChannel(channelId: string): void {
+    if (state?.activeChannelId && state.activeChannelId !== channelId) stopTyping(state.activeChannelId);
+    exitBulkSelect();
     commit((current) => ({ ...current, activeChannelId: channelId }));
     setMobilePanel(null);
     setServerSettingsOpen(false);
+    setPinnedOnly(false);
     resetComposer();
   }
 
@@ -848,6 +1122,21 @@ export function ClientApp(): React.ReactElement {
     }
     searchRequestRef.current = requestId;
     if (filters.offset === 0) setSearchResult(null);
+  }
+
+  function loadAuditLog(before: string | null): void {
+    if (!activeServer?.address) {
+      setNotice(t.serverSettings.auditUnavailable);
+      return;
+    }
+    const requestId = connection.listAuditLog(50, before);
+    if (!requestId) {
+      setNotice(t.serverSettings.auditUnavailable);
+      return;
+    }
+    auditRequestRef.current = requestId;
+    auditAppendRef.current = before !== null;
+    setAuditLoading(true);
   }
 
   function openSearchMessage(message: MockMessage): void {
@@ -979,6 +1268,9 @@ export function ClientApp(): React.ReactElement {
 
   /** «Открыть настройки» из меню сервера в колонке: переключаемся на сервер и открываем полноэкранную страницу. */
   function openServerSettingsFromRail(server: MockServer): void {
+    setAuditEntries([]);
+    setAuditHasMore(false);
+    auditRequestRef.current = null;
     if (state?.activeServerId !== server.id) {
       selectServer(server);
       window.setTimeout(() => setServerSettingsOpen(true), 0);
@@ -1011,7 +1303,18 @@ export function ClientApp(): React.ReactElement {
     setNotice(t.server.removedLocally);
   }
 
+  /** Быстрая смена присутствия (протокол v46): локальный профиль + лёгкий presence.set. */
+  function changeStatus(next: UserStatus): void {
+    autoIdleRef.current = false;
+    lastActivityRef.current = Date.now();
+    commit((current) => (current.profile ? { ...current, profile: { ...current.profile, status: next } } : current));
+    if (activeServer?.address && connection.status === "connected") connection.setStatus(next);
+  }
+
   function saveProfile(profile: LocalProfile): void {
+    // Полное сохранение из формы — ручной выбор, авто-idle флаг сбрасывается.
+    autoIdleRef.current = false;
+    lastActivityRef.current = Date.now();
     commit((current) => ({
       ...current,
       profile,
@@ -1107,6 +1410,7 @@ export function ClientApp(): React.ReactElement {
           setNotice(t.notices.messageNotReady);
           return;
         }
+        stopTyping(activeChannel.id);
       } else {
         // Локальный демо-режим: сообщение сохраняется локально с пометкой личного.
         const message: MockMessage = {
@@ -1127,7 +1431,8 @@ export function ClientApp(): React.ReactElement {
           messages: [...current.messages, message],
         }));
       }
-      setDraft("");
+      stopTyping(activeChannel.id);
+      clearDraft(activeChannel.id);
       setReplyingToId(null);
       return;
     }
@@ -1145,7 +1450,8 @@ export function ClientApp(): React.ReactElement {
         return;
       }
       setNotice(command.type === "mute" ? t.notices.chatMutedForAll : t.notices.chatUnmuted);
-      setDraft("");
+      stopTyping(activeChannel.id);
+      clearDraft(activeChannel.id);
       return;
     }
     const resolved = resolveDraftMentions(draft, mentionCandidates);
@@ -1173,7 +1479,8 @@ export function ClientApp(): React.ReactElement {
         setNotice(t.notices.messageNotReady);
         return;
       }
-      setDraft("");
+      stopTyping(activeChannel.id);
+      clearDraft(activeChannel.id);
       setPendingAttachments([]);
       setReplyingToId(null);
       return;
@@ -1193,7 +1500,8 @@ export function ClientApp(): React.ReactElement {
       ...current,
       messages: [...current.messages, message],
     }));
-    setDraft("");
+    stopTyping(activeChannel.id);
+    clearDraft(activeChannel.id);
     setReplyingToId(null);
   }
 
@@ -1235,6 +1543,20 @@ export function ClientApp(): React.ReactElement {
     return true;
   }
 
+  function pinMessage(message: MockMessage): void {
+    if (activeServer?.address) {
+      const ok = message.pinned ? connection.unpinMessage(message.id) : connection.pinMessage(message.id);
+      if (!ok) setNotice(t.notices.pinNotReady);
+      return;
+    }
+    commit((current) => ({
+      ...current,
+      messages: current.messages.map((item) =>
+        item.id === message.id ? { ...item, pinned: !item.pinned, pinnedAt: !item.pinned ? new Date().toISOString() : null } : item,
+      ),
+    }));
+  }
+
   function deleteMessage(message: MockMessage): boolean {
     if (activeServer?.address) {
       if (!connection.deleteMessage(message.id)) {
@@ -1249,6 +1571,52 @@ export function ClientApp(): React.ReactElement {
       messages: current.messages.filter((item) => item.id !== message.id),
     }));
     return true;
+  }
+
+  /** Вход в режим выбора: только менеджеры чата, чекбоксы видны только в нём. */
+  function enterBulkSelect(): void {
+    setBulkSelectMode(true);
+    setBulkSelected([]);
+    setBulkConfirmOpen(false);
+  }
+
+  function exitBulkSelect(): void {
+    setBulkSelectMode(false);
+    setBulkSelected([]);
+    setBulkConfirmOpen(false);
+    bulkRequestRef.current = null;
+    bulkRollbackRef.current = null;
+  }
+
+  function toggleBulkMessage(id: string): void {
+    setBulkSelected((current) => toggleBulkSelection(current, id));
+  }
+
+  function selectAllVisibleBulk(messages: { id: string }[]): void {
+    setBulkSelected(bulkSelectAllIds(messages));
+  }
+
+  /** Подтверждение массового удаления: оптимистично прячем, неуспех откатывает. */
+  function confirmBulkDelete(): void {
+    if (!bulkSelected.length || !activeChannel) return;
+    const ids = [...bulkSelected];
+    if (!activeServer?.address) {
+      commit((current) => ({ ...current, messages: applyBulkDeleteOptimistic(current.messages, ids) }));
+      exitBulkSelect();
+      return;
+    }
+    const requestId = connection.bulkDeleteMessages(activeChannel.id, ids);
+    if (!requestId) {
+      setNotice(t.notices.bulkDeleteNotReady);
+      return;
+    }
+    bulkRequestRef.current = requestId;
+    bulkRollbackRef.current = state?.messages.filter((message) => ids.includes(message.id)) ?? [];
+    commit((current) => ({ ...current, messages: applyBulkDeleteOptimistic(current.messages, ids) }));
+    setReplyingToId((current) => (current && ids.includes(current) ? null : current));
+    setBulkConfirmOpen(false);
+    setBulkSelectMode(false);
+    setBulkSelected([]);
   }
 
   async function selectAndUploadAttachment(): Promise<Attachment | null> {
@@ -1394,6 +1762,46 @@ export function ClientApp(): React.ReactElement {
     setNotice(role === "administrator" ? t.notices.adminGranting : t.notices.adminRevoking);
   }
 
+  function setServerMemberRoles(userId: string, roleIds: string[]): void {
+    if (!connection.setMemberRoles(userId, roleIds)) {
+      setNotice(t.notices.roleNotReady);
+      return;
+    }
+    setNotice(t.notices.rolesAssigning);
+  }
+
+  function createServerRole(name: string, color: string | null, position: number, permissions: Permission[]): void {
+    if (!connection.createRole(name, color, position, permissions)) {
+      setNotice(t.notices.roleNotReady);
+      return;
+    }
+    setNotice(t.notices.roleCreating);
+  }
+
+  function updateServerRole(roleId: string, patch: { name?: string; color?: string | null; position?: number; permissions?: Permission[] }): void {
+    if (!connection.updateRole(roleId, patch)) {
+      setNotice(t.notices.roleNotReady);
+      return;
+    }
+    setNotice(t.notices.roleUpdating);
+  }
+
+  function deleteServerRole(roleId: string): void {
+    if (!connection.deleteRole(roleId)) {
+      setNotice(t.notices.roleNotReady);
+      return;
+    }
+    setNotice(t.notices.roleDeleting);
+  }
+
+  function setChannelOverwrites(channelId: string, roleId: string, allow: Permission[], deny: Permission[]): void {
+    if (!connection.setChannelOverwrites(channelId, roleId, allow, deny)) {
+      setNotice(t.notices.overwritesUnavailable);
+      return;
+    }
+    setNotice(t.notices.overwritesRequested);
+  }
+
   function kickServerMember(userId: string): void {
     if (!connection.kickMember(userId)) {
       setNotice(t.notices.kickNotReady);
@@ -1500,6 +1908,7 @@ export function ClientApp(): React.ReactElement {
       onServerMenu={() => setModal("leave")}
       onProfile={() => { setSettingsPage("account"); setModal("settings"); }}
       onSettings={() => { setSettingsPage(null); setModal("settings"); }}
+      onStatusChange={changeStatus}
       onJoinVoice={joinVoiceChannel}
       onLeaveVoice={leaveVoiceChannel}
       onMuted={(value) => {
@@ -1553,11 +1962,19 @@ export function ClientApp(): React.ReactElement {
           server={activeServer}
           profile={profile}
           access={currentAccess}
-          onClose={() => setServerSettingsOpen(false)}
+          auditEntries={auditEntries}
+          auditHasMore={auditHasMore}
+          auditLoading={auditLoading}
+          onLoadAudit={loadAuditLog}
+          onClose={() => { setServerSettingsOpen(false); setAuditEntries([]); setAuditHasMore(false); auditRequestRef.current = null; }}
           onAvatar={() => setModal("server-avatar")}
           onBanner={() => setModal("server-banner")}
           onSaveSettings={saveServerSettings}
           onSetRole={setServerMemberRole}
+          onSetMemberRoles={setServerMemberRoles}
+          onCreateRole={createServerRole}
+          onUpdateRole={updateServerRole}
+          onDeleteRole={deleteServerRole}
           onKick={kickServerMember}
           onBan={banServerMember}
           onUnban={unbanServerMember}
@@ -1591,7 +2008,7 @@ export function ClientApp(): React.ReactElement {
               mobilePanel === "members" ? "translate-x-0" : "pointer-events-none translate-x-full",
             )}
           >
-            <MemberList server={activeServer} profile={state.profile} access={currentAccess} />
+            <MemberList server={activeServer} profile={state.profile} access={currentAccess} voiceUserIds={voiceParticipants.map((participant) => participant.userId)} locallyMutedParticipantIds={voice.locallyMutedParticipantIds} participantVolumes={voice.participantVolumes} onParticipantMuted={voice.setParticipantMuted} onParticipantVolume={voice.setParticipantVolume} />
           </div>
         </>
       )}
@@ -1691,6 +2108,14 @@ export function ClientApp(): React.ReactElement {
                 onPreferences={(preferences) => commit((current) => ({ ...current, preferences }))}
                 onMenu={() => setMobilePanel(mobilePanel === "channels" ? null : "channels")}
                 onSearch={() => setSearchOpen(true)}
+                pinnedOnly={pinnedOnly}
+                onTogglePinned={() => {
+                  setPinnedOnly((current) => !current);
+                  if (activeChannel?.id && activeServer.address && connection.status === "connected") connection.listPinnedMessages(activeChannel.id);
+                }}
+                canBulkDelete={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true}
+                bulkSelectMode={bulkSelectMode}
+                onToggleBulkSelect={() => (bulkSelectMode ? exitBulkSelect() : enterBulkSelect())}
                 helpAvailable={Boolean(activeServer.helpPage?.enabled && activeServer.helpPage.pages.length > 0)}
                 onOpenHelp={openHelpManually}
                 onToggleMembers={() => {
@@ -1706,15 +2131,47 @@ export function ClientApp(): React.ReactElement {
                 }}
               />
               <ProtocolNotice status={connection.status} />
+              {bulkSelectMode && activeChannel && (
+                <div role="toolbar" aria-label={t.chat.bulkSelect} className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[.055] px-4 py-2 max-md:px-2.5">
+                  <span aria-live="polite" className="text-xs font-semibold text-slate-300">{t.chat.bulkSelected(bulkSelected.length)}</span>
+                  <button
+                    type="button"
+                    onClick={() => selectAllVisibleBulk(visibleMessages.filter(isBulkDeletableMessage))}
+                    className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/[.06] hover:text-slate-100"
+                  >
+                    {t.chat.bulkSelectAll}
+                  </button>
+                  <span className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={exitBulkSelect}
+                      className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-400 transition hover:bg-white/[.06] hover:text-slate-200"
+                    >
+                      {t.chat.bulkCancel}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkSelected.length < BULK_DELETE_SELECT_MIN}
+                      onClick={() => setBulkConfirmOpen(true)}
+                      className="rounded-lg bg-red-500/85 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {t.chat.bulkDelete(bulkSelected.length)}
+                    </button>
+                  </span>
+                </div>
+              )}
               <div className="flex min-h-0 flex-1">
                 <div className="flex min-w-0 flex-1 flex-col">
                   <div ref={messageScrollRef} className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-md:px-2.5 max-md:py-3", state.preferences.compactMode && "py-3")}>
                     <ChannelIntro name={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
-                    {messages.length ? messages.map((message, index) => <Message key={message.id} message={message} replyToMessage={message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : undefined} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && messages[index - 1]?.authorId === message.authorId} privateStackPosition={privateMessageStackPosition(messages, index)} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} onToggleReaction={connection.toggleReaction} onReply={(target) => setReplyingToId(target.id)} canReact={Boolean(activeServer.address && connection.status === "connected")} />) : <p className="py-8 text-center text-sm text-slate-600">{t.chat.empty}</p>}
+                    {visibleMessages.length ? visibleMessages.map((message, index) => <Message key={message.id} message={message} replyToMessage={message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : undefined} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && visibleMessages[index - 1]?.authorId === message.authorId} privateStackPosition={privateMessageStackPosition(visibleMessages, index)} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} linkPreviewsEnabled={state.preferences.showLinkPreviews} selectMode={bulkSelectMode} selected={bulkSelected.includes(message.id)} onToggleSelect={() => toggleBulkMessage(message.id)} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onPin={pinMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} onToggleReaction={connection.toggleReaction} onReply={(target) => setReplyingToId(target.id)} canReact={Boolean(activeServer.address && connection.status === "connected")} />) : <p className="py-8 text-center text-sm text-slate-600">{pinnedOnly ? t.chat.pinnedEmpty : t.chat.empty}</p>}
                   </div>
-                  <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} maxAttachmentBytes={activeServer.maxAttachmentBytes ?? null} replyingTo={replyingTo} onCancelReply={() => setReplyingToId(null)} onAttach={() => void attachFile()} onVoiceFile={(file) => void uploadPastedFiles([file])} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={setDraft} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} chatMutedUntil={selfChatMutedUntil} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
+                  <Composer draft={draft} channelName={activeChannel?.name ?? t.chat.channelFallback} disabled={Boolean(activeServer.address && connection.status !== "connected")} attachments={pendingAttachments} uploading={uploadingAttachment} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} maxAttachmentBytes={activeServer.maxAttachmentBytes ?? null} replyingTo={replyingTo} onCancelReply={() => setReplyingToId(null)} onAttach={() => void attachFile()} onVoiceFile={(file) => void uploadPastedFiles([file])} onRemoveAttachment={(id) => setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id))} onDraft={handleDraft} onBlur={() => stopTyping(activeChannel?.id)} onSubmit={sendMessage} members={mentionCandidates} chatMuted={selfChatMuted} chatMutedUntil={selfChatMutedUntil} canModerateChat={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} />
+                  {typingText && (
+                    <p role="status" aria-live="polite" className="shrink-0 px-5 pb-2 text-xs italic text-slate-500 max-md:px-2.5">{typingText}</p>
+                  )}
                 </div>
-                {!mobile && state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} />}
+                {!mobile && state.preferences.showMemberList && <MemberList server={activeServer} profile={state.profile} access={currentAccess} voiceUserIds={voiceParticipants.map((participant) => participant.userId)} locallyMutedParticipantIds={voice.locallyMutedParticipantIds} participantVolumes={voice.participantVolumes} onParticipantMuted={voice.setParticipantMuted} onParticipantVolume={voice.setParticipantVolume} />}
               </div>
               <ServerSearchPanel open={searchOpen} serverName={activeServer.name} channels={activeServer.channels} members={searchMembers} result={searchResult} loading={searchLoading} onClose={() => resetSearch()} onReset={resetSearchSession} onSearch={searchServer} onOpenMessage={openSearchMessage} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} onPreview={loadAttachmentPreview} />
               <ServerHelpDialog open={helpDialogOpen} onOpenChange={changeHelpOpen} spec={activeServer.helpPage} serverName={activeServer.name} viewerAccepted={selfAccepted} gatePageId={helpGateActive ? helpGatePageId : null} onAccept={acceptHelpRules} acceptPending={helpAcceptPending} acceptError={helpAcceptError} />
@@ -1812,6 +2269,10 @@ export function ClientApp(): React.ReactElement {
             if (!open) setManagedChannel(null);
           }}
           onSave={(name, description, participantLimit, slowmodeSeconds) => editServerChannel(managedChannel, name, description, participantLimit, slowmodeSeconds)}
+          roles={activeServer?.roles ?? []}
+          overwrites={activeServer?.channelOverwrites ?? []}
+          canManageOverwrites={currentAccess?.permissions.includes("MANAGE_CHANNELS") === true}
+          onSetOverwrites={setChannelOverwrites}
         />
       )}
       {activeServer && (
@@ -1823,6 +2284,18 @@ export function ClientApp(): React.ReactElement {
           onApply={applyChannelsSlowmode}
         />
       )}
+      <Dialog open={bulkConfirmOpen} onOpenChange={setBulkConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t.chat.bulkConfirmTitle}</DialogTitle>
+            <DialogDescription>{t.chat.bulkConfirmMessage(bulkSelected.length)}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setBulkConfirmOpen(false)}>{t.common.cancel}</Button>
+            <Button type="button" variant="danger" disabled={bulkSelected.length < BULK_DELETE_SELECT_MIN} onClick={confirmBulkDelete}>{t.chat.bulkDelete(bulkSelected.length)}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {managedChannel && (
         <DeleteChannelDialog
           channel={managedChannel}
@@ -1997,7 +2470,7 @@ function HomeScreen({ serverCount, profile, onCreate, onConnect, onProfile, onSe
   );
 }
 
-export function ChannelSidebar({ mobile = false, server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, serverMuted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onBulkSlowmode, onSelectChannel, onServerMenu, onProfile, onSettings, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice }: { mobile?: boolean; server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; serverMuted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onBulkSlowmode?: () => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void }): React.ReactElement {
+export function ChannelSidebar({ mobile = false, server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, serverMuted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onBulkSlowmode, onSelectChannel, onServerMenu, onProfile, onSettings, onStatusChange, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice }: { mobile?: boolean; server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; serverMuted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onBulkSlowmode?: () => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onStatusChange?: (status: UserStatus) => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void }): React.ReactElement {
   const { t } = useI18n();
   const textChannels = server.channels.filter((channel) => channel.kind === "text");
   const voiceChannels = server.channels.filter((channel) => channel.kind === "voice");
@@ -2105,7 +2578,11 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
             <span className="block truncate text-xs font-semibold text-slate-200" style={nicknameStyle(profile.nameFont, profile.nameGlow)}>{profile.username}</span>
             {profile.customStatus
               ? <span className="block truncate text-[10px] text-slate-400">{profile.customStatusEmoji ? `${profile.customStatusEmoji} ` : ""}{profile.customStatus}</span>
-              : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
+              : onStatusChange
+                ? <select aria-label={t.profile.status} value={profile.status ?? "online"} onClick={(event) => event.stopPropagation()} onChange={(event) => onStatusChange(event.target.value as UserStatus)} className={cn("block max-w-full truncate bg-transparent text-[10px] font-medium outline-none", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>
+                    {(["online", "idle", "dnd", "invisible"] as const).map((value) => <option key={value} value={value} className="bg-slate-900">{t.statuses[value]}</option>)}
+                  </select>
+                : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
           </span>
         </button>
         <button aria-label={t.settings.title} title={t.settings.title} onClick={onSettings} className={cn("grid shrink-0 place-items-center rounded-lg text-slate-500 hover:bg-white/6 hover:text-slate-200", mobile ? "size-11" : "size-9")}>
@@ -2705,7 +3182,9 @@ export function SlowmodePicker({ value, onChange, ariaLabel }: { value: number; 
   );
 }
 
-export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { channel: MockChannel; open: boolean; onOpenChange: (open: boolean) => void; onSave: (name: string, description: string, participantLimit: number | null, slowmodeSeconds: number) => void }): React.ReactElement {
+export const CHANNEL_OVERWRITE_PERMISSIONS: Permission[] = ["VOICE_CONNECT", "VOICE_SPEAK", "MANAGE_MESSAGES", "MANAGE_CHANNELS", "VOICE_MODERATE"];
+
+export function EditChannelDialog({ channel, open, onOpenChange, onSave, roles, overwrites, canManageOverwrites, onSetOverwrites }: { channel: MockChannel; open: boolean; onOpenChange: (open: boolean) => void; onSave: (name: string, description: string, participantLimit: number | null, slowmodeSeconds: number) => void; roles?: CustomRole[]; overwrites?: ChannelOverwrite[]; canManageOverwrites?: boolean; onSetOverwrites?: (channelId: string, roleId: string, allow: Permission[], deny: Permission[]) => void }): React.ReactElement {
   const { t } = useI18n();
   const [name, setName] = useState(channel.name);
   const [description, setDescription] = useState(channel.description);
@@ -2761,6 +3240,9 @@ export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { cha
               </div>
             </div>
           )}
+          {canManageOverwrites && onSetOverwrites && (roles ?? []).length > 0 && (
+            <ChannelOverwritesEditor channelId={channel.id} roles={roles ?? []} overwrites={(overwrites ?? []).filter((overwrite) => overwrite.channelId === channel.id)} onSetOverwrites={onSetOverwrites} />
+          )}
           <Button type="submit" className="w-full">
             <Pencil className="size-4" />
             {t.channel.save}
@@ -2768,6 +3250,51 @@ export function EditChannelDialog({ channel, open, onOpenChange, onSave }: { cha
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ChannelOverwritesEditor({ channelId, roles, overwrites, onSetOverwrites }: { channelId: string; roles: CustomRole[]; overwrites: ChannelOverwrite[]; onSetOverwrites: (channelId: string, roleId: string, allow: Permission[], deny: Permission[]) => void }): React.ReactElement {
+  const { t } = useI18n();
+  const [selectedRoleId, setSelectedRoleId] = useState(roles[0]?.id ?? "");
+  const selectedRole = roles.find((role) => role.id === selectedRoleId) ?? roles[0];
+  const current = overwrites.find((overwrite) => overwrite.roleId === selectedRole?.id);
+  function setState(roleId: string, permission: Permission, state: "neutral" | "allow" | "deny"): void {
+    const base = overwrites.find((overwrite) => overwrite.roleId === roleId) ?? { channelId, roleId, allow: [], deny: [] };
+    const allow = base.allow.filter((item) => item !== permission);
+    const deny = base.deny.filter((item) => item !== permission);
+    if (state === "allow") allow.push(permission);
+    if (state === "deny") deny.push(permission);
+    onSetOverwrites(channelId, roleId, allow, deny);
+  }
+  if (!selectedRole) return <></>;
+  return (
+    <div className="rounded-xl border border-white/8 bg-black/15 p-4">
+      <p className="text-sm font-medium text-slate-300">{t.channel.overwritesTitle}</p>
+      <p className="mb-3 mt-1 text-xs text-slate-500">{t.channel.overwritesDescription}</p>
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {roles.map((role) => (
+          <button key={role.id} type="button" onClick={() => setSelectedRoleId(role.id)} className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${role.id === selectedRole.id ? "bg-violet-500/25 text-violet-100 ring-1 ring-violet-400/50" : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"}`}>
+            {role.name}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-1">
+        {CHANNEL_OVERWRITE_PERMISSIONS.map((permission) => {
+          const state = current?.allow.includes(permission) ? "allow" : current?.deny.includes(permission) ? "deny" : "neutral";
+          return (
+            <div key={permission} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[.04]">
+              <code className="min-w-0 flex-1 truncate text-xs text-slate-300">{permission}</code>
+              <div role="radiogroup" aria-label={permission} className="flex shrink-0 gap-1">
+                <button type="button" role="radio" aria-checked={state === "deny"} title={t.channel.overwritesDeny} onClick={() => setState(selectedRole.id, permission, state === "deny" ? "neutral" : "deny")} className={`grid size-7 place-items-center rounded-md text-sm transition ${state === "deny" ? "bg-red-500/25 text-red-100 ring-1 ring-red-400/50" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}>✕</button>
+                <button type="button" role="radio" aria-checked={state === "neutral"} title={t.channel.overwritesNeutral} onClick={() => setState(selectedRole.id, permission, "neutral")} className={`grid size-7 place-items-center rounded-md text-sm transition ${state === "neutral" ? "bg-white/15 text-slate-200 ring-1 ring-white/25" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}>−</button>
+                <button type="button" role="radio" aria-checked={state === "allow"} title={t.channel.overwritesAllow} onClick={() => setState(selectedRole.id, permission, state === "allow" ? "neutral" : "allow")} className={`grid size-7 place-items-center rounded-md text-sm transition ${state === "allow" ? "bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/50" : "bg-white/5 text-slate-500 hover:bg-white/10"}`}>✓</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-[11px] leading-5 text-slate-500">{t.channel.overwritesHint}</p>
+    </div>
   );
 }
 
@@ -2886,6 +3413,8 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
         screenShareMaxResolution: maxResolution,
         screenShareMaxFrameRate: maxFrameRate,
         helpPage: server.helpPage ?? DEFAULT_SERVER_HELP_PAGE,
+        welcomeChannelId: server.welcomeChannelId ?? null,
+        welcomeMessage: server.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE,
       })
     )
       onOpenChange(false);
@@ -3185,7 +3714,7 @@ function NotificationRow({ title, children }: { title: string; children: React.R
   return <div className="flex min-h-12 items-center justify-between gap-4 px-3 py-2"><p className="text-xs font-medium text-slate-200">{title}</p>{children}</div>;
 }
 
-function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, channels, activeChannelId, preferences, onPreferences, onMenu, onSearch, onToggleMembers, helpAvailable = false, onOpenHelp }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; channels: MockChannel[]; activeChannelId: string | null; preferences: ClientPreferences; onPreferences: (preferences: ClientPreferences) => void; onMenu?: () => void; onSearch: () => void; onToggleMembers: () => void; helpAvailable?: boolean; onOpenHelp?: () => void }): React.ReactElement {
+function ChatHeader({ mobile = false, channelName, description, connectionStatus, memberList, channelsOpen = false, searchOpen, pinnedOnly = false, channels, activeChannelId, preferences, onPreferences, onMenu, onSearch, onTogglePinned, canBulkDelete = false, bulkSelectMode = false, onToggleBulkSelect, onToggleMembers, helpAvailable = false, onOpenHelp }: { mobile?: boolean; channelName: string; description: string; connectionStatus: ConnectionStatus; memberList: boolean; channelsOpen?: boolean; searchOpen: boolean; pinnedOnly?: boolean; channels: MockChannel[]; activeChannelId: string | null; preferences: ClientPreferences; onPreferences: (preferences: ClientPreferences) => void; onMenu?: () => void; onSearch: () => void; onTogglePinned?: () => void; canBulkDelete?: boolean; bulkSelectMode?: boolean; onToggleBulkSelect?: () => void; onToggleMembers: () => void; helpAvailable?: boolean; onOpenHelp?: () => void }): React.ReactElement {
   const { t } = useI18n();
   const statusLabel = connectionLabel(connectionStatus, t);
   const statusTone = connectionStatus === "connected"
@@ -3225,6 +3754,20 @@ function ChatHeader({ mobile = false, channelName, description, connectionStatus
       </span>
       {!mobile && (
         <ChannelNotificationPopover channels={channels} activeChannelId={activeChannelId} preferences={preferences} onPreferences={onPreferences} />
+      )}
+      {onTogglePinned && (
+        <button type="button" aria-label={pinnedOnly ? t.chat.showAll : t.chat.showPinned} title={pinnedOnly ? t.chat.showAll : t.chat.pinnedTitle} aria-pressed={pinnedOnly} onClick={onTogglePinned} className={mobile
+          ? cn(iconButton, pinnedOnly ? "bg-white/10 text-violet-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")
+          : cn("grid size-9 shrink-0 place-items-center rounded-lg transition", pinnedOnly ? "bg-white/10 text-violet-200" : "text-slate-500 hover:bg-white/6 hover:text-slate-200")}>
+          {pinnedOnly ? <PinOff className={mobile ? "size-5" : "size-4"} /> : <Pin className={mobile ? "size-5" : "size-4"} />}
+        </button>
+      )}
+      {canBulkDelete && onToggleBulkSelect && (
+        <button type="button" aria-label={bulkSelectMode ? t.chat.bulkCancel : t.chat.bulkSelect} title={bulkSelectMode ? t.chat.bulkCancel : t.chat.bulkSelect} aria-pressed={bulkSelectMode} onClick={onToggleBulkSelect} className={mobile
+          ? cn(iconButton, bulkSelectMode ? "bg-white/10 text-red-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")
+          : cn("grid size-9 shrink-0 place-items-center rounded-lg transition", bulkSelectMode ? "bg-white/10 text-red-200" : "text-slate-500 hover:bg-white/6 hover:text-slate-200")}>
+          <Trash2 className={mobile ? "size-5" : "size-4"} />
+        </button>
       )}
       <button type="button" aria-label={t.search.open} aria-pressed={searchOpen} onClick={onSearch} className={mobile
         ? cn(iconButton, searchOpen ? "bg-white/10 text-violet-200" : "text-slate-300 hover:bg-white/6 hover:text-slate-100")
@@ -3349,13 +3892,6 @@ function ChannelIntro({ name, description, networked }: { name: string; descript
 
 const QUICK_REACTION_EMOJIS = ["❤️", "👍", "😭"] as const;
 
-// Общие классы приглушённой пиши упоминания (неизвестный адресат маркера).
-const MENTION_PILL_CLASS = "inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] leading-none text-blue-200/80" as const;
-// @everyone повторяет вёрстку обычного упоминания (MessageMention): те же
-// trigger-классы пилюли и внутренний span ника, только без интерактивных
-// состояний (hover/focus) и с дефолтным шрифтом ника.
-const EVERYONE_PILL_CLASS = "inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] font-medium leading-none text-blue-200" as const;
-
 type PrivateMessageStackPosition = "single" | "first" | "middle" | "last";
 
 export function privateMessageStackPosition(messages: MockMessage[], index: number): PrivateMessageStackPosition {
@@ -3369,7 +3905,7 @@ export function privateMessageStackPosition(messages: MockMessage[], index: numb
   return "single";
 }
 
-export function Message({ message, replyToMessage, member, members, profile, compact, grouped, privateStackPosition = "single", ownAvatar, currentUserId, canManageMessages, previewAvailable, canAttach, attachmentLimitLabel, uploading, onAttach, onEdit, onDelete, onDownload, onPreview, onToggleReaction, onReply, canReact = false }: { message: MockMessage; replyToMessage?: MockMessage; member?: MockMember; members: MockMember[]; profile?: LocalProfile | null; compact: boolean; grouped: boolean; privateStackPosition?: PrivateMessageStackPosition; ownAvatar: string | null; currentUserId?: string; canManageMessages: boolean; previewAvailable: boolean; canAttach: boolean; attachmentLimitLabel?: string; uploading: boolean; onAttach: () => Promise<Attachment | null>; onEdit: (message: MockMessage, content: string, attachments: Attachment[]) => boolean; onDelete: (message: MockMessage) => boolean; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string>; onToggleReaction: (messageId: string, emoji: string) => void; onReply?: (message: MockMessage) => void; canReact?: boolean }): React.ReactElement {
+export function Message({ message, replyToMessage, member, members, profile, compact, grouped, privateStackPosition = "single", ownAvatar, currentUserId, canManageMessages, previewAvailable, canAttach, attachmentLimitLabel, uploading, linkPreviewsEnabled = true, selectMode = false, selected = false, onToggleSelect, onAttach, onEdit, onDelete, onPin, onDownload, onPreview, onToggleReaction, onReply, canReact = false }: { message: MockMessage; replyToMessage?: MockMessage; member?: MockMember; members: MockMember[]; profile?: LocalProfile | null; compact: boolean; grouped: boolean; privateStackPosition?: PrivateMessageStackPosition; ownAvatar: string | null; currentUserId?: string; canManageMessages: boolean; previewAvailable: boolean; canAttach: boolean; attachmentLimitLabel?: string; uploading: boolean; linkPreviewsEnabled?: boolean; selectMode?: boolean; selected?: boolean; onToggleSelect?: () => void; onAttach: () => Promise<Attachment | null>; onEdit: (message: MockMessage, content: string, attachments: Attachment[]) => boolean; onDelete: (message: MockMessage) => boolean; onPin?: (message: MockMessage) => void; onDownload: (attachment: Attachment) => void; onPreview: (attachment: Attachment) => Promise<string>; onToggleReaction: (messageId: string, emoji: string) => void; onReply?: (message: MockMessage) => void; canReact?: boolean }): React.ReactElement {
   const { t, locale } = useI18n();
   const effectiveAttachmentLimitLabel = attachmentLimitLabel ?? t.attachments.mb("10");
   const time = new Intl.DateTimeFormat(locale, {
@@ -3392,6 +3928,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
   const articleRef = useRef<HTMLElement>(null);
   const own = currentUserId === message.authorId;
   const canDelete = own || canManageMessages;
+  const canPin = canManageMessages && (!message.kind || message.kind === "chat") && Boolean(onPin);
   const hasReactions = Boolean(message.reactions?.length);
   const replyPreview = replyToMessage?.content.trim() || replyToMessage?.attachments?.[0]?.fileName || t.chat.replyAttachment;
   const previewProfile = {
@@ -3497,7 +4034,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
       ref={articleRef}
       id={`message-${message.id}`}
       onContextMenu={(event) => {
-        if (editing || !canDelete) return;
+        if (editing || selectMode || (!canDelete && !canPin)) return;
         event.preventDefault();
         setMenuOpen(true);
       }}
@@ -3509,8 +4046,19 @@ export function Message({ message, replyToMessage, member, members, profile, com
       onTouchMove={cancelLongPress}
       onTouchEnd={cancelLongPress}
       onTouchCancel={cancelLongPress}
-      className={cn("group relative flex min-w-0 gap-3 rounded-lg px-2 py-1 transition hover:bg-white/[.025]", !grouped && !compact && "mt-2.5", message.replyToMessageId && "mt-2.5 pt-6", message.kind && message.kind !== "chat" && "bg-amber-400/[.045] hover:bg-amber-400/[.075]", privateStackPosition === "first" && "rounded-b-none pb-1", privateStackPosition === "middle" && "rounded-none py-1", privateStackPosition === "last" && "rounded-t-none pt-1")}
+      className={cn("group relative flex min-w-0 gap-3 rounded-lg px-2 py-1 transition hover:bg-white/[.025]", !grouped && !compact && "mt-2.5", message.replyToMessageId && "mt-2.5 pt-6", message.kind && message.kind !== "chat" && "bg-amber-400/[.045] hover:bg-amber-400/[.075]", privateStackPosition === "first" && "rounded-b-none pb-1", privateStackPosition === "middle" && "rounded-none py-1", privateStackPosition === "last" && "rounded-t-none pt-1", selectMode && selected && "bg-red-400/[.06] hover:bg-red-400/[.09]")}
     >
+      {selectMode && (
+        <input
+          type="checkbox"
+          aria-label={t.chat.bulkSelect}
+          checked={selected}
+          disabled={!isBulkDeletableMessage(message)}
+          onChange={() => onToggleSelect?.()}
+          onClick={(event) => event.stopPropagation()}
+          className="mt-1 size-4 shrink-0 cursor-pointer accent-red-500 disabled:cursor-not-allowed disabled:opacity-30"
+        />
+      )}
       {message.replyToMessageId && (
         <button type="button" onClick={() => focusMessage(message.replyToMessageId!)} className="absolute left-14 right-2 top-1 flex min-w-0 items-center gap-1.5 rounded-md text-left text-[11px] leading-4 text-slate-500 transition hover:text-slate-300">
           <Reply className="size-3 shrink-0 text-violet-300/75" />
@@ -3533,6 +4081,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
             </ProfilePreview>
             <time className="shrink-0 whitespace-nowrap text-[10px] leading-5 tabular-nums text-slate-600">{time}</time>
             {message.editedAt && <span className="shrink-0 text-[10px] leading-5 text-slate-600">{t.chat.edited}</span>}
+            {message.pinned && <span title={t.chat.pinnedTitle} className="inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold leading-5 text-violet-300/90"><Pin className="size-3" />{t.chat.pinned}</span>}
           </div>
         )}
         {editing ? (
@@ -3593,16 +4142,10 @@ export function Message({ message, replyToMessage, member, members, profile, com
           <>
             {message.kind && message.kind !== "chat" && <p className="mb-0.5 text-[9px] font-bold uppercase tracking-[.14em] text-amber-300/85">{message.kind === "apm" ? t.chat.apmLabel : t.chat.pmLabel}</p>}
             {message.content && (
-              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 select-text cursor-text">
-                {splitMessageContent(message.content).map((segment, index) => {
-                  if (segment.kind === "text") return <span key={index}>{segment.text}</span>;
-                  // @everyone повторяет вёрстку упоминания участника (классы триггера
-                  // MessageMention), но это plain span: без клика, превью и hover.
-                  if (segment.kind === "everyone") return <span key={index} aria-label="@everyone" className={EVERYONE_PILL_CLASS}><span>@everyone</span></span>;
-                  return <MessageMention key={index} userId={segment.userId} mentioned={Boolean(message.mentions?.includes(segment.userId))} members={members} />;
-                })}
+              <div className="min-w-0">
+                <MessageContent content={message.content} members={members} mentions={message.mentions} linkPreviewsEnabled={linkPreviewsEnabled} />
                 {grouped && !compact && message.editedAt && <span className="ml-1 text-[10px] text-slate-600">{t.chat.edited}</span>}
-              </p>
+              </div>
             )}
             {message.attachments?.length ? (
               <div className="mt-2 flex min-w-0 max-w-full flex-wrap gap-2">
@@ -3629,7 +4172,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
           </>
         )}
       </div>
-      {!editing && (canReact || canDelete || onReply) && (
+      {!editing && !selectMode && (canReact || canDelete || canPin || onReply) && (
         <div role="toolbar" aria-label={t.chat.messageActions(message.authorName)} data-open={menuOpen || reactionPickerOpen || touchActionsOpen} className="message-action-bar absolute -top-2 right-2 z-20 flex h-9 items-center rounded-lg border border-white/[.08] bg-raised px-1 shadow-[0_6px_18px_rgba(0,0,0,.28)] transition duration-150 max-md:h-12 max-md:gap-0.5 max-md:px-1.5">
           {canReact &&
             QUICK_REACTION_EMOJIS.map((emoji) => (
@@ -3649,7 +4192,7 @@ export function Message({ message, replyToMessage, member, members, profile, com
               <Pencil className="size-4" />
             </button>
           )}
-          {canDelete && (
+          {(canDelete || canPin) && (
             <button ref={menuTriggerRef} type="button" title={t.chat.messageActions(message.authorName)} aria-label={t.chat.messageActions(message.authorName)} aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => { setDeleteConfirmOpen(false); setMenuOpen((open) => !open); }} className="grid size-7 place-items-center rounded-md text-slate-400 transition hover:bg-white/[.075] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 max-md:size-10">
               <MoreHorizontal className="size-4" />
             </button>
@@ -3658,6 +4201,17 @@ export function Message({ message, replyToMessage, member, members, profile, com
       )}
       {!editing && menuOpen && (
         <div ref={menuRef} role="menu" className="message-action-menu glass absolute right-2 top-8 z-30 min-w-40 rounded-xl p-1.5 text-xs shadow-xl">
+          {canPin && onPin && !deleteConfirmOpen && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { onPin(message); setMenuOpen(false); }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-slate-300 hover:bg-white/[.06]"
+            >
+              {message.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+              {message.pinned ? t.chat.unpin : t.chat.pin}
+            </button>
+          )}
           {canDelete && !deleteConfirmOpen && (
             <button
               type="button"
@@ -3710,38 +4264,6 @@ function MessageReactionTrigger({ messageId, label, pickerLabel, pickLabel, onTo
   );
 }
 
-function MessageMention({ userId, mentioned, members }: { userId: string; mentioned: boolean; members: MockMember[] }): React.ReactElement {
-  const { t } = useI18n();
-  const member = members.find((candidate) => candidate.id === userId);
-  if (!mentioned || !member) return <span className={MENTION_PILL_CLASS}>@{t.chat.unknownUser}</span>;
-  return (
-    <ProfilePreview
-      side="right"
-      wrapperClassName="inline-flex align-middle"
-      triggerClassName="inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 text-[12px] font-medium leading-none text-blue-200 transition hover:bg-blue-500/28 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60"
-      profile={{
-        username: member.username,
-        discriminator: member.discriminator,
-        fingerprint: member.fingerprint,
-        avatar: member.avatar,
-        banner: member.banner,
-        accentColor: member.accentColor,
-        nameGlow: member.nameGlow,
-        nameFont: member.nameFont,
-        color: member.avatarColor,
-        status: member.status,
-        customStatus: member.customStatus,
-        customStatusEmoji: member.customStatusEmoji,
-        role: member.role,
-        bio: member.bio,
-      }}
-      label={t.chat.mentionAria(member.username)}
-    >
-      <span style={nicknameStyle(member.nameFont, member.nameGlow)}>@{member.username}</span>
-    </ProfilePreview>
-  );
-}
-
 function memberToMentionCandidate(member: MockMember): MentionCandidate {
   return {
     id: member.id,
@@ -3783,7 +4305,7 @@ function voiceErrorText(error: VoiceRecorderError, t: Dictionary): string {
   return t.notices.uploadFailed;
 }
 
-export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, maxAttachmentBytes = null, replyingTo, onCancelReply, onAttach, onVoiceFile, onRemoveAttachment, onDraft, onSubmit, members, chatMuted = false, chatMutedUntil = null, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; maxAttachmentBytes?: number | null; replyingTo?: MockMessage | null; onCancelReply?: () => void; onAttach: () => void; onVoiceFile?: (file: File) => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; chatMutedUntil?: string | null; canModerateChat?: boolean }): React.ReactElement {
+export function Composer({ draft, channelName, disabled, attachments, uploading, canAttach, attachmentLimitLabel, maxAttachmentBytes = null, replyingTo, onCancelReply, onAttach, onVoiceFile, onRemoveAttachment, onDraft, onBlur, onSubmit, members, chatMuted = false, chatMutedUntil = null, canModerateChat = false }: { draft: string; channelName: string; disabled: boolean; attachments: Attachment[]; uploading: boolean; canAttach: boolean; attachmentLimitLabel?: string; maxAttachmentBytes?: number | null; replyingTo?: MockMessage | null; onCancelReply?: () => void; onAttach: () => void; onVoiceFile?: (file: File) => void; onRemoveAttachment: (id: string) => void; onDraft: (value: string) => void; onBlur?: () => void; onSubmit: (event: React.FormEvent) => void; members: MentionCandidate[]; chatMuted?: boolean; chatMutedUntil?: string | null; canModerateChat?: boolean }): React.ReactElement {
   const { t } = useI18n();
   const effectiveAttachmentLimitLabel = attachmentLimitLabel ?? t.attachments.mb("10");
   const voiceMaxSeconds = isMobilePlatform() ? 120 : 300;
@@ -4045,6 +4567,52 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
       input?.setSelectionRange(cursor, cursor);
     });
   }
+
+  /** Оборачивает выделение маркерами markdown; без выделения ставит курсор между ними. */
+  function wrapSelection(before: string, after: string): void {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? start;
+    const selected = draft.slice(start, end);
+    const next = `${draft.slice(0, start)}${before}${selected}${after}${draft.slice(end)}`;
+    if (next.length > 4000) return;
+    onDraft(next);
+    window.requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange(start + before.length, start + before.length + selected.length);
+    });
+  }
+
+  function wrapCode(): void {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? start;
+    if (draft.slice(start, end).includes("\n")) {
+      wrapSelection("```\n", "\n```");
+      return;
+    }
+    wrapSelection("`", "`");
+  }
+
+  /** Префикс `> ` для каждой задетой выделением строки (или вставка на курсор). */
+  function wrapQuote(): void {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? start;
+    const lineStart = draft.lastIndexOf("\n", start - 1) + 1;
+    const nextBreak = draft.indexOf("\n", end);
+    const lineEnd = nextBreak === -1 ? draft.length : nextBreak;
+    const selected = draft.slice(lineStart, lineEnd);
+    const quoted = selected.split("\n").map((line) => `> ${line}`).join("\n");
+    const next = `${draft.slice(0, lineStart)}${quoted}${draft.slice(lineEnd)}`;
+    if (next.length > 4000) return;
+    onDraft(next);
+    window.requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange(lineStart, lineStart + quoted.length);
+    });
+  }
+  const formatButtonClass = "grid size-7 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white/[.06] hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:opacity-30";
   return (
     <form onSubmit={onSubmit} className="relative shrink-0 px-3 pb-3 md:px-5 md:pb-5">
       {muteDurationOpen && (
@@ -4134,6 +4702,17 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
         <button type="button" title={canAttach ? t.chat.attachWithLimit(effectiveAttachmentLimitLabel) : t.chat.attachAfterConnection} aria-label={t.chat.attach} onClick={onAttach} disabled={composerDisabled || !canAttach || uploading || attachments.length >= 5} className="grid size-7 shrink-0 place-items-center rounded-full bg-slate-500 text-panel hover:bg-slate-300 disabled:opacity-40 max-md:size-10">
           {uploading ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
         </button>
+        <div className="flex shrink-0 items-center gap-0.5 max-md:hidden">
+          <button type="button" title={t.chat.formatSpoiler} aria-label={t.chat.formatSpoiler} onClick={() => wrapSelection("||", "||")} disabled={composerDisabled} className={formatButtonClass}>
+            <EyeOff className="size-4" />
+          </button>
+          <button type="button" title={t.chat.formatCode} aria-label={t.chat.formatCode} onClick={wrapCode} disabled={composerDisabled} className={formatButtonClass}>
+            <Code className="size-4" />
+          </button>
+          <button type="button" title={t.chat.formatQuote} aria-label={t.chat.formatQuote} onClick={wrapQuote} disabled={composerDisabled} className={formatButtonClass}>
+            <Quote className="size-4" />
+          </button>
+        </div>
         {voice.status === "recording" ? (
           <div className="flex h-12 min-w-0 flex-1 items-center gap-2.5" role="status" aria-live="polite" aria-label={t.chat.recordingNow}>
             <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-red-400" />
@@ -4147,7 +4726,7 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
             </button>
           </div>
         ) : (
-          <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
+          <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onBlur={onBlur} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
         )}
         <EmojiPicker disabled={composerDisabled} onSelect={insertEmoji} />
         {voice.supported && voice.status === "idle" && (
@@ -4397,8 +4976,23 @@ function formatBytes(size: number, t: Dictionary): string {
   return t.attachments.mb((size / (1024 * 1024)).toFixed(1));
 }
 
-function MemberList({ server, profile, access }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess }): React.ReactElement {
+export function MemberList({ server, profile, access, voiceUserIds = [], locallyMutedParticipantIds = [], participantVolumes = {}, onParticipantMuted, onParticipantVolume }: { server: MockServer; profile: LocalProfile; access?: CurrentAccess; voiceUserIds?: string[]; locallyMutedParticipantIds?: string[]; participantVolumes?: Record<string, number>; onParticipantMuted?: (participantIdentity: string, value: boolean) => void; onParticipantVolume?: (participantIdentity: string, value: number) => void }): React.ReactElement {
   const { t } = useI18n();
+  const [voiceMenu, setVoiceMenu] = useState<{ x: number; y: number; memberId: string; memberName: string } | null>(null);
+  const voiceMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!voiceMenu) return;
+    const closeOutside = (event: PointerEvent): void => { if (!voiceMenuRef.current?.contains(event.target as Node)) setVoiceMenu(null); };
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") setVoiceMenu(null); };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [voiceMenu]);
+  const menuMuted = voiceMenu ? locallyMutedParticipantIds.includes(voiceMenu.memberId) : false;
+  const menuVolume = voiceMenu ? (participantVolumes[voiceMenu.memberId] ?? 1) : 1;
   const members: MockMember[] = useMemo(
     () =>
       server.address
@@ -4451,7 +5045,18 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
               const memberGlow = member.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
               const memberFont = member.nameFont ?? (isCurrentUser ? profile.nameFont : undefined);
               const rowBackground = member.memberBackground ?? (isCurrentUser ? (profile.memberBackground ?? null) : null);
-              return (                <div key={member.id} className="relative flex w-full items-center overflow-hidden rounded-lg hover:bg-white/[.045]">
+              const memberName = member.username ?? (isCurrentUser ? profile.username : "unknown");
+              const inVoice = voiceUserIds.includes(member.id);
+              const locallyMuted = locallyMutedParticipantIds.includes(member.id);
+              const canAdjustVoice = inVoice && !isCurrentUser && onParticipantMuted !== undefined && onParticipantVolume !== undefined;
+              return (                <div
+                  key={member.id}
+                  className="relative flex w-full items-center overflow-hidden rounded-lg hover:bg-white/[.045]"
+                  onContextMenu={canAdjustVoice ? (event) => {
+                    event.preventDefault();
+                    setVoiceMenu({ x: event.clientX, y: event.clientY, memberId: member.id, memberName });
+                  } : undefined}
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   {rowBackground && <img src={rowBackground} alt="" aria-hidden="true" data-testid="member-background" className="absolute inset-0 size-full object-cover" />}
                   {rowBackground && <div aria-hidden="true" className="absolute inset-0 bg-black/45" />}
@@ -4479,11 +5084,12 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
                   >
                     <Avatar name={member.username} image={avatar} color={member.avatarColor} size="sm" status={member.status} />
                     <span className={cn("min-w-0 flex-1", member.status === "offline" && "opacity-45")}>
-                      <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300" style={nicknameStyle(memberFont, memberGlow)}>
+                      <span className="flex items-center gap-1 truncate text-xs font-semibold text-slate-300" style={{ ...nicknameStyle(memberFont, memberGlow), ...(member.roleColor ? { color: member.roleColor } : {}) }}>
                         {member.serverRole === "owner" && <ShieldCheck className="size-3 text-amber-300" />}
                         {member.serverRole === "administrator" && <ShieldCheck className="size-3 text-violet-300" />}
                         {member.username}
                         {isChatMutedNow(member) && <MessageCircleOff aria-label={t.members.chatMuted} className="size-3 shrink-0 text-red-300" />}
+                        {locallyMuted && <VolumeX aria-label={t.voice.mutedForYou} className="size-3 shrink-0 text-red-300" />}
                       </span>
                       {member.customStatus
                         ? <span className="block truncate text-[10px] text-slate-400">{member.customStatusEmoji ? `${member.customStatusEmoji} ` : ""}{member.customStatus}</span>
@@ -4496,6 +5102,38 @@ function MemberList({ server, profile, access }: { server: MockServer; profile: 
           </div>
         </section>
       ))}
+      {voiceMenu && onParticipantMuted && onParticipantVolume && (
+        <div ref={voiceMenuRef} role="menu" aria-label={t.voice.volumeLocal(voiceMenu.memberName)} className="glass fixed z-[80] w-56 rounded-xl p-2 shadow-[0_18px_55px_rgba(0,0,0,.5)]" style={{ left: voiceMenu.x, top: voiceMenu.y }}>
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={menuMuted}
+            aria-label={menuMuted ? t.voice.unmuteLocallyOf(voiceMenu.memberName) : t.voice.muteLocallyOf(voiceMenu.memberName)}
+            onClick={() => {
+              onParticipantMuted(voiceMenu.memberId, !menuMuted);
+              setVoiceMenu(null);
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-medium text-slate-300 transition hover:bg-white/[.06] hover:text-slate-100"
+          >
+            {menuMuted ? <Volume2 className="size-3.5 shrink-0" /> : <VolumeX className="size-3.5 shrink-0" />}
+            {menuMuted ? t.voice.unmute : t.voice.muteLocally}
+          </button>
+          <div className="mt-1 flex items-center gap-2 rounded-lg px-2 py-2">
+            <Volume2 className="size-3.5 shrink-0 text-slate-500" />
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              aria-label={t.voice.volumeLocal(voiceMenu.memberName)}
+              value={Math.round(menuVolume * 100)}
+              onChange={(event) => onParticipantVolume(voiceMenu.memberId, Number(event.target.value) / 100)}
+              className="voice-limit-slider h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-slate-700 accent-violet-400"
+            />
+            <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-slate-400">{Math.round(menuVolume * 100)}%</span>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
@@ -4511,6 +5149,17 @@ function colorFromId(id: string): string {
   return colors[Math.abs(hash) % colors.length] ?? "#4d6bfe";
 }
 
+/** Цвет ника — цвет верхней (max position) роли с заданным цветом, иначе null. */
+export function topRoleColor(roleIds: readonly string[], rolesById: ReadonlyMap<string, { position: number; color: string | null }>): string | null {
+  let best: { position: number; color: string | null } | null = null;
+  for (const roleId of roleIds) {
+    const role = rolesById.get(roleId);
+    if (!role || !role.color) continue;
+    if (!best || role.position > best.position) best = role;
+  }
+  return best?.color ?? null;
+}
+
 export function sortMessagesChronologically(messages: MockMessage[]): MockMessage[] {
   return [...messages].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
 }
@@ -4521,6 +5170,7 @@ function searchLocalMessages(messages: MockMessage[], filters: MessageSearchFilt
     .filter((message) => {
       if (filters.authorId && message.authorId !== filters.authorId) return false;
       if (filters.channelId && message.channelId !== filters.channelId) return false;
+      if (filters.pinnedOnly && !message.pinned) return false;
       if (query && !message.content.toLocaleLowerCase(locale).includes(query) && !(message.attachments ?? []).some((attachment) => attachment.fileName.toLocaleLowerCase(locale).includes(query))) return false;
       if (!filters.contentTypes.length) return true;
       return filters.contentTypes.some((type) => {
@@ -4549,6 +5199,8 @@ function searchLocalMessages(messages: MockMessage[], filters: MessageSearchFilt
       targetUserId: message.targetUserId ?? null,
       anonymous: message.anonymous ?? false,
       replyToMessageId: message.replyToMessageId ?? null,
+      pinned: message.pinned ?? false,
+      pinnedAt: message.pinnedAt ?? null,
     })),
     total: filtered.length,
     offset: filters.offset,
@@ -4568,6 +5220,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
   }));
   const currentChannelIds = new Set(channels.map((channel) => channel.id));
   const removedChannelIds = new Set(previousServer?.channels.filter((channel) => !currentChannelIds.has(channel.id)).map((channel) => channel.id) ?? []);
+  const rolesById = new Map((snapshot.roles ?? []).map((role) => [role.id, role]));
   const members = snapshot.members.map((member) => ({
     id: member.id,
     username: member.username,
@@ -4576,6 +5229,8 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
     bio: member.bio,
     role: roleLabel(member.role),
     serverRole: member.role,
+    roleIds: member.roleIds ?? [],
+    roleColor: topRoleColor(member.roleIds ?? [], rolesById),
     status: member.status,
     customStatus: member.customStatus,
     customStatusEmoji: member.customStatusEmoji,
@@ -4608,8 +5263,12 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
             screenShareMaxResolution: snapshot.screenShareMaxResolution,
             screenShareMaxFrameRate: snapshot.screenShareMaxFrameRate,
             helpPage: snapshot.helpPage,
+            welcomeChannelId: snapshot.welcomeChannelId ?? null,
+            welcomeMessage: snapshot.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE,
             channels,
             members,
+            roles: snapshot.roles ?? [],
+            channelOverwrites: snapshot.channelOverwrites ?? [],
             bannedMembers: snapshot.bannedMembers ?? [],
             ...(server.deployment
               ? {
@@ -4623,6 +5282,7 @@ export function applyServerSnapshot(current: PersistedClientState, snapshot: Ser
         : server,
     ),
     messages: current.messages.filter((message) => !removedChannelIds.has(message.channelId)),
+    messageDrafts: pruneMessageDrafts(current.messageDrafts, removedChannelIds),
     activeChannelId: channels.some((channel) => channel.id === current.activeChannelId) ? current.activeChannelId : (channels.find((channel) => channel.kind === "text")?.id ?? null),
   };
 }
@@ -4640,6 +5300,7 @@ export function removeServers(current: PersistedClientState, shouldRemove: (serv
     ...current,
     servers: remainingServers,
     messages: current.messages.filter((message) => !removedChannelIds.has(message.channelId)),
+    messageDrafts: pruneMessageDrafts(current.messageDrafts, removedChannelIds),
     activeServerId: activeWasRemoved ? (nextServer?.id ?? null) : current.activeServerId,
     activeChannelId: activeWasRemoved ? (nextChannel?.id ?? null) : current.activeChannelId,
   };
@@ -4736,6 +5397,8 @@ function toLocalMessage(message: import("@opencord/shared").ChatMessage): MockMe
     targetUserId: message.targetUserId,
     anonymous: message.anonymous,
     replyToMessageId: message.replyToMessageId,
+    pinned: message.pinned ?? false,
+    pinnedAt: message.pinnedAt ?? null,
   };
 }
 

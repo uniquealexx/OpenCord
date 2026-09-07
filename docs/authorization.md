@@ -12,6 +12,29 @@ Three roles exist on the server:
 
 The owner role cannot be transferred or removed through the current protocol. This is an intentional first-version limitation: a separate secure ownership-transfer scenario must account for key loss and confirmation by both identities.
 
+## Custom roles (protocol v48)
+
+On top of the three legacy roles, the server keeps a `server_roles` table (migration `036_custom_roles`): each row has an `id`, a `name` (2-32), an optional `color` (#rrggbb), a `position` (0-9999) and a `permissions` subset of the existing 9 values — no new permissions were introduced. Two rows are seeded to match the previous behavior: `administrator` (position 10) and `member` (position 0).
+
+- The `owner` stays outside the table: it is bound to the deploy public key, cannot be transferred or removed, always holds all permissions and sits on top of the hierarchy.
+- A member's effective permissions are the union of the assigned roles; the hierarchy top is the max position. The legacy single `role` field keeps working and is derived from the assignments (seeded administrator present means `administrator`, otherwise `member`), so old clients and snapshots keep parsing.
+- Moderator actions (`member.kick`, `member.ban`, `member.role.set`, `member.roles.set`, `chat.mute.set`, `voice.member.disconnect`, `voice.member.mute`) require a strictly higher top position than the target. The owner is exempt; nobody can touch the owner, change their own roles with these commands, or grant a position above their own top.
+- Role management events (`role.create`, `role.update`, `role.delete`, `role.list`, `member.roles.set`) require `MANAGE_ROLES`. The snapshot carries the `roles` list and every member carries `roleIds`; `currentUser.permissions` is the computed union.
+
+## Channel permission overwrites (protocol v49)
+
+Per-channel overwrites live in the `channel_overwrites` table (migration `037_channel_overwrites`): one row per `(channel_id, role_id)` with `allow`/`deny` arrays drawn from the existing 9 permissions — no new permissions, roles only (no member-targets). The effective channel permission is `(union role permissions ∪ union allow) − union deny`: per-channel allow overrides role permissions, deny overrides allow, and a deny from any of the member's roles wins over an allow from another role (the Discord rule). The owner is exempt from overwrites and always holds every permission in every channel.
+
+Because no dedicated view/send permissions exist, v49 reuses the voice pair as channel proxies: effective `VOICE_CONNECT` in a channel means visibility (history, search, pinned list, attachment download, voice join), effective `VOICE_SPEAK` means writing (chat.send/pm/apm, message.update, message.react, typing). Moderation inside a channel (`message.delete` of others' messages, `message.bulkDelete`, pin/unpin, `channel.update`/`channel.delete`, slowmode) requires the matching effective permission (`MANAGE_MESSAGES`/`MANAGE_CHANNELS`) in that channel. A channel without effective `VOICE_CONNECT` is hidden: it is filtered out of `server.snapshot.channels` for that user, and a direct read answers `FORBIDDEN`.
+
+`channel.overwrites.set` requires global `MANAGE_CHANNELS` plus the hierarchy check: the target role's position must not exceed the actor's own top (`canGrantPosition`); the owner is exempt. The server broadcasts `channel.overwrites.updated` plus a fresh personalized snapshot, so hidden channels disappear immediately. `server.snapshot` carries `channelOverwrites` only for holders of `MANAGE_CHANNELS`; everyone else receives an empty list.
+
+## Moderator audit log (protocol v50)
+
+Moderator actions are recorded in the append-only `audit_log` table (migration `038_audit_log`): each row has an `id`, an `at` timestamp, an `actor_id`, an `action` reusing an existing event name (`member.kick`/`member.ban`/`member.unban`, `member.role.set`/`member.roles.set`, `role.create`/`role.update`/`role.delete`, `channel.create`/`channel.update`/`channel.delete`, `channel.overwrites.set`, `channel.slowmode.set`, `message.delete`/`message.bulkDelete`, `server.settings.update`/`server.avatar.update`/`server.banner.update`), a nullable `target_id`, and a nullable `detail` (JSON/text, 2000 chars max). No new permissions were introduced. Rows are written best-effort inside the existing handlers — a log error never fails the action — and the table is capped at the latest 1000 rows (pruned on insert).
+
+Reading requires `MANAGE_SERVER` (the owner plus whoever holds it via custom roles): `audit.list` takes a `limit` (1–100) and a nullable `before` cursor and answers `audit.result` with newest-first `entries` plus `hasMore`. Members without `MANAGE_SERVER` receive `FORBIDDEN`.
+
 ## How the owner is determined
 
 During deployment, the Electron client obtains the public key of the current local identity and passes it to the installer as `--owner-public-key`. The private key never leaves the user's computer.
@@ -54,6 +77,29 @@ After a change, the server sends each connection a personalized snapshot. In the
 
 Роль владельца нельзя передать или снять через текущий протокол. Это намеренное ограничение первой версии: отдельный безопасный сценарий передачи владения должен учитывать потерю ключа и подтверждение обеими идентичностями.
 
+## Кастомные роли (протокол v48)
+
+Поверх трёх legacy-ролей сервер держит таблицу `server_roles` (миграция `036_custom_roles`): у каждой строки есть `id`, `name` (2-32), необязательный `color` (#rrggbb), `position` (0-9999) и подмножество `permissions` из существующих 9 значений — новых прав не вводилось. Два сида повторяют прежнее поведение: `administrator` (позиция 10) и `member` (позиция 0).
+
+- `owner` остаётся вне таблицы: привязан к ключу развёртывания, не передаётся и не снимается, всегда имеет все права и стоит на вершине иерархии.
+- Эффективные права участника — объединение назначенных ролей; вершина иерархии — max position. Legacy-поле `role` продолжает работать и выводится из назначений (есть сид administrator — `administrator`, иначе `member`), поэтому старые клиенты и snapshot продолжают разбираться.
+- Модерационные действия (`member.kick`, `member.ban`, `member.role.set`, `member.roles.set`, `chat.mute.set`, `voice.member.disconnect`, `voice.member.mute`) требуют строго более высокой вершины, чем у цели. Владелец вне иерархии; владельца трогать нельзя, собственные роли этими командами менять нельзя, выше собственной вершины выдавать нельзя.
+- События управления ролями (`role.create`, `role.update`, `role.delete`, `role.list`, `member.roles.set`) требуют `MANAGE_ROLES`. Snapshot несёт список `roles`, каждый участник — `roleIds`; `currentUser.permissions` — вычисленное объединение.
+
+## Переопределения прав канала (протокол v49)
+
+Переопределения живут в таблице `channel_overwrites` (миграция `037_channel_overwrites`): одна строка на `(channel_id, role_id)` с массивами `allow`/`deny` из существующих 9 прав — новых прав нет, только роли (member-targets нет). Эффективное право в канале: `(union прав ролей ∪ union allow) − union deny`: allow канала перекрывает права ролей, deny перекрывает allow, а запрет любой из ролей участника побеждает разрешение другой роли (правило Discord). Владелец вне overwrites и всегда имеет все права в каждом канале.
+
+Отдельных прав просмотра/отправки нет, поэтому v49 переиспользует голосовую пару как прокси канала: эффективный `VOICE_CONNECT` в канале означает видимость (история, поиск, закрепы, скачивание вложений, вход в голос), эффективный `VOICE_SPEAK` — писанину (chat.send/pm/apm, message.update, message.react, набор текста). Модерация внутри канала (удаление чужих сообщений, bulkDelete, пины, `channel.update`/`channel.delete`, slowmode) требует совпадающее эффективное право (`MANAGE_MESSAGES`/`MANAGE_CHANNELS`) в этом канале. Канал без эффективного `VOICE_CONNECT` скрыт: он вырезается из `server.snapshot.channels` для этого пользователя, а прямое чтение отвечает `FORBIDDEN`.
+
+`channel.overwrites.set` требует глобальное `MANAGE_CHANNELS` плюс проверку иерархии: позиция целевой роли не выше собственной вершины (`canGrantPosition`); владелец вне иерархии. Сервер рассылает `channel.overwrites.updated` плюс свежий персонализированный snapshot, поэтому скрытые каналы исчезают сразу. `server.snapshot` несёт `channelOverwrites` только держателям `MANAGE_CHANNELS`; остальные получают пустой список.
+
+## Журнал модерации (протокол v50)
+
+Модерационные действия записываются в append-only таблицу `audit_log` (миграция `038_audit_log`): у каждой строки есть `id`, метка `at`, `actor_id`, `action` с переиспользованием существующего имени события (`member.kick`/`member.ban`/`member.unban`, `member.role.set`/`member.roles.set`, `role.create`/`role.update`/`role.delete`, `channel.create`/`channel.update`/`channel.delete`, `channel.overwrites.set`, `channel.slowmode.set`, `message.delete`/`message.bulkDelete`, `server.settings.update`/`server.avatar.update`/`server.banner.update`), nullable `target_id` и nullable `detail` (JSON/текст до 2000 символов). Новых прав не вводилось. Строки пишутся best-effort внутри существующих обработчиков — ошибка лога никогда не роняет действие — а таблица ограничена последними 1000 строками (prune на insert).
+
+Чтение требует `MANAGE_SERVER` (владелец и держатели права через кастомные роли): `audit.list` принимает `limit` (1–100) и nullable-курсор `before`, отвечает `audit.result` с `entries` от новых к старым плюс `hasMore`. Участники без `MANAGE_SERVER` получают `FORBIDDEN`.
+
 ## Как определяется владелец
 
 При развёртывании Electron-клиент получает публичный ключ текущей локальной идентичности и передаёт его установщику как `--owner-public-key`. Приватный ключ не покидает компьютер пользователя.
@@ -95,6 +141,29 @@ Snapshot сервера содержит роль и вычисленные ра
 - `member` — 没有管理权限的普通成员。
 
 所有者角色无法通过当前协议转让或撤销。这是第一版有意为之的限制：单独的安全所有权转让方案必须考虑密钥丢失以及双方身份的共同确认。
+
+## 自定义角色（协议 v48）
+
+在三种旧角色之上，服务器维护 `server_roles` 表（迁移 `036_custom_roles`）：每行包含 `id`、`name`（2–32 字符）、可选 `color`（#rrggbb）、`position`（0–9999）和现有 9 个权限值的子集 `permissions`——未引入新权限。两个种子行与此前行为一致：`administrator`（位置 10）和 `member`（位置 0）。
+
+- `owner` 保留在表外：绑定部署公钥，不可转让或撤销，始终拥有全部权限并位于层级顶端。
+- 成员的有效权限为已分配角色的并集；层级顶点取最大位置。旧版单个 `role` 字段继续有效，并由分配关系推导（含 administrator 种子即为 `administrator`，否则为 `member`），因此旧客户端和 snapshot 仍可解析。
+- 管理操作（`member.kick`、`member.ban`、`member.role.set`、`member.roles.set`、`chat.mute.set`、`voice.member.disconnect`、`voice.member.mute`）要求自身最高位置严格高于目标。所有者不受层级限制；无人可操作所有者，不能用这些命令改自己的角色，也不能授予高于自身最高位置的角色。
+- 角色管理事件（`role.create`、`role.update`、`role.delete`、`role.list`、`member.roles.set`）需要 `MANAGE_ROLES`。snapshot 携带 `roles` 列表，每个成员携带 `roleIds`；`currentUser.permissions` 为计算出的并集。
+
+## 频道权限覆盖（协议 v49）
+
+覆盖保存在 `channel_overwrites` 表（迁移 `037_channel_overwrites`）中：每个 `(channel_id, role_id)` 一行，`allow`/`deny` 数组取自现有的 9 个权限——不新增权限，仅针对角色（无成员目标）。频道有效权限为 `(角色权限并集 ∪ allow 并集) − deny 并集`：频道 allow 覆盖角色权限，deny 覆盖 allow；成员任一角色的 deny 优先于另一角色的 allow（Discord 规则）。所有者不受覆盖限制，在每个频道始终拥有全部权限。
+
+由于没有独立的查看/发言权限，v49 复用语音权限对作为频道代理：频道内有效的 `VOICE_CONNECT` 表示可见（历史、搜索、置顶、附件下载、语音加入），有效的 `VOICE_SPEAK` 表示可发言（chat.send/pm/apm、message.update、message.react、输入状态）。频道内管理操作（删除他人消息、bulkDelete、置顶、`channel.update`/`channel.delete`、slowmode）要求该频道内有效的对应权限（`MANAGE_MESSAGES`/`MANAGE_CHANNELS`）。没有有效 `VOICE_CONNECT` 的频道会被隐藏：从该用户的 `server.snapshot.channels` 中过滤，直接读取返回 `FORBIDDEN`。
+
+`channel.overwrites.set` 需要全局 `MANAGE_CHANNELS` 及层级校验：目标角色位置不得高于操作者自身顶点（`canGrantPosition`）；所有者不受层级限制。服务器广播 `channel.overwrites.updated` 并附带全新的个性化 snapshot，因此被隐藏的频道会立即消失。`server.snapshot` 仅向持有 `MANAGE_CHANNELS` 的用户携带 `channelOverwrites`；其他人收到空列表。
+
+## 管理审计日志（协议 v50）
+
+管理操作记录在只追加的 `audit_log` 表中（迁移 `038_audit_log`）：每行包含 `id`、`at` 时间戳、`actor_id`、`action`（复用现有事件名：`member.kick`/`member.ban`/`member.unban`、`member.role.set`/`member.roles.set`、`role.create`/`role.update`/`role.delete`、`channel.create`/`channel.update`/`channel.delete`、`channel.overwrites.set`、`channel.slowmode.set`、`message.delete`/`message.bulkDelete`、`server.settings.update`/`server.avatar.update`/`server.banner.update`）、可空 `target_id` 和可空 `detail`（JSON/文本，最多 2000 字符）。未引入新权限。记录在现有处理器内以 best-effort 写入——日志错误绝不导致主操作失败——表仅保留最近 1000 条（写入时裁剪）。
+
+读取需要 `MANAGE_SERVER`（所有者及通过自定义角色持有该权限者）：`audit.list` 接受 `limit`（1–100）和可空游标 `before`，以 `audit.result` 应答（`entries` 按时间倒序及 `hasMore`）。没有 `MANAGE_SERVER` 的成员会收到 `FORBIDDEN`。
 
 ## 如何确定所有者
 
