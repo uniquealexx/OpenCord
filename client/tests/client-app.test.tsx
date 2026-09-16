@@ -404,6 +404,23 @@ describe("ClientApp", () => {
     expect(screen.queryByText("Изменять настройки может только владелец сервера.")).not.toBeInTheDocument();
   });
 
+  it("keeps the leave-dialog banner full-bleed in the header slot outside the scroll body", () => {
+    const { rerender } = render(<LeaveServerDialog server={{ ...readyState().servers[0]!, banner: null, address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const banner = document.querySelector('[class*="bg-primary/15"]');
+    expect(banner).not.toBeNull();
+    // Full-bleed: the banner must live above the scroll body, whose stable scrollbar gutter cannot be painted over.
+    expect(banner?.closest(".scrollbar-thin")).toBeNull();
+    const headerSlot = banner?.parentElement?.parentElement;
+    expect(headerSlot?.parentElement?.firstElementChild).toBe(headerSlot);
+    expect(headerSlot?.nextElementSibling).toHaveClass("scrollbar-thin");
+    expect(headerSlot?.nextElementSibling).toContainElement(screen.getByRole("heading", { name: "Управление сервером" }));
+
+    rerender(<LeaveServerDialog server={{ ...readyState().servers[0]!, banner: "data:image/webp;base64,AQ==", address: "http://127.0.0.1:3210" }} canManageServer canViewSettings canUpdate={false} canDeleteForAll={false} canRemoveLocal={false} open onOpenChange={vi.fn()} onAvatar={vi.fn()} onBanner={vi.fn()} onUpdate={vi.fn()} onSaveSettings={vi.fn(() => true)} onConfirm={vi.fn()} onRemoveLocal={vi.fn()} onDeleteForAll={vi.fn()} />);
+    const bannerWithImage = document.querySelector('[class*="bg-primary/15"]');
+    expect(bannerWithImage?.querySelector("img")).not.toBeNull();
+    expect(bannerWithImage?.closest(".scrollbar-thin")).toBeNull();
+  });
+
   it("opens a profile preview from both the message avatar and author name", async () => {
     const user = userEvent.setup();
     const message = readyState().messages[0]!;

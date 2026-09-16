@@ -19,7 +19,7 @@ export const SEEDED_ADMINISTRATOR_ROLE_ID = "00000000-0000-4000-8000-00000000a00
 export const SEEDED_MEMBER_ROLE_ID = "00000000-0000-4000-8000-00000000a002" as const;
 /** Топ владельца — вне таблицы, выше любой кастомной позиции. */
 export const OWNER_TOP_POSITION = 10_000 as const;
-export const ALL_PERMISSIONS: Permission[] = ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+export const ALL_PERMISSIONS: Permission[] = ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"];
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 interface MessageUpdateRow extends MessageRow { removed_storage_keys: string[] | null }
 
@@ -1165,7 +1165,7 @@ export class ChatRepository {
 
 export function permissionsForRole(role: MemberRole): Permission[] {
   if (role === "owner") return [...ALL_PERMISSIONS];
-  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "KICK_MEMBERS", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+  if (role === "administrator") return ["MANAGE_CHANNELS", "MANAGE_MESSAGES", "KICK_MEMBERS", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"];
   return ["VOICE_CONNECT", "VOICE_SPEAK"];
 }
 

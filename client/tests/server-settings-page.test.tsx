@@ -39,6 +39,26 @@ describe("server settings experience", () => {
     expect(screen.queryByRole("button", { name: "Открыть настройки сервера" })).not.toBeInTheDocument();
   });
 
+  it("keeps the server preview banner in a full-bleed header slot outside the scroll body", () => {
+    const props = { canOpenSettings: true, canUpdate: false, canDeleteForAll: false, canRemoveLocal: false, open: true, onOpenChange: vi.fn(), onSettings: vi.fn(), onUpdate: vi.fn(), onLeave: vi.fn(), onRemoveLocal: vi.fn(), onDeleteForAll: vi.fn() };
+    const { rerender } = render(<ServerPreviewDialog server={server} {...props} />);
+    const banner = document.querySelector('[class*="bg-primary/15"]');
+    expect(banner).not.toBeNull();
+    // Full-bleed: the banner must live above the scroll body, whose stable scrollbar gutter cannot be painted over.
+    expect(banner?.closest(".scrollbar-thin")).toBeNull();
+    const headerSlot = banner?.parentElement?.parentElement;
+    expect(headerSlot?.parentElement?.firstElementChild).toBe(headerSlot);
+    expect(headerSlot?.nextElementSibling).toHaveClass("scrollbar-thin");
+    expect(headerSlot?.nextElementSibling).toContainElement(screen.getByRole("heading", { name: "Команда" }));
+    expect(banner?.querySelector("img")).toBeNull();
+
+    // The image branch keeps the same structure.
+    rerender(<ServerPreviewDialog server={{ ...server, banner: "data:image/webp;base64,AQ==" }} {...props} />);
+    const bannerWithImage = document.querySelector('[class*="bg-primary/15"]');
+    expect(bannerWithImage?.querySelector("img")).not.toBeNull();
+    expect(bannerWithImage?.closest(".scrollbar-thin")).toBeNull();
+  });
+
   it("navigates user-management subpages and sends ban and unban actions", async () => {
     const user = userEvent.setup();
     const onBan = vi.fn();

@@ -752,6 +752,35 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       }
       return;
     }
+    if (event.type === "voice.member.move") {
+      const flood = voiceJoinLimiter.consume(`voice.join:${connection.userId}`);
+      if (!flood.allowed) return sendError(connection.socket, event.requestId, "RATE_LIMITED", `Слишком частые подключения к голосовым каналам, подождите ${formatDelay(flood.retryAfterMs)}`, flood.retryAfterMs);
+      if (!(await hasPermission(connection.userId, "VOICE_MOVE_MEMBERS"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет прав для перемещения участников между голосовыми каналами");
+      if (event.userId === connection.userId) return sendError(connection.socket, event.requestId, "CONFLICT", "Переместите себя выбором канала самостоятельно");
+      try { await repository.getMemberRole(event.userId); } catch { return sendError(connection.socket, event.requestId, "NOT_FOUND", "Участник не найден"); }
+      if (!(await canActOnTarget(connection.userId, event.userId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нельзя переместить этого участника");
+      const targetChannel = await repository.getChannel(event.targetChannelId);
+      if (!targetChannel || targetChannel.kind !== "voice") return sendError(connection.socket, event.requestId, "NOT_FOUND", "Голосовой канал не найден");
+      const currentPresence = voice.presence().find((participant) => participant.userId === event.userId) ?? null;
+      if (!currentPresence) return sendError(connection.socket, event.requestId, "CONFLICT", "Участник не подключён к голосовому каналу");
+      if (currentPresence.channelId === event.targetChannelId) return sendError(connection.socket, event.requestId, "CONFLICT", "Участник уже находится в этом канале");
+      if (!(await repository.hasChannelPermission(event.userId, event.targetChannelId, "VOICE_CONNECT"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "У участника нет доступа к целевому каналу");
+      const limit = targetChannel.participantLimit ?? 25;
+      if (limit > 0) {
+        const occupants = voice.presence().filter((participant) => participant.channelId === event.targetChannelId).length;
+        if (occupants >= limit) return sendError(connection.socket, event.requestId, "VOICE_ROOM_FULL", "Целевой голосовой канал заполнен");
+      }
+      try {
+        const moved = await voice.move(event.userId, event.targetChannelId);
+        if (!moved) return sendError(connection.socket, event.requestId, "CONFLICT", "Участник не подключён к голосовому каналу");
+        broadcast({ type: "voice.participant.moved", userId: moved.userId, channelId: moved.channelId, reason: "moved" });
+        void writeAudit(connection.userId, "voice.member.move", event.userId, `→ channel "${targetChannel.name}"`);
+      } catch (error) {
+        app.log.error(error);
+        return sendError(connection.socket, event.requestId, "INTERNAL_ERROR", "Не удалось переместить участника");
+      }
+      return;
+    }
     if (event.type === "server.delete") {
       if (!(await hasPermission(connection.userId, "DELETE_SERVER"))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Только владелец может удалить сервер для всех участников");
       await repository.markServerDeleted();

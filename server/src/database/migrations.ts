@@ -611,6 +611,17 @@ const migrations = [
       ALTER TABLE servers ADD COLUMN IF NOT EXISTS welcome_message text NOT NULL DEFAULT 'Welcome to {server}, {user}!';
     `,
   },
+  {
+    // Перемещение участников между голосовыми каналами (протокол v52): новое право
+    // VOICE_MOVE_MEMBERS добавляется в сид administrator, если его там ещё нет.
+    // Один SQL для PG и PGlite, идемпотентный.
+    id: "040_voice_move_permission",
+    sql: `
+      UPDATE server_roles SET permissions = array_append(permissions, 'VOICE_MOVE_MEMBERS')
+      WHERE id = '00000000-0000-4000-8000-00000000a001'
+        AND NOT ('VOICE_MOVE_MEMBERS' = ANY(permissions));
+    `,
+  },
 ] as const;
 
 export async function runMigrations(database: Database): Promise<void> {

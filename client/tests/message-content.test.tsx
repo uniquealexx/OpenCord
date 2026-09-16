@@ -52,10 +52,49 @@ describe("message-content", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     renderContent("```ts\nconst a = 1;\n```");
     expect(screen.getByText("ts")).toBeInTheDocument();
-    expect(screen.getByText("const a = 1;")).toBeInTheDocument();
+    expect(document.querySelector("pre code")).toHaveTextContent("const a = 1;");
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(writeText).toHaveBeenCalledWith("const a = 1;");
     expect(await screen.findByText("Copied")).toBeInTheDocument();
+  });
+
+  it("renders a colored language chip for a fenced code block", () => {
+    renderContent("```js\nlet a = 1;\n```");
+    const chip = screen.getByText("js");
+    expect(chip.tagName).toBe("SPAN");
+    expect(chip.className).toMatch(/\bborder-/);
+    expect(chip.className).toMatch(/\bbg-/);
+    expect(chip).toHaveTextContent("js");
+  });
+
+  it("uses the same chip color for the same language", () => {
+    renderContent("```js\nlet a = 1;\n```");
+    const first = screen.getByText("js").className;
+    cleanup();
+    renderContent("```js\nlet b = 2;\n```");
+    expect(screen.getByText("js").className).toBe(first);
+  });
+
+  it("falls back to the plain code label when the block has no language", () => {
+    renderContent("```\nplain text\n```");
+    expect(screen.getByText("code")).toBeInTheDocument();
+  });
+
+  it("highlights code tokens with the theme CSS variables", () => {
+    const { container } = render(
+      <I18nRoot>
+        <MessageContent content={"```js\nconst a = 1;\n```"} members={members} />
+      </I18nRoot>,
+    );
+    const spans = Array.from(container.querySelectorAll("pre code span")) as HTMLElement[];
+    const keyword = spans.find((span) => span.textContent === "const");
+    expect(keyword).toBeDefined();
+    expect(keyword?.style.color).toBe("var(--code-keyword)");
+    const number = spans.find((span) => span.textContent === "1");
+    expect(number?.style.color).toBe("var(--code-number)");
+    for (const span of spans) {
+      expect(span.style.color).toMatch(/^var\(--code-(plain|comment|string|number|keyword|builtin|punct)\)$/);
+    }
   });
 
   it("renders quotes with indented border blocks and nesting", () => {

@@ -6,7 +6,7 @@ import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DE
 BanDurationMinutes, type AuditEntry, type ChannelOverwrite, type CustomRole, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
 PublicMemberStatus, type ScreenShareFrameRate, type ScreenShareResolution, type ServerEvent, type ServerSettings, type
 UserStatus, type VoiceCapability, type VoicePresence } from "@opencord/shared";
-import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Code, Download, EyeOff, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Paperclip, Pencil, PhoneOff, Pin, PinOff, Plus, Quote, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Square, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { AlertTriangle, Bell, Camera, ChevronDown, Clock, Code, Download, EyeOff, Hash, Headphones, HelpCircle, Image as ImageIcon, LoaderCircle, LogIn, LogOut, Maximize2, Menu, MessageCircle, MessageCircleOff, Mic, MicOff, Minimize2, MonitorUp, MoreHorizontal, Move, Paperclip, Pencil, PhoneOff, Pin, PinOff, Plus, Quote, Reply, Search, Send, ServerCog, Settings, ShieldBan, ShieldCheck, Smile, Square, Timer, Trash2, UserMinus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { DeploymentDialog } from "@/components/deployment-dialog";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -22,6 +22,7 @@ import { ServerBannerDialog } from "@/components/server-banner-dialog";
 import { ServerPreviewDialog } from "@/components/server-preview-dialog";
 import { ServerSettingsPage } from "@/components/server-settings-page";
 import { ServerSearchPanel } from "@/components/server-search-panel";
+import { StatusMenu } from "@/components/status-menu";
 import { ScreenShareDialog, ScreenShareSurface, screenShareResolutionLabel } from "@/components/screen-share-dialog";
 import { SettingsDialog, type SettingsPageId } from "@/components/settings-dialog";
 import { MobileSettingsScreen } from "@/mobile/screens/settings-screen";
@@ -162,6 +163,11 @@ export function restoreBulkDeleteRollback(messages: MockMessage[], rollback: rea
 
 export function canDisconnectVoiceParticipant(canModerate: boolean, actorRole: MemberRole | undefined, targetRole: MemberRole | undefined, currentUserId: string, targetUserId: string): boolean {
   if (!canModerate || currentUserId === targetUserId || !actorRole || !targetRole || targetRole === "owner") return false;
+  return actorRole === "owner" || (actorRole === "administrator" && targetRole === "member");
+}
+
+export function canMoveVoiceParticipant(canMove: boolean, actorRole: MemberRole | undefined, targetRole: MemberRole | undefined, currentUserId: string, targetUserId: string): boolean {
+  if (!canMove || currentUserId === targetUserId || !actorRole || !targetRole || targetRole === "owner") return false;
   return actorRole === "owner" || (actorRole === "administrator" && targetRole === "member");
 }
 
@@ -538,6 +544,19 @@ export function ClientApp(): React.ReactElement {
           return { ...current, [connectionServer.id]: next };
         });
       },
+      onVoiceMoved: (userId, channelId) => {
+        if (!connectionServer) return;
+        setVoicePresenceByServer((current) => ({
+          ...current,
+          [connectionServer.id]: (current[connectionServer.id] ?? []).map((item) => (item.userId === userId ? { ...item, channelId } : item)),
+        }));
+        // Перемещённый клиент переподключается сам обычным voice.join (протокол v52).
+        const selfId = state?.activeServerId ? accessByServer[state.activeServerId]?.id : undefined;
+        if (userId !== selfId) return;
+        commit((current) => ({ ...current, activeChannelId: channelId }));
+        if (!joinVoiceRef.current?.(channelId)) setNotice(currentDictionary().notices.voiceJoinNotReady);
+        else setNotice(currentDictionary().notices.voiceMoved);
+      },
       onVoiceDisconnected: (userId, channelId) => {
         if (connectionServer)
           setVoicePresenceByServer((current) => ({
@@ -608,6 +627,14 @@ export function ClientApp(): React.ReactElement {
   useEffect(() => {
     void window.openCord?.attachments.setLatencySensitive(attachmentLatencySensitive);
   }, [attachmentLatencySensitive]);
+
+  // Перемещение модератором (протокол v52): соединение недоступно внутри
+  // собственных колбэков (объект создаётся раньше), поэтому актуальный joinVoice
+  // держится в ref и вызывается из обработчика события, а не из эффекта.
+  const joinVoiceRef = useRef<((channelId: string) => boolean) | null>(null);
+  useEffect(() => {
+    joinVoiceRef.current = (channelId: string) => connection.joinVoice(channelId);
+  });
 
   useEffect(() => {
     if (voice.status !== "connected" || !hasConnectedVoicePresence) return;
@@ -1834,6 +1861,14 @@ export function ClientApp(): React.ReactElement {
     setNotice(t.notices.disconnectRequested);
   }
 
+  function moveVoiceParticipant(userId: string, targetChannelId: string): void {
+    if (!connection.moveVoiceParticipant(userId, targetChannelId)) {
+      setNotice(t.notices.moveNotReady);
+      return;
+    }
+    setNotice(t.notices.moveRequested);
+  }
+
   function setVoiceParticipantServerMuted(userId: string, muted: boolean): void {
     if (!connection.setVoiceMemberMuted(userId, muted)) {
       setNotice(t.notices.muteNotReady);
@@ -1900,6 +1935,9 @@ export function ClientApp(): React.ReactElement {
       screenShareParticipantIds={voice.screenShares.map((stream) => stream.participantIdentity)}
       isScreenSharing={voice.isScreenSharing}
       currentUserId={currentAccess?.id ?? profile.id}
+      canMoveVoice={currentAccess?.permissions.includes("VOICE_MOVE_MEMBERS") === true}
+      currentUserRole={currentAccess?.role}
+      onMoveParticipant={moveVoiceParticipant}
       onCreateChannel={() => setModal("channel")}
       onEditChannel={(channel) => openChannelModal(channel, "channel-edit")}
       onDeleteChannel={(channel) => openChannelModal(channel, "channel-delete")}
@@ -2470,7 +2508,7 @@ function HomeScreen({ serverCount, profile, onCreate, onConnect, onProfile, onSe
   );
 }
 
-export function ChannelSidebar({ mobile = false, server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, serverMuted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", onCreateChannel, onEditChannel, onDeleteChannel, onBulkSlowmode, onSelectChannel, onServerMenu, onProfile, onSettings, onStatusChange, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice }: { mobile?: boolean; server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; serverMuted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onBulkSlowmode?: () => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onStatusChange?: (status: UserStatus) => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void }): React.ReactElement {
+export function ChannelSidebar({ mobile = false, server, activeChannelId, profile, canManageChannels, voiceCapability, voiceParticipants = [], voiceChannelId = null, voiceStatus = "idle", muted = false, serverMuted = false, deafened = false, activeSpeakerIds = [], screenShareParticipantIds = [], isScreenSharing = false, currentUserId = "", canMoveVoice = false, currentUserRole, onCreateChannel, onEditChannel, onDeleteChannel, onBulkSlowmode, onSelectChannel, onServerMenu, onProfile, onSettings, onStatusChange, onJoinVoice, onLeaveVoice, onMuted, onDeafened, onStartScreenShare, onStopScreenShare, onViewScreenShare, onVoiceNotice, onMoveParticipant }: { mobile?: boolean; server: MockServer; activeChannelId?: string; profile: LocalProfile; canManageChannels: boolean; voiceCapability?: VoiceCapability; voiceParticipants?: VoicePresence[]; voiceChannelId?: string | null; voiceStatus?: "idle" | "connecting" | "connected" | "reconnecting" | "error"; muted?: boolean; serverMuted?: boolean; deafened?: boolean; activeSpeakerIds?: string[]; screenShareParticipantIds?: string[]; isScreenSharing?: boolean; currentUserId?: string; canMoveVoice?: boolean; currentUserRole?: MemberRole; onCreateChannel: () => void; onEditChannel: (channel: MockChannel) => void; onDeleteChannel: (channel: MockChannel) => void; onBulkSlowmode?: () => void; onSelectChannel: (id: string) => void; onServerMenu: () => void; onProfile: () => void; onSettings: () => void; onStatusChange?: (status: UserStatus) => void; onJoinVoice?: (channel: MockChannel) => void; onLeaveVoice?: () => void; onMuted?: (value: boolean) => void; onDeafened?: (value: boolean) => void; onStartScreenShare?: () => void; onStopScreenShare?: () => void; onViewScreenShare?: (participantIdentity: string) => void; onVoiceNotice?: () => void; onMoveParticipant?: (userId: string, targetChannelId: string) => void }): React.ReactElement {
   const { t } = useI18n();
   const textChannels = server.channels.filter((channel) => channel.kind === "text");
   const voiceChannels = server.channels.filter((channel) => channel.kind === "voice");
@@ -2480,6 +2518,8 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
     x: number;
     y: number;
   } | null>(null);
+  const [dragOverChannelId, setDragOverChannelId] = useState<string | null>(null);
+  const [participantMenu, setParticipantMenu] = useState<{ userId: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -2506,6 +2546,34 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
       channel,
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 200)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 112)),
+    });
+  }
+
+  useEffect(() => {
+    if (!participantMenu) return;
+    const close = (): void => setParticipantMenu(null);
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [participantMenu]);
+
+  function openParticipantMenu(event: React.MouseEvent, userId: string): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setParticipantMenu({
+      userId,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 160)),
     });
   }
 
@@ -2542,7 +2610,25 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
         </ChannelGroup>
         <ChannelGroup title={t.channel.voice} canCreate={canManageChannels} onCreate={onCreateChannel}>
           {voiceChannels.map((channel) => (
-            <div key={channel.id} className="mb-1">
+            <div
+              key={channel.id}
+              className={cn("mb-1 rounded-lg transition", dragOverChannelId === channel.id && "bg-violet-400/10 ring-1 ring-violet-400/60")}
+              onDragOver={(event) => {
+                if (!onMoveParticipant) return;
+                const types = event.dataTransfer?.types;
+                if (types && !Array.from(types).includes("application/x-opencord-voice-user")) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDragOverChannelId(channel.id);
+              }}
+              onDragLeave={() => setDragOverChannelId((current) => (current === channel.id ? null : current))}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragOverChannelId(null);
+                const userId = event.dataTransfer?.getData("application/x-opencord-voice-user") || event.dataTransfer?.getData("text/plain");
+                if (userId && onMoveParticipant) onMoveParticipant(userId, channel.id);
+              }}
+            >
               <button
                 onClick={() => {
                   if (onJoinVoice) onJoinVoice(channel);
@@ -2562,29 +2648,51 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
               <div className="space-y-0.5">
                 {voiceParticipants
                   .filter((participant) => participant.channelId === channel.id)
-                  .map((participant) => (
-                    <VoiceParticipantRow key={participant.userId} participant={participant} member={server.members.find((item) => item.id === participant.userId)} profile={profile} currentUserId={currentUserId} speaking={activeSpeakerIds.includes(participant.userId)} sharing={screenShareParticipantIds.includes(participant.userId)} onViewScreenShare={onViewScreenShare} />
-                  ))}
+                  .map((participant) => {
+                    const targetRole = server.members.find((item) => item.id === participant.userId)?.serverRole;
+                    const movable = onMoveParticipant ? canMoveVoiceParticipant(canMoveVoice, currentUserRole, targetRole, currentUserId, participant.userId) : false;
+                    return (
+                      <VoiceParticipantRow
+                        key={participant.userId}
+                        participant={participant}
+                        member={server.members.find((item) => item.id === participant.userId)}
+                        profile={profile}
+                        currentUserId={currentUserId}
+                        speaking={activeSpeakerIds.includes(participant.userId)}
+                        sharing={screenShareParticipantIds.includes(participant.userId)}
+                        onViewScreenShare={onViewScreenShare}
+                        draggable={movable}
+                        onDragStart={(event) => {
+                          event.dataTransfer?.setData("application/x-opencord-voice-user", participant.userId);
+                          event.dataTransfer?.setData("text/plain", participant.userId);
+                          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+                        }}
+                        onContextMenu={(event) => {
+                          if (movable) openParticipantMenu(event, participant.userId);
+                        }}
+                      />
+                    );
+                  })}
               </div>
             </div>
           ))}
         </ChannelGroup>
       </div>
       {activeVoiceChannel && onLeaveVoice && onMuted && onDeafened && <VoicePanel mobile={mobile} channel={activeVoiceChannel} status={voiceStatus} muted={muted} serverMuted={serverMuted} deafened={deafened} isScreenSharing={isScreenSharing} onMuted={onMuted} onDeafened={onDeafened} onStartScreenShare={onStartScreenShare} onStopScreenShare={onStopScreenShare} onLeave={onLeaveVoice} />}
-      <div className="flex h-14 items-center gap-2 border-t border-white/[.06] bg-rail px-2">
-        <button onClick={onProfile} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5">
-          <Avatar name={profile.username} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} />
-          <span className="min-w-0">
-            <span className="block truncate text-xs font-semibold text-slate-200" style={nicknameStyle(profile.nameFont, profile.nameGlow)}>{profile.username}</span>
+      <div className={cn("flex items-center gap-2 border-t border-white/[.06] bg-rail px-2", mobile ? "h-14" : "h-[52px]")}>
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left hover:bg-white/5">
+          <button onClick={onProfile} className="grid shrink-0 place-items-center rounded-md">
+            <Avatar name={profile.username} image={profile.avatar} size="sm" status={visibleProfileStatus(profile.status)} statusRingClassName="border-rail" className="size-8 text-[11px]" />
+          </button>
+          <span className="min-w-0 flex-1">
+            <button onClick={onProfile} className="block w-full truncate text-left text-[13px] font-semibold leading-[18px] text-slate-100" style={nicknameStyle(profile.nameFont, profile.nameGlow)}>{profile.username}</button>
             {profile.customStatus
-              ? <span className="block truncate text-[10px] text-slate-400">{profile.customStatusEmoji ? `${profile.customStatusEmoji} ` : ""}{profile.customStatus}</span>
+              ? <button onClick={onProfile} className="block w-full truncate text-left text-[11px] font-normal leading-[14px] text-slate-400">{profile.customStatusEmoji ? `${profile.customStatusEmoji} ` : ""}{profile.customStatus}</button>
               : onStatusChange
-                ? <select aria-label={t.profile.status} value={profile.status ?? "online"} onClick={(event) => event.stopPropagation()} onChange={(event) => onStatusChange(event.target.value as UserStatus)} className={cn("block max-w-full truncate bg-transparent text-[10px] font-medium outline-none", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>
-                    {(["online", "idle", "dnd", "invisible"] as const).map((value) => <option key={value} value={value} className="bg-slate-900">{t.statuses[value]}</option>)}
-                  </select>
-                : <span className={cn("block truncate text-[10px]", profile.status === "dnd" ? "text-red-400" : profile.status === "idle" ? "text-amber-400" : profile.status === "invisible" ? "text-slate-500" : "text-emerald-400")}>{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
+                ? <StatusMenu value={profile.status ?? "online"} onChange={onStatusChange} mobile={mobile} />
+                : <span className="block w-full truncate text-left text-[11px] font-normal leading-[14px] text-slate-400">{t.statuses[userStatusLabels[profile.status ?? "online"]]}</span>}
           </span>
-        </button>
+        </div>
         <button aria-label={t.settings.title} title={t.settings.title} onClick={onSettings} className={cn("grid shrink-0 place-items-center rounded-lg text-slate-500 hover:bg-white/6 hover:text-slate-200", mobile ? "size-11" : "size-9")}>
           <Settings className={mobile ? "size-5" : "size-4"} />
         </button>
@@ -2628,11 +2736,34 @@ export function ChannelSidebar({ mobile = false, server, activeChannelId, profil
           </button>
         </div>
       )}
+      {participantMenu && onMoveParticipant && (
+        <div role="menu" aria-label={t.voice.moveTo} onPointerDown={(event) => event.stopPropagation()} className="glass fixed z-[80] w-52 rounded-xl p-1.5 shadow-[0_18px_55px_rgba(0,0,0,.5)]" style={{ left: participantMenu.x, top: participantMenu.y }}>
+          <p className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{t.voice.moveTo}</p>
+          {voiceChannels
+            .filter((channel) => !voiceParticipants.some((participant) => participant.userId === participantMenu.userId && participant.channelId === channel.id))
+            .map((channel) => (
+              <button
+                key={channel.id}
+                role="menuitem"
+                onClick={() => {
+                  const userId = participantMenu.userId;
+                  const targetChannelId = channel.id;
+                  setParticipantMenu(null);
+                  onMoveParticipant(userId, targetChannelId);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-300 hover:bg-white/[.06] hover:text-white"
+              >
+                <Move className="size-3.5" />
+                <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+              </button>
+            ))}
+        </div>
+      )}
     </aside>
   );
 }
 
-export function VoiceParticipantRow({ participant, member, profile, currentUserId, speaking, sharing = false, onViewScreenShare }: { participant: VoicePresence; member?: MockMember; profile: LocalProfile; currentUserId: string; speaking: boolean; sharing?: boolean; onViewScreenShare?: (participantIdentity: string) => void }): React.ReactElement {
+export function VoiceParticipantRow({ participant, member, profile, currentUserId, speaking, sharing = false, onViewScreenShare, draggable = false, onDragStart, onContextMenu }: { participant: VoicePresence; member?: MockMember; profile: LocalProfile; currentUserId: string; speaking: boolean; sharing?: boolean; onViewScreenShare?: (participantIdentity: string) => void; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; onContextMenu?: (event: React.MouseEvent) => void }): React.ReactElement {
   const { t } = useI18n();
   const isCurrentUser = participant.userId === currentUserId;
   const memberName = member?.username ?? (isCurrentUser ? profile.username : t.voice.participant);
@@ -2641,9 +2772,10 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
   const glow = member?.nameGlow ?? (isCurrentUser ? profile.nameGlow : undefined);
   const font = member?.nameFont ?? (isCurrentUser ? profile.nameFont : undefined);
   return (
+    <div className="ml-6 flex" draggable={draggable} onDragStart={onDragStart} onContextMenu={onContextMenu} title={draggable ? t.voice.dragToMove : undefined}>
     <ProfilePreview
       side="right"
-      wrapperClassName="ml-6 flex"
+      wrapperClassName="flex"
       triggerClassName="flex min-h-9 w-[224px] max-w-full items-center gap-2 rounded-lg px-1.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[.035] hover:text-slate-200"
       profile={{
         username: member?.username ?? (isCurrentUser ? profile.username : memberName),
@@ -2695,6 +2827,7 @@ export function VoiceParticipantRow({ participant, member, profile, currentUserI
         </span>
       ) : null}
     </ProfilePreview>
+    </div>
   );
 }
 
@@ -3445,13 +3578,14 @@ export function LeaveServerDialog({ server, canManageServer, canViewSettings, ca
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="overflow-hidden border-white/10 bg-panel p-0 sm:max-w-xl">
-        <div className="relative -mx-5 -mt-5 mb-12">
+      <DialogContent className="overflow-hidden border-white/10 bg-panel p-0 sm:max-w-xl" header={
+        <div className="relative mb-7">
           <div className="relative h-32 overflow-hidden border-b border-white/10 bg-primary/15">{server.banner && <Image src={server.banner} alt="" fill unoptimized sizes="576px" className="object-cover" />}</div>
           <div className="absolute -bottom-10 left-6">
             <Avatar image={server.avatar} name={server.name} color={server.accent} size="xl" className="ring-4 ring-panel shadow-md" />
           </div>
         </div>
+      }>
         <div className="space-y-5 pb-1">
           <DialogHeader>
             <DialogTitle className="text-xl">{showServerSettings ? t.server.manage : t.server.leaveTitle}</DialogTitle>
@@ -3736,7 +3870,7 @@ function ChatHeader({ mobile = false, channelName, description, connectionStatus
       )}
       {!mobile && <Hash className="size-5 text-slate-500" />}
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        <div className="min-w-0 flex-1">
+        <div className={cn("min-w-0", mobile ? "flex-1" : "max-w-[50%]")}>
           <h2 className={cn("min-w-0 truncate font-semibold text-slate-100", mobile && "text-[15px] leading-5")}>
             {mobile ? `#${channelName}` : channelName}
           </h2>
@@ -4320,10 +4454,17 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
     onVoiceFile?.(new File([voice.audio.blob], voiceFileName(voice.audio.mimeType), { type: voice.audio.mimeType }));
     voice.reset();
   }
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (replyingTo) inputRef.current?.focus();
   }, [replyingTo]);
+  // Поле ввода растёт под текст, но не выше max-h-60 — дальше скролл.
+  useEffect(() => {
+    const node = inputRef.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  }, [draft]);
   const [mentionQuery, setMentionQuery] = useState<{
     query: string;
     discriminator: string;
@@ -4483,7 +4624,7 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
     inputRef.current?.focus();
   }
 
-  function handleAutocompleteKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+  function handleAutocompleteKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
     if (muteDurationOpen) {
       if (event.key === "ArrowDown" || event.key === "ArrowRight") {
         event.preventDefault();
@@ -4726,7 +4867,30 @@ export function Composer({ draft, channelName, disabled, attachments, uploading,
             </button>
           </div>
         ) : (
-          <input ref={inputRef} aria-label={`${t.chat.placeholder} #${channelName}`} disabled={composerDisabled} value={draft} onChange={(event) => onDraft(event.target.value)} onBlur={onBlur} onKeyDown={handleAutocompleteKeyDown} onKeyUp={refreshAutocomplete} onClick={refreshAutocomplete} onSelect={refreshAutocomplete} maxLength={4000} placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`} className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600" />
+          <textarea
+            ref={inputRef}
+            rows={1}
+            aria-label={`${t.chat.placeholder} #${channelName}`}
+            disabled={composerDisabled}
+            value={draft}
+            onChange={(event) => onDraft(event.target.value)}
+            onBlur={onBlur}
+            onKeyDown={(event) => {
+              handleAutocompleteKeyDown(event);
+              // Textarea inserts a newline on Enter by default; submit the form unless a popup
+              // already consumed the key (mention/command selection), or Shift requests a newline.
+              if (!event.defaultPrevented && event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            onKeyUp={refreshAutocomplete}
+            onClick={refreshAutocomplete}
+            onSelect={refreshAutocomplete}
+            maxLength={4000}
+            placeholder={muted ? t.chat.mutedComposer : disabled ? t.chat.waitingForConnection : `${t.chat.placeholder} #${channelName}`}
+            className="block max-h-60 min-h-12 w-full min-w-0 flex-1 resize-none self-center content-center overflow-y-auto bg-transparent text-sm leading-[1.5] text-slate-200 outline-none placeholder:text-slate-600"
+          />
         )}
         <EmojiPicker disabled={composerDisabled} onSelect={insertEmoji} />
         {voice.supported && voice.status === "idle" && (

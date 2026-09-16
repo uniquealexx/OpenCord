@@ -1,4 +1,6 @@
-# OpenCord Protocol v51 (English)
+# OpenCord Protocol v52 (English)
+
+Protocol v52 adds a Discord-like voice member move (migration `040_voice_move_permission`, one new permission `VOICE_MOVE_MEMBERS`). `voice.member.move` (`userId`, `targetChannelId`) requires `VOICE_MOVE_MEMBERS` plus a strictly higher hierarchy top than the target (the owner is exempt, nobody moves the owner, self-move answers `CONFLICT`); the target must be a voice channel, the moved user must currently be in voice and must hold effective `VOICE_CONNECT` in the target, the target must have a free slot (`VOICE_ROOM_FULL` otherwise), and the request shares the `voice.join` rate limit. On success the server moves presence (keeping mute/deafen state), removes the user from the old LiveKit room, broadcasts `voice.participant.moved` (`userId`, `channelId`, `reason: "moved"`) without a rejoin cooldown, records the `voice.member.move` audit entry best-effort, and the moved client rejoins via the regular `voice.join` flow. The client offers drag-and-drop between voice channels plus a Move to context menu; seeded `administrator` holds the permission, `member` does not.
 
 Protocol v51 adds a Discord-like welcome channel for newcomers (migration `039_welcome_channel`, no new permissions). The new server settings `welcomeChannelId` (nullable uuid of a text channel, `null` disables greetings) and `welcomeMessage` (template of up to 500 characters with `{user}` and `{server}` placeholders, default `Welcome to {server}, {user}!`) travel through `server.settings.update` and `server.snapshot`. Changing them requires `MANAGE_SERVER`; both fields are optional in the update event, so older clients that omit them keep the existing greeting. On the first registration of an identity the server posts a plain `chat` greeting authored by the owner into the welcome channel — a server action posted regardless of overwrites visibility — and broadcasts the usual `message.created`. Re-joins, second connections, and banned identities receive no greeting, and deleting the welcome channel silently disables it. The client offers a welcome page in server settings (text-channel picker, template editor with live preview for a sample name).
 
@@ -137,7 +139,7 @@ The client sends:
 - `member.ban`;
 - `member.unban`;
 - `audit.list`;
-- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
+- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`, `voice.member.move`;
 - `server.delete`;
 - `ping`.
 
@@ -155,7 +157,7 @@ The server sends:
 - `role.list.result`, `role.created`, `role.updated`, `role.deleted`;
 - `channel.overwrites.updated`;
 - `audit.result`;
-- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
+- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`, `voice.participant.moved`;
 - `pong`, `error`.
 
 `channel.create`, `channel.update`, `channel.slowmode.set`, and `channel.delete` require the `MANAGE_CHANNELS` permission, which the owner and administrators hold. The type of an existing channel is not changed; when a channel is deleted, PostgreSQL cascades deletion to its messages, after which the server broadcasts a new `server.snapshot` to all clients. Since protocol v40 the voice capacity can also be chosen at creation: `channel.create` accepts the same `participantLimit` values as `channel.update`, defaulting to 25 for voice channels when omitted.
@@ -194,7 +196,9 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v51 (Русский)
+# OpenCord Protocol v52 (Русский)
+
+Протокол v52 добавляет Discord-подобное перемещение участников между голосовыми каналами (миграция `040_voice_move_permission`, одно новое право `VOICE_MOVE_MEMBERS`). `voice.member.move` (`userId`, `targetChannelId`) требует `VOICE_MOVE_MEMBERS` плюс строго более высокую вершину иерархии, чем у цели (владелец вне иерархии, владельца перемещать нельзя, самоперемещение отвечает `CONFLICT`); цель обязана быть голосовым каналом, перемещаемый обязан находиться в голосе и иметь эффективный `VOICE_CONNECT` в цели, в цели должно быть свободное место (иначе `VOICE_ROOM_FULL`), а запрос делит лимит `voice.join`. При успехе сервер переставляет presence (сохраняя мут/deafen), убирает пользователя из старой LiveKit-комнаты, рассылает `voice.participant.moved` (`userId`, `channelId`, `reason: "moved"`) без паузы на возвращение, пишет audit-запись `voice.member.move` best-effort, а перемещённый клиент переподключается обычным `voice.join`. Клиент предлагает drag-and-drop между голосовыми каналами плюс контекстное меню Move to; сид `administrator` право имеет, `member` — нет.
 
 Протокол v51 добавляет Discord-подобный welcome-канал для новичков (миграция `039_welcome_channel`, без новых прав). Новые настройки сервера `welcomeChannelId` (nullable uuid текстового канала, `null` выключает приветствия) и `welcomeMessage` (шаблон до 500 символов с плейсхолдерами `{user}` и `{server}`, по умолчанию `Welcome to {server}, {user}!`) путешествуют через `server.settings.update` и `server.snapshot`. Смена требует `MANAGE_SERVER`; оба поля опциональны в событии обновления, поэтому старые клиенты, которые их не шлют, сохраняют текущее приветствие. При первой регистрации идентичности сервер публикует обычное `chat`-приветствие от имени владельца в welcome-канал — серверное действие, публикуемое независимо от видимости через overwrites, — и рассылает обычный `message.created`. Повторные входы, вторые подключения и забаненные идентичности приветствия не получают, а удаление welcome-канала молча его выключает. Клиент предлагает страницу приветствия в настройках сервера (выбор текстового канала, редактор шаблона с живым предпросмотром для примерного имени).
 
@@ -331,7 +335,7 @@ Electron-клиент показывает изображения до 10 МБ �
 - `member.ban`;
 - `member.unban`;
 - `audit.list`;
-- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
+- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`, `voice.member.move`;
 - `server.delete`;
 - `ping`.
 
@@ -349,7 +353,7 @@ Electron-клиент показывает изображения до 10 МБ �
 - `role.list.result`, `role.created`, `role.updated`, `role.deleted`;
 - `channel.overwrites.updated`;
 - `audit.result`;
-- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
+- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`, `voice.participant.moved`;
 - `pong`, `error`.
 
 `channel.create`, `channel.update`, `channel.slowmode.set` и `channel.delete` требуют разрешения `MANAGE_CHANNELS`, которым обладают владелец и администраторы. Тип существующего канала не изменяется; при удалении канала PostgreSQL каскадно удаляет его сообщения, после чего сервер рассылает всем клиентам новый `server.snapshot`. Начиная с протокола v40 лимит голосового канала можно выбрать и при создании: `channel.create` принимает те же значения `participantLimit`, что и `channel.update`, при отсутствии для голосовых подставляется 25.
@@ -388,7 +392,9 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v51 (中文)
+# OpenCord 协议 v52 (中文)
+
+协议 v52 新增类似 Discord 的语音成员移动（迁移 `040_voice_move_permission`，新增权限 `VOICE_MOVE_MEMBERS`）。`voice.member.move`（`userId`、`targetChannelId`）需要 `VOICE_MOVE_MEMBERS`，且操作者层级顶点须严格高于目标（所有者不受层级限制，无人可移动所有者，自己移动自己返回 `CONFLICT`）；目标须为语音频道，被移动用户须当前在语音中且在目标频道拥有有效 `VOICE_CONNECT`，目标须有空位（否则返回 `VOICE_ROOM_FULL`），请求与 `voice.join` 共用限速。成功后服务器移动在线状态（保留静音/耳聋状态），将用户从旧 LiveKit 房间移除，广播 `voice.participant.moved`（`userId`、`channelId`、`reason: "moved"`）且不设重新加入冷却，以 best-effort 记录 `voice.member.move` 审计条目，被移动客户端通过常规 `voice.join` 流程重新加入。客户端提供语音频道间拖拽及 Move to 上下文菜单；种子 `administrator` 拥有该权限，`member` 没有。
 
 协议 v51 新增类似 Discord 的新成员欢迎频道（迁移 `039_welcome_channel`，不新增权限）。新增服务器设置 `welcomeChannelId`（文本频道的可空 uuid，`null` 表示关闭欢迎语）和 `welcomeMessage`（最多 500 字符的模板，支持 `{user}` 和 `{server}` 占位符，默认为 `Welcome to {server}, {user}!`），经由 `server.settings.update` 和 `server.snapshot` 传输。修改需要 `MANAGE_SERVER`；两个字段在更新事件中均为可选，因此省略它们的老客户端会保留现有欢迎语。身份首次注册时，服务器以所有者名义向欢迎频道发送一条普通 `chat` 欢迎语——这是服务器行为，不受 overwrites 可见性限制——并照常广播 `message.created`。重复加入、第二连接和被封禁身份不会收到欢迎语；删除欢迎频道会静默关闭该功能。客户端在服务器设置中提供欢迎语页面（文本频道选择器、模板编辑器及示例名称实时预览）。
 
@@ -525,7 +531,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `member.ban`;
 - `member.unban`;
 - `audit.list`;
-- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`;
+- `voice.join`, `voice.leave`, `voice.state.update`, `voice.member.disconnect`, `voice.member.mute`, `voice.member.move`;
 - `server.delete`;
 - `ping`.
 
@@ -543,7 +549,7 @@ Electron 客户端通过经过验证的 data URL 显示最大 10 MB 的图像。
 - `role.list.result`, `role.created`, `role.updated`, `role.deleted`;
 - `channel.overwrites.updated`;
 - `audit.result`;
-- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`;
+- `voice.join.authorized`, `voice.participant.joined`, `voice.participant.updated`, `voice.participant.left`, `voice.participant.disconnected`, `voice.participant.moved`;
 - `pong`, `error`.
 
 `channel.create`、`channel.update`、`channel.slowmode.set` 和 `channel.delete` 需要 `MANAGE_CHANNELS` 权限，所有者和管理员拥有该权限。现有频道的类型不会改变；删除频道时，PostgreSQL 会级联删除其消息，之后服务器向所有客户端广播新的 `server.snapshot`。从协议 v40 开始，创建时也可选择语音频道容量：`channel.create` 接受与 `channel.update` 相同的 `participantLimit` 取值，省略时语音频道默认为 25。

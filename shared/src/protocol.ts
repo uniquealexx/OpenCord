@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 51 as const;
+export const PROTOCOL_VERSION = 52 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -386,7 +386,7 @@ export const VOICE_MODERATED_REJOIN_COOLDOWN_MS = 30_000 as const;
 export const VOICE_ORPHAN_GRACE_MS = 30_000 as const;
 
 export const memberRoleSchema = z.enum(["owner", "administrator", "member"]);
-export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
+export const permissionSchema = z.enum(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"]);
 
 /**
  * Кастомные роли сервера (протокол v48): Discord-подобная модель поверх
@@ -398,7 +398,7 @@ export const CUSTOM_ROLE_NAME_MIN_LENGTH = 2 as const;
 export const CUSTOM_ROLE_NAME_MAX_LENGTH = 32 as const;
 export const CUSTOM_ROLE_POSITION_MIN = 0 as const;
 export const CUSTOM_ROLE_POSITION_MAX = 9999 as const;
-export const CUSTOM_ROLE_PERMISSIONS_MAX = 9 as const;
+export const CUSTOM_ROLE_PERMISSIONS_MAX = 10 as const;
 export const MEMBER_ROLES_MAX = 32 as const;
 export const customRoleColorSchema = z.string().regex(/^#[0-9a-f]{6}$/u).nullable().default(null);
 export const customRoleSchema = z.object({
@@ -468,6 +468,7 @@ export const auditActionSchema = z.enum([
   "channel.delete",
   "channel.overwrites.set",
   "channel.slowmode.set",
+  "voice.member.move",
   "message.delete",
   "message.bulkDelete",
   "server.settings.update",
@@ -767,6 +768,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("voice.state.update"), requestId: requestIdSchema, muted: z.boolean(), deafened: z.boolean(), viewingScreenShareUserId: z.string().min(1).nullable() }),
   z.object({ type: z.literal("voice.member.disconnect"), requestId: requestIdSchema, userId: z.string().min(1) }),
   z.object({ type: z.literal("voice.member.mute"), requestId: requestIdSchema, userId: z.string().min(1), muted: z.boolean() }),
+  z.object({ type: z.literal("voice.member.move"), requestId: requestIdSchema, userId: z.string().min(1), targetChannelId: z.string().uuid() }),
   z.object({ type: z.literal("ping"), requestId: requestIdSchema }),
 ]).superRefine((event, context) => {
   if ((event.type === "chat.send" || event.type === "message.update") && !event.content && event.attachmentIds.length === 0) context.addIssue({ code: "custom", path: ["content"], message: "Message requires text or an attachment" });
@@ -803,6 +805,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("voice.participant.updated"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.left"), participant: voicePresenceSchema }),
   z.object({ type: z.literal("voice.participant.disconnected"), userId: z.string().min(1), channelId: z.string().uuid(), reason: z.enum(["moderated", "replaced", "channel_deleted"]) }),
+  z.object({ type: z.literal("voice.participant.moved"), userId: z.string().min(1), channelId: z.string().uuid(), reason: z.literal("moved") }),
   z.object({ type: z.literal("pong"), requestId: requestIdSchema, serverTime: z.string().datetime() }),
   // banExpiresAt сопровождает только код BANNED: ISO-дата снятия бана либо null для
   // перманентного. Поле необязательное, чтобы сервер прошлой версии оставался совместимым.

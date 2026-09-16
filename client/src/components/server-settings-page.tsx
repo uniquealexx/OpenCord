@@ -23,7 +23,7 @@ type Access = { id: string; role: MemberRole; permissions: Permission[] };
 
 const UPLOAD_SLIDER_MAX = 2_025;
 
-export const CUSTOM_ROLE_PERMISSIONS: Permission[] = ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"];
+export const CUSTOM_ROLE_PERMISSIONS: Permission[] = ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"];
 
 export function ServerSettingsPage({ mobile = false, server, profile, access, auditEntries = [], auditHasMore = false, auditLoading = false, onLoadAudit, onClose, onAvatar, onBanner, onSaveSettings, onSetRole, onSetMemberRoles, onCreateRole, onUpdateRole, onDeleteRole, onKick, onBan, onUnban }: { mobile?: boolean; server: MockServer; profile: LocalProfile; access: Access; auditEntries?: AuditEntry[]; auditHasMore?: boolean; auditLoading?: boolean; onLoadAudit?: (before: string | null) => void; onClose: () => void; onAvatar: () => void; onBanner: () => void; onSaveSettings: (settings: ServerSettings) => boolean; onSetRole: (userId: string, role: "administrator" | "member") => void; onSetMemberRoles?: (userId: string, roleIds: string[]) => void; onCreateRole?: (name: string, color: string | null, position: number, permissions: Permission[]) => void; onUpdateRole?: (roleId: string, patch: { name?: string; color?: string | null; position?: number; permissions?: Permission[] }) => void; onDeleteRole?: (roleId: string) => void; onKick: (userId: string) => void; onBan: (userId: string, durationMinutes: BanDurationMinutes) => void; onUnban: (userId: string) => void }): React.ReactElement {
   const { t } = useI18n();
@@ -445,7 +445,7 @@ const ROLE_PERMISSION_GROUPS: { key: "server" | "channels" | "members" | "voice"
   { key: "server", permissions: ["MANAGE_SERVER", "DELETE_SERVER"] },
   { key: "channels", permissions: ["MANAGE_CHANNELS", "MANAGE_MESSAGES"] },
   { key: "members", permissions: ["MANAGE_ROLES", "KICK_MEMBERS"] },
-  { key: "voice", permissions: ["VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"] },
+  { key: "voice", permissions: ["VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"] },
 ];
 
 function RoleInspector({ role, memberCount, canManageRoles, onUpdateRole, onDeleteRole }: { role: CustomRole; memberCount: number; canManageRoles: boolean; onUpdateRole?: (roleId: string, patch: { name?: string; color?: string | null; position?: number; permissions?: Permission[] }) => void; onDeleteRole?: (roleId: string) => void }): React.ReactElement {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { LinkPreviews } from "@/components/link-preview";
 import { ProfilePreview } from "@/components/profile-preview";
+import { tokenizeCode, type CodeTokenType } from "@/lib/code-tokenize";
 import { useI18n } from "@/lib/i18n";
 import { splitMessageContent } from "@/lib/mentions";
 import { extractCodeBlocks, groupQuoteLines, parseInline, type InlineNode } from "@/lib/message-markdown";
@@ -13,6 +14,41 @@ import type { MockMember } from "@/shared/state";
 
 const MENTION_PILL_CLASS = "inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] leading-none text-blue-200/80" as const;
 const EVERYONE_PILL_CLASS = "inline-flex h-[18px] items-center rounded-[4px] bg-blue-500/18 px-1 align-middle text-[12px] font-medium leading-none text-blue-200" as const;
+
+// Subtle Telegram-подобные чипы языка: фиксированная палитра, тон в тон к
+// тёмному slate/violet-интерфейсу. Цвет выбирается детерминированно по имени
+// языка, поэтому один и тот же язык всегда подсвечен одинаково.
+const CODE_LANGUAGE_CHIP_CLASSES = [
+  "border-violet-400/30 bg-violet-400/12 text-violet-200",
+  "border-blue-400/30 bg-blue-400/12 text-blue-200",
+  "border-cyan-400/30 bg-cyan-400/12 text-cyan-200",
+  "border-emerald-400/30 bg-emerald-400/12 text-emerald-200",
+  "border-lime-400/30 bg-lime-400/12 text-lime-200",
+  "border-amber-400/30 bg-amber-400/12 text-amber-200",
+  "border-orange-400/30 bg-orange-400/12 text-orange-200",
+  "border-rose-400/30 bg-rose-400/12 text-rose-200",
+] as const;
+
+function codeLanguageChipClass(language: string): string {
+  let hash = 0;
+  for (let index = 0; index < language.length; index += 1) {
+    hash = (hash * 31 + language.charCodeAt(index)) >>> 0;
+  }
+  return CODE_LANGUAGE_CHIP_CLASSES[hash % CODE_LANGUAGE_CHIP_CLASSES.length] ?? "";
+}
+
+// Подсветка токенов: тип → семантическая CSS-переменная из globals.css. Tailwind
+// не знает `--code-*`, поэтому цвет ставится инлайн-стилем, а не классом. Сами
+// значения переменных зависят от палитры и светлой/тёмной темы.
+const CODE_TOKEN_COLOR: Record<CodeTokenType, string> = {
+  comment: "var(--code-comment)",
+  string: "var(--code-string)",
+  number: "var(--code-number)",
+  keyword: "var(--code-keyword)",
+  builtin: "var(--code-builtin)",
+  punct: "var(--code-punct)",
+  plain: "var(--code-plain)",
+};
 
 type Block =
   | { kind: "paragraph"; source: string }
@@ -165,10 +201,15 @@ function CodeBlockView({ language, code }: { language: string | null; code: stri
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => setCopied(false), 1_500);
   }, [code]);
+  const tokens = useMemo(() => tokenizeCode(code, language), [code, language]);
   return (
     <div className="my-1 min-w-0 overflow-hidden rounded-lg border border-white/[.07] bg-black/30">
       <div className="flex items-center justify-between gap-2 border-b border-white/[.06] bg-white/[.03] px-3 py-1.5">
-        <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">{language ?? t.chat.codePlain}</span>
+        {language ? (
+          <span className={cn("min-w-0 truncate rounded-[5px] border px-1.5 py-px font-mono text-[11px] font-medium leading-4", codeLanguageChipClass(language))}>{language}</span>
+        ) : (
+          <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">{t.chat.codePlain}</span>
+        )}
         <button
           type="button"
           onClick={() => void copy()}
@@ -180,7 +221,15 @@ function CodeBlockView({ language, code }: { language: string | null; code: stri
         </button>
       </div>
       <pre className="overflow-x-auto p-3 font-mono text-xs leading-5 text-slate-200">
-        <code>{code || " "}</code>
+        <code>
+          {code.length > 0
+            ? tokens.map((token, index) => (
+                <span key={index} style={{ color: CODE_TOKEN_COLOR[token.type] }}>
+                  {token.text}
+                </span>
+              ))
+            : " "}
+        </code>
       </pre>
     </div>
   );

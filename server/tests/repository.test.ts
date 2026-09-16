@@ -274,7 +274,7 @@ describe("ChatRepository", () => {
     await repository.upsertUser("member", "member-public-key", { username: "member", discriminator: "0002", avatar: null });
     expect(await repository.ensureMembership("owner", "owner-public-key", "owner-public-key")).toBe("owner");
     expect(await repository.ensureMembership("member", "member-public-key", "owner-public-key")).toBe("member");
-    expect(permissionsForRole("owner")).toEqual(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE"]);
+    expect(permissionsForRole("owner")).toEqual(["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"]);
     expect(permissionsForRole("administrator")).toContain("MANAGE_MESSAGES");
     expect(permissionsForRole("administrator")).toContain("KICK_MEMBERS");
     expect(await repository.setMemberRole("member", "administrator")).toBe("updated");

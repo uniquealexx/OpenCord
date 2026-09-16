@@ -732,6 +732,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       leave: async () => null,
       updateState: () => null,
       disconnect: async () => null,
+      move: async () => null,
       setModeratorMuted: async (userId, muted) => {
         moderationCalls.push({ userId, muted });
         return { userId, channelId: voiceChannelId, muted, deafened: false, serverMuted: muted, viewingScreenShareUserId: null };
@@ -792,6 +793,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
         return presence;
       },
       disconnect: async () => null,
+      move: async () => null,
       setModeratorMuted: async () => null,
       // Микрофон на самом деле продолжает передавать: заявленная заглушка — ложь.
       verifySelfMute: async (userId) => {
@@ -849,6 +851,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       leave: async () => { const left = presence; presence = null; return left; },
       updateState: () => null,
       disconnect: async () => null,
+      move: async () => null,
       setModeratorMuted: async () => null,
       verifySelfMute: async () => null,
       removeChannel: async () => [],
@@ -898,6 +901,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       leave: async () => { const left = presence; presence = null; return left; },
       updateState: () => null,
       disconnect: async () => null,
+      move: async () => null,
       setModeratorMuted: async () => null,
       verifySelfMute: async () => null,
       removeChannel: async () => [],
@@ -950,6 +954,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       leave: async () => { leaveCalls += 1; const left = presence; presence = null; return left; },
       updateState: () => null,
       disconnect: async () => null,
+      move: async () => null,
       setModeratorMuted: async () => null,
       verifySelfMute: async () => null,
       removeChannel: async () => [],
@@ -1006,6 +1011,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       leave: async () => { const left = presence; presence = null; return left; },
       updateState: () => null,
       disconnect: async () => { const left = presence; presence = null; return left; },
+      move: async () => null,
       setModeratorMuted: async () => null,
       verifySelfMute: async () => null,
       removeChannel: async () => [],
@@ -1060,6 +1066,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       updateState: () => null,
       // Участник не в канале: голосовой сервис отключать некого.
       disconnect: async () => null,
+      move: async () => null,
       setModeratorMuted: async () => null,
       verifySelfMute: async () => null,
       removeChannel: async () => [],
@@ -1111,6 +1118,7 @@ it("forbids the sender from reacting to their own anonymous private message", as
       leave: async () => { const left = presence; presence = null; return left; },
       updateState: () => null,
       disconnect: async () => { const left = presence; presence = null; return left; },
+      move: async () => null,
       setModeratorMuted: async (userId, muted) => {
         if (!presence || presence.userId !== userId) return null;
         presence = { ...presence, serverMuted: muted, muted };

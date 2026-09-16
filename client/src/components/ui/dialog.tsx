@@ -14,7 +14,7 @@ export const DialogClose = DialogPrimitive.Close;
 /** Насколько нужно утянуть лист вниз, чтобы он закрылся. */
 const SHEET_DISMISS_DISTANCE = 96;
 
-export function DialogContent({ className, hideClose = false, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content> & { hideClose?: boolean }): React.ReactElement {
+export function DialogContent({ className, hideClose = false, header, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content> & { hideClose?: boolean; header?: React.ReactNode }): React.ReactElement {
   const { t } = useI18n();
   const contentRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
@@ -95,6 +95,11 @@ export function DialogContent({ className, hideClose = false, children, ...props
         )}
         {...props}
       >
+        {/* An optional full-bleed header (for example a dialog banner) must render
+            outside the scroll body: the body reserves a scrollbar gutter with
+            `scrollbar-gutter: stable`, and that strip cannot be painted over, so a
+            full-width block placed inside would leave a gap on the right. */}
+        {header ? <div className="relative shrink-0">{header}</div> : null}
         <div
           ref={bodyRef}
           className="scrollbar-thin m-1 min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl p-5 pr-6 max-md:m-0 max-md:rounded-none max-md:px-4 max-md:pb-[calc(1rem+var(--shell-inset-bottom,0px))] max-md:pt-5"

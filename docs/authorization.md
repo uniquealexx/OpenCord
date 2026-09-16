@@ -18,7 +18,7 @@ On top of the three legacy roles, the server keeps a `server_roles` table (migra
 
 - The `owner` stays outside the table: it is bound to the deploy public key, cannot be transferred or removed, always holds all permissions and sits on top of the hierarchy.
 - A member's effective permissions are the union of the assigned roles; the hierarchy top is the max position. The legacy single `role` field keeps working and is derived from the assignments (seeded administrator present means `administrator`, otherwise `member`), so old clients and snapshots keep parsing.
-- Moderator actions (`member.kick`, `member.ban`, `member.role.set`, `member.roles.set`, `chat.mute.set`, `voice.member.disconnect`, `voice.member.mute`) require a strictly higher top position than the target. The owner is exempt; nobody can touch the owner, change their own roles with these commands, or grant a position above their own top.
+- Moderator actions (`member.kick`, `member.ban`, `member.role.set`, `member.roles.set`, `chat.mute.set`, `voice.member.disconnect`, `voice.member.mute`, `voice.member.move`) require a strictly higher top position than the target. The owner is exempt; nobody can touch the owner, change their own roles with these commands, or grant a position above their own top.
 - Role management events (`role.create`, `role.update`, `role.delete`, `role.list`, `member.roles.set`) require `MANAGE_ROLES`. The snapshot carries the `roles` list and every member carries `roleIds`; `currentUser.permissions` is the computed union.
 
 ## Channel permission overwrites (protocol v49)
@@ -34,6 +34,10 @@ Because no dedicated view/send permissions exist, v49 reuses the voice pair as c
 Moderator actions are recorded in the append-only `audit_log` table (migration `038_audit_log`): each row has an `id`, an `at` timestamp, an `actor_id`, an `action` reusing an existing event name (`member.kick`/`member.ban`/`member.unban`, `member.role.set`/`member.roles.set`, `role.create`/`role.update`/`role.delete`, `channel.create`/`channel.update`/`channel.delete`, `channel.overwrites.set`, `channel.slowmode.set`, `message.delete`/`message.bulkDelete`, `server.settings.update`/`server.avatar.update`/`server.banner.update`), a nullable `target_id`, and a nullable `detail` (JSON/text, 2000 chars max). No new permissions were introduced. Rows are written best-effort inside the existing handlers — a log error never fails the action — and the table is capped at the latest 1000 rows (pruned on insert).
 
 Reading requires `MANAGE_SERVER` (the owner plus whoever holds it via custom roles): `audit.list` takes a `limit` (1–100) and a nullable `before` cursor and answers `audit.result` with newest-first `entries` plus `hasMore`. Members without `MANAGE_SERVER` receive `FORBIDDEN`.
+
+## Voice member move (protocol v52)
+
+Moving members between voice channels is Discord-like drag-and-drop backed by `voice.member.move` (`userId`, `targetChannelId`) and the new `VOICE_MOVE_MEMBERS` permission (migration `040_voice_move_permission`): the seeded `administrator` row gains it, `member` does not, and the owner always holds it. The check is `VOICE_MOVE_MEMBERS` plus the hierarchy rule — a strictly higher top position than the target, the owner exempt, nobody moves the owner, self-move answers `CONFLICT`. The target must be a voice channel (`NOT_FOUND` otherwise), the moved user must currently be in voice and not already there (`CONFLICT` with a clear message), must hold effective `VOICE_CONNECT` in the target (`FORBIDDEN` otherwise), and the target must have a free slot (`VOICE_ROOM_FULL`). On success the server broadcasts `voice.participant.moved` (`userId`, `channelId`, `reason: "moved"`), starts no rejoin cooldown (a move is not a punishment), and writes the `voice.member.move` audit entry best-effort (2000 chars max, never fails the action).
 
 ## How the owner is determined
 
@@ -83,7 +87,7 @@ After a change, the server sends each connection a personalized snapshot. In the
 
 - `owner` остаётся вне таблицы: привязан к ключу развёртывания, не передаётся и не снимается, всегда имеет все права и стоит на вершине иерархии.
 - Эффективные права участника — объединение назначенных ролей; вершина иерархии — max position. Legacy-поле `role` продолжает работать и выводится из назначений (есть сид administrator — `administrator`, иначе `member`), поэтому старые клиенты и snapshot продолжают разбираться.
-- Модерационные действия (`member.kick`, `member.ban`, `member.role.set`, `member.roles.set`, `chat.mute.set`, `voice.member.disconnect`, `voice.member.mute`) требуют строго более высокой вершины, чем у цели. Владелец вне иерархии; владельца трогать нельзя, собственные роли этими командами менять нельзя, выше собственной вершины выдавать нельзя.
+- Модерационные действия (`member.kick`, `member.ban`, `member.role.set`, `member.roles.set`, `chat.mute.set`, `voice.member.disconnect`, `voice.member.mute`, `voice.member.move`) требуют строго более высокой вершины, чем у цели. Владелец вне иерархии; владельца трогать нельзя, собственные роли этими командами менять нельзя, выше собственной вершины выдавать нельзя.
 - События управления ролями (`role.create`, `role.update`, `role.delete`, `role.list`, `member.roles.set`) требуют `MANAGE_ROLES`. Snapshot несёт список `roles`, каждый участник — `roleIds`; `currentUser.permissions` — вычисленное объединение.
 
 ## Переопределения прав канала (протокол v49)
@@ -99,6 +103,10 @@ After a change, the server sends each connection a personalized snapshot. In the
 Модерационные действия записываются в append-only таблицу `audit_log` (миграция `038_audit_log`): у каждой строки есть `id`, метка `at`, `actor_id`, `action` с переиспользованием существующего имени события (`member.kick`/`member.ban`/`member.unban`, `member.role.set`/`member.roles.set`, `role.create`/`role.update`/`role.delete`, `channel.create`/`channel.update`/`channel.delete`, `channel.overwrites.set`, `channel.slowmode.set`, `message.delete`/`message.bulkDelete`, `server.settings.update`/`server.avatar.update`/`server.banner.update`), nullable `target_id` и nullable `detail` (JSON/текст до 2000 символов). Новых прав не вводилось. Строки пишутся best-effort внутри существующих обработчиков — ошибка лога никогда не роняет действие — а таблица ограничена последними 1000 строками (prune на insert).
 
 Чтение требует `MANAGE_SERVER` (владелец и держатели права через кастомные роли): `audit.list` принимает `limit` (1–100) и nullable-курсор `before`, отвечает `audit.result` с `entries` от новых к старым плюс `hasMore`. Участники без `MANAGE_SERVER` получают `FORBIDDEN`.
+
+## Перемещение участников голоса (протокол v52)
+
+Перемещение участников между голосовыми каналами — Discord-подобный drag-and-drop поверх `voice.member.move` (`userId`, `targetChannelId`) и нового права `VOICE_MOVE_MEMBERS` (миграция `040_voice_move_permission`): сид `administrator` его получает, `member` — нет, владелец имеет его всегда. Проверка — `VOICE_MOVE_MEMBERS` плюс правило иерархии: строго более высокая вершина, чем у цели, владелец вне иерархии, владельца перемещать нельзя, самоперемещение отвечает `CONFLICT`. Цель обязана быть голосовым каналом (иначе `NOT_FOUND`), перемещаемый обязан находиться в голосе и ещё не быть там (иначе `CONFLICT` с понятным сообщением), обязан иметь эффективный `VOICE_CONNECT` в цели (иначе `FORBIDDEN`), а в цели должно быть свободное место (иначе `VOICE_ROOM_FULL`). При успехе сервер рассылает `voice.participant.moved` (`userId`, `channelId`, `reason: "moved"`), паузу на возвращение не ставит (перемещение — не наказание) и пишет audit-запись `voice.member.move` best-effort (до 2000 символов, никогда не роняет действие).
 
 ## Как определяется владелец
 
@@ -164,6 +172,10 @@ Snapshot сервера содержит роль и вычисленные ра
 管理操作记录在只追加的 `audit_log` 表中（迁移 `038_audit_log`）：每行包含 `id`、`at` 时间戳、`actor_id`、`action`（复用现有事件名：`member.kick`/`member.ban`/`member.unban`、`member.role.set`/`member.roles.set`、`role.create`/`role.update`/`role.delete`、`channel.create`/`channel.update`/`channel.delete`、`channel.overwrites.set`、`channel.slowmode.set`、`message.delete`/`message.bulkDelete`、`server.settings.update`/`server.avatar.update`/`server.banner.update`）、可空 `target_id` 和可空 `detail`（JSON/文本，最多 2000 字符）。未引入新权限。记录在现有处理器内以 best-effort 写入——日志错误绝不导致主操作失败——表仅保留最近 1000 条（写入时裁剪）。
 
 读取需要 `MANAGE_SERVER`（所有者及通过自定义角色持有该权限者）：`audit.list` 接受 `limit`（1–100）和可空游标 `before`，以 `audit.result` 应答（`entries` 按时间倒序及 `hasMore`）。没有 `MANAGE_SERVER` 的成员会收到 `FORBIDDEN`。
+
+## 语音成员移动（协议 v52）
+
+在语音频道之间移动成员是类似 Discord 的拖拽操作，由 `voice.member.move`（`userId`、`targetChannelId`）和新权限 `VOICE_MOVE_MEMBERS` 支撑（迁移 `040_voice_move_permission`）：种子 `administrator` 行获得该权限，`member` 没有，所有者始终拥有。校验为 `VOICE_MOVE_MEMBERS` 加层级规则——自身最高位置须严格高于目标，所有者不受层级限制，无人可移动所有者，自己移动自己返回 `CONFLICT`。目标须为语音频道（否则 `NOT_FOUND`），被移动用户须当前在语音中且尚未在目标频道（否则返回含义明确的 `CONFLICT`），须在目标频道拥有有效 `VOICE_CONNECT`（否则 `FORBIDDEN`），目标须有空位（否则 `VOICE_ROOM_FULL`）。成功后服务器广播 `voice.participant.moved`（`userId`、`channelId`、`reason: "moved"`），不设重新加入冷却（移动不是惩罚），并以 best-effort 写入 `voice.member.move` 审计条目（最多 2000 字符，绝不导致主操作失败）。
 
 ## 如何确定所有者
 

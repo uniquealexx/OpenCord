@@ -53,6 +53,7 @@ export interface VoiceService {
   leave(userId: string): Promise<VoicePresence | null>;
   updateState(userId: string, state: Pick<VoicePresence, "muted" | "deafened" | "viewingScreenShareUserId">): VoicePresence | null;
   disconnect(userId: string, reason: "moderated" | "replaced" | "channel_deleted"): Promise<VoicePresence | null>;
+  move(userId: string, targetChannelId: string): Promise<VoicePresence | null>;
   setModeratorMuted(userId: string, muted: boolean): Promise<VoicePresence | null>;
   /**
    * Сверяет заявленный клиентом мут с настоящим состоянием дорожки в LiveKit.
@@ -102,6 +103,7 @@ export class DisabledVoiceService implements VoiceService {
   async leave(): Promise<VoicePresence | null> { return null; }
   updateState(): VoicePresence | null { return null; }
   async disconnect(): Promise<VoicePresence | null> { return null; }
+  async move(): Promise<VoicePresence | null> { return null; }
   async setModeratorMuted(): Promise<VoicePresence | null> { return null; }
   async verifySelfMute(): Promise<VoicePresence | null> { return null; }
   async removeChannel(): Promise<VoicePresence[]> { return []; }
@@ -199,6 +201,32 @@ export class LiveKitVoiceService implements VoiceService {
   async disconnect(userId: string, reason: "moderated" | "replaced" | "channel_deleted"): Promise<VoicePresence | null> {
     void reason;
     return this.leave(userId);
+  }
+
+  /**
+   * Перемещение участника между голосовыми каналами (протокол v52).
+   * Mute/deafen/serverMuted сохраняются; просмотр чужого экрана сбрасывается,
+   * если presenter остался в старом канале. LiveKit не умеет серверного move
+   * между комнатами, поэтому участник убирается из старой комнаты, presence
+   * переставляется в новую, а целевой клиент переподключается сам по событию
+   * `voice.participant.moved` через обычный `voice.join` (новый токен/комната).
+   */
+  async move(userId: string, targetChannelId: string): Promise<VoicePresence | null> {
+    const current = this.presences.get(userId);
+    if (!current || current.channelId === targetChannelId) return null;
+    const oldRoom = this.roomsByChannel.get(current.channelId);
+    if (oldRoom) {
+      try { await this.client.removeParticipant(oldRoom, userId); } catch { /* Участник мог уже отключиться сам. */ }
+    }
+    this.joinReservations.delete(userId);
+    const viewed = current.viewingScreenShareUserId ? this.presences.get(current.viewingScreenShareUserId) : null;
+    const next: VoicePresence = {
+      ...current,
+      channelId: targetChannelId,
+      viewingScreenShareUserId: viewed && viewed.channelId === targetChannelId ? viewed.userId : null,
+    };
+    this.presences.set(userId, next);
+    return next;
   }
 
   async setModeratorMuted(userId: string, muted: boolean): Promise<VoicePresence | null> {
