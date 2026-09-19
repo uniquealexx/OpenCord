@@ -68,7 +68,7 @@ describe("voice move permission", () => {
   });
 
   it("validates the move events in the shared schema", () => {
-    expect(PROTOCOL_VERSION).toBe(52);
+    expect(PROTOCOL_VERSION).toBe(53);
     expect(CUSTOM_ROLE_PERMISSIONS_MAX).toBe(10);
   });
 
