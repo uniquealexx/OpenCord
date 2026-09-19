@@ -317,8 +317,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await runRetentionCleanup();
       if (!(await repository.channelExists(event.channelId))) return sendError(connection.socket, event.requestId, "NOT_FOUND", "Канал не найден");
       if (!(await canSeeChannel(connection.userId, event.channelId))) return sendError(connection.socket, event.requestId, "FORBIDDEN", "Нет доступа к этому каналу");
-      const messages = await repository.getHistory(event.channelId, event.limit, connection.userId);
-      return send(connection.socket, { type: "history.result", requestId: event.requestId, channelId: event.channelId, messages });
+      const page = await repository.getHistory(event.channelId, event.limit, connection.userId, event.before);
+      return send(connection.socket, { type: "history.result", requestId: event.requestId, channelId: event.channelId, messages: page.messages, hasMore: page.hasMore });
     }
     if (event.type === "message.search") {
       await runRetentionCleanup();

@@ -22,6 +22,7 @@ export const OWNER_TOP_POSITION = 10_000 as const;
 export const ALL_PERMISSIONS: Permission[] = ["MANAGE_SERVER", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "KICK_MEMBERS", "DELETE_SERVER", "VOICE_CONNECT", "VOICE_SPEAK", "VOICE_MODERATE", "VOICE_MOVE_MEMBERS"];
 interface DeleteCandidateRow extends QueryRow { author_id: string; channel_id: string; attachment_id: string | null; storage_key: string | null }
 interface MessageUpdateRow extends MessageRow { removed_storage_keys: string[] | null }
+type MessageHistoryPage = { messages: ChatMessage[]; hasMore: boolean };
 
 /** Профиль от клиента. `discriminator` необязателен: его выдаёт сервер, клиент лишь просит. */
 type ProfileInput = Pick<PublicProfile, "username" | "avatar"> & Partial<Omit<PublicProfile, "username" | "avatar">>;
@@ -961,19 +962,32 @@ export class ChatRepository {
     return rows.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
   }
 
-  async getHistory(channelId: string, limit: number, viewerId: string): Promise<ChatMessage[]> {
+  async getHistory(channelId: string, limit: number, viewerId: string, before: string | null = null): Promise<MessageHistoryPage> {
+    // Курсор пагинации (протокол v53): точная пара (created_at, id) сообщения-границы,
+    // прочитанная из базы — без потери точности при передаче через клиент.
+    let cursor: { createdAt: string; id: string } | null = null;
+    if (before) {
+      const [row] = await this.database.query<{ created_at: string; id: string }>(
+        "SELECT created_at::text AS created_at, id FROM messages WHERE id = $1",
+        [before],
+      );
+      if (!row) return { messages: [], hasMore: false }; // неизвестный курсор — считаем историю исчерпанной
+      cursor = { createdAt: row.created_at, id: row.id };
+    }
     const rows = await this.database.query<MessageRow>(
       `SELECT m.id, m.channel_id, m.author_id, coalesce(u.username, 'unknown') AS author_name, u.avatar AS author_avatar, m.content, m.created_at, m.edited_at, m.kind, m.target_user_id, m.anonymous, m.reply_to_message_id, m.pinned, m.pinned_at
        FROM messages m JOIN users u ON u.id = m.author_id
        WHERE m.channel_id = $1 AND (m.kind = 'chat' OR m.author_id = $3 OR m.target_user_id = $3)
-       ORDER BY m.created_at DESC LIMIT $2`,
-      [channelId, limit, viewerId],
+       AND ($4::timestamptz IS NULL OR (m.created_at, m.id) < ($4::timestamptz, $5::uuid))
+       ORDER BY m.created_at DESC, m.id DESC LIMIT $2`,
+      [channelId, limit + 1, viewerId, cursor?.createdAt ?? null, cursor?.id ?? null],
     );
-    const ordered = rows.reverse();
+    const hasMore = rows.length > limit;
+    const ordered = rows.slice(0, limit).reverse();
     const attachments = await this.getAttachmentsForMessages(ordered.map((message) => message.id));
     const messageMentions = await this.getMentionsForMessages(ordered.map((message) => message.id));
     const messageReactions = await this.getReactionsForMessages(ordered.map((message) => message.id));
-    return ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId));
+    return { messages: ordered.map((message) => mapMessage(message, attachments.get(message.id) ?? [], messageMentions.get(message.id) ?? [], messageReactions.get(message.id) ?? [])).map((message) => messageForViewer(message, viewerId)), hasMore };
   }
 
   async updateServerSettings(settings: Omit<ServerSettings, "description" | "helpPage" | "welcomeChannelId" | "welcomeMessage"> & { description?: string; helpPage?: ServerHelp; welcomeChannelId?: string | null; welcomeMessage?: string }): Promise<void> {

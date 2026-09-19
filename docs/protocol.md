@@ -1,4 +1,6 @@
-# OpenCord Protocol v52 (English)
+# OpenCord Protocol v53 (English)
+
+Protocol v53 adds message history pagination. `history.request` gains an optional `before` field — the id of the oldest message the client has already loaded for the channel — and `history.result` gains `hasMore`, which tells whether older messages remain. The server resolves the cursor from the stored message itself and compares exact `(created_at, id)` pairs, so a page boundary that falls inside a group of messages sharing one timestamp neither skips nor repeats messages; the same pair orders the query. A request without `before` returns the newest page exactly as before, an unknown cursor answers with an empty page and `hasMore: false`, and the private (`pm`/`apm`) visibility filter applies to every page. The client loads older pages automatically when the reader scrolls to the top of a channel (with a small indicator while a page is on the way), keeps the reading position stable while older messages are inserted above, and keeps filling a first page shorter than the viewport until the list scrolls.
 
 Protocol v52 adds a Discord-like voice member move (migration `040_voice_move_permission`, one new permission `VOICE_MOVE_MEMBERS`). `voice.member.move` (`userId`, `targetChannelId`) requires `VOICE_MOVE_MEMBERS` plus a strictly higher hierarchy top than the target (the owner is exempt, nobody moves the owner, self-move answers `CONFLICT`); the target must be a voice channel, the moved user must currently be in voice and must hold effective `VOICE_CONNECT` in the target, the target must have a free slot (`VOICE_ROOM_FULL` otherwise), and the request shares the `voice.join` rate limit. On success the server moves presence (keeping mute/deafen state), removes the user from the old LiveKit room, broadcasts `voice.participant.moved` (`userId`, `channelId`, `reason: "moved"`) without a rejoin cooldown, records the `voice.member.move` audit entry best-effort, and the moved client rejoins via the regular `voice.join` flow. The client offers drag-and-drop between voice channels plus a Move to context menu; seeded `administrator` holds the permission, `member` does not.
 
@@ -196,7 +198,9 @@ Local development uses PGlite with PostgreSQL-compatible migrations. Production 
 
 ---
 
-# OpenCord Protocol v52 (Русский)
+# OpenCord Protocol v53 (Русский)
+
+Протокол v53 добавляет постраничную загрузку истории. У `history.request` появляется необязательное поле `before` — id самого старого уже загруженного клиентом сообщения канала, — а `history.result` получает `hasMore`, сообщающий, остались ли более старые сообщения. Сервер вычисляет курсор по самому хранящемуся сообщению и сравнивает точные пары `(created_at, id)`, поэтому граница страницы внутри группы сообщений с одинаковой меткой времени не пропускает и не повторяет сообщения; та же пара задаёт порядок запроса. Запрос без `before` возвращает новейшую страницу, как раньше; неизвестный курсор отвечает пустой страницей и `hasMore: false`; фильтр видимости личных (`pm`/`apm`) сообщений действует на каждой странице. Клиент автоматически подгружает старые страницы, когда читатель прокручивает канал к верхней кромке (показывая небольшой индикатор, пока страница в пути), удерживает позицию чтения, пока старые сообщения вставляются сверху, и дозаполняет первую страницу, если она короче окна, пока лента не станет прокручиваемой.
 
 Протокол v52 добавляет Discord-подобное перемещение участников между голосовыми каналами (миграция `040_voice_move_permission`, одно новое право `VOICE_MOVE_MEMBERS`). `voice.member.move` (`userId`, `targetChannelId`) требует `VOICE_MOVE_MEMBERS` плюс строго более высокую вершину иерархии, чем у цели (владелец вне иерархии, владельца перемещать нельзя, самоперемещение отвечает `CONFLICT`); цель обязана быть голосовым каналом, перемещаемый обязан находиться в голосе и иметь эффективный `VOICE_CONNECT` в цели, в цели должно быть свободное место (иначе `VOICE_ROOM_FULL`), а запрос делит лимит `voice.join`. При успехе сервер переставляет presence (сохраняя мут/deafen), убирает пользователя из старой LiveKit-комнаты, рассылает `voice.participant.moved` (`userId`, `channelId`, `reason: "moved"`) без паузы на возвращение, пишет audit-запись `voice.member.move` best-effort, а перемещённый клиент переподключается обычным `voice.join`. Клиент предлагает drag-and-drop между голосовыми каналами плюс контекстное меню Move to; сид `administrator` право имеет, `member` — нет.
 
@@ -392,7 +396,9 @@ Electron-клиент показывает изображения до 10 МБ �
 
 ---
 
-# OpenCord 协议 v52 (中文)
+# OpenCord 协议 v53 (中文)
+
+协议 v53 新增消息历史分页。`history.request` 增加可选字段 `before`——客户端已为该频道加载的最旧消息的 id——`history.result` 增加 `hasMore`，用于表示是否还有更早的消息。服务器根据所存储消息本身解析游标，并比较精确的 `(created_at, id)` 对，因此落在同一时间戳消息组内部的分页边界既不会跳过也不会重复消息；同一对也用于确定查询顺序。不带 `before` 的请求像以前一样返回最新一页；未知游标返回空页和 `hasMore: false`；私聊（`pm`/`apm`）可见性过滤对每一页都生效。当读者滚动到频道顶部时，客户端会自动加载更早的页面（页面加载期间显示一个小指示器），在更早的消息插入到上方时保持阅读位置稳定，并在第一页短于视口时持续填充，直到列表可以滚动。
 
 协议 v52 新增类似 Discord 的语音成员移动（迁移 `040_voice_move_permission`，新增权限 `VOICE_MOVE_MEMBERS`）。`voice.member.move`（`userId`、`targetChannelId`）需要 `VOICE_MOVE_MEMBERS`，且操作者层级顶点须严格高于目标（所有者不受层级限制，无人可移动所有者，自己移动自己返回 `CONFLICT`）；目标须为语音频道，被移动用户须当前在语音中且在目标频道拥有有效 `VOICE_CONNECT`，目标须有空位（否则返回 `VOICE_ROOM_FULL`），请求与 `voice.join` 共用限速。成功后服务器移动在线状态（保留静音/耳聋状态），将用户从旧 LiveKit 房间移除，广播 `voice.participant.moved`（`userId`、`channelId`、`reason: "moved"`）且不设重新加入冷却，以 best-effort 记录 `voice.member.move` 审计条目，被移动客户端通过常规 `voice.join` 流程重新加入。客户端提供语音频道间拖拽及 Move to 上下文菜单；种子 `administrator` 拥有该权限，`member` 没有。
 

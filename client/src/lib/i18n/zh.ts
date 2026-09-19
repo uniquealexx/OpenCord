@@ -112,6 +112,7 @@ export const zh = {
   chat: {
     placeholder: "发送消息到",
     empty: "这里还很安静。开始对话吧。",
+    loadingOlder: "正在加载更早的消息…",
     members: "成员",
     openChannels: "打开频道",
     mockNotice: "消息仅保存在本地",

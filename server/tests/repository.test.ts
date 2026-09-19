@@ -93,9 +93,9 @@ describe("ChatRepository", () => {
     const updated = await repository.updateMessage(messageId, "user-1", "Исправленное сообщение");
     expect(updated?.message).toMatchObject({ id: messageId, content: "Исправленное сообщение" });
     expect(updated?.message.editedAt).toBeTruthy();
-    expect(await repository.getHistory(channel!.id, 50, "user-1")).toEqual([updated?.message]);
+    expect((await repository.getHistory(channel!.id, 50, "user-1")).messages).toEqual([updated?.message]);
     expect(await repository.deleteMessage(messageId, "user-1", false)).toMatchObject({ channelId: channel!.id });
-    expect(await repository.getHistory(channel!.id, 50, "user-1")).toEqual([]);
+    expect((await repository.getHistory(channel!.id, 50, "user-1")).messages).toEqual([]);
   });
 
   it("stores reply references and clears them when the source message is deleted", async () => {
@@ -109,7 +109,7 @@ describe("ChatRepository", () => {
     expect(await repository.canReplyToMessage(sourceId, channel.id, "user-1")).toBe(true);
 
     await repository.deleteMessage(sourceId, "user-1", false);
-    expect(await repository.getHistory(channel.id, 50, "user-1")).toEqual([expect.objectContaining({ id: replyId, replyToMessageId: null })]);
+    expect((await repository.getHistory(channel.id, 50, "user-1")).messages).toEqual([expect.objectContaining({ id: replyId, replyToMessageId: null })]);
   });
 
   it("replaces message attachments and returns removed storage keys", async () => {
@@ -143,7 +143,7 @@ describe("ChatRepository", () => {
     );
 
     // На чтении мусор не доходит до клиента, даже пока лежит в базе.
-    const [visible] = await repository.getHistory(channel.id, 50, "user-1");
+    const [visible] = (await repository.getHistory(channel.id, 50, "user-1")).messages;
     expect(visible?.reactions).toEqual([{ emoji: "👍", userIds: ["user-1"] }]);
 
     expect(await repository.purgeInvalidReactions()).toBe(2);
@@ -241,7 +241,7 @@ describe("ChatRepository", () => {
     await repository.createMessage(randomUUID(), created.id, "user-1", "Будет удалено вместе с каналом");
     expect(await repository.deleteChannel(created.id)).toBe(true);
     expect(await repository.deleteChannel(created.id)).toBe(false);
-    expect(await repository.getHistory(created.id, 50, "user-1")).toEqual([]);
+    expect((await repository.getHistory(created.id, 50, "user-1")).messages).toEqual([]);
   });
 
   it("persists finite and unlimited voice channel capacity", async () => {
@@ -339,13 +339,13 @@ describe("ChatRepository", () => {
     expect(await repository.leaveServer("second")).toBe("member");
     expect((await repository.listMembers(new Map())).some((member) => member.id === "second")).toBe(false);
     expect((await database.query<{ display_name: string; avatar: string | null }>("SELECT display_name, avatar FROM users WHERE id = $1", ["second"]))[0]).toMatchObject({ display_name: "second", avatar });
-    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorName: "second", authorAvatar: avatar, content: "Сообщение остаётся" });
+    expect((await repository.getHistory(textChannel.id, 10, "member")).messages[0]).toMatchObject({ authorName: "second", authorAvatar: avatar, content: "Сообщение остаётся" });
     expect(await database.query<{ reason: string }>("SELECT reason FROM server_departures WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"])).toEqual([{ reason: "leave" }]);
 
     await database.query("UPDATE server_departures SET anonymize_after = now() - interval '1 second' WHERE server_id = $1 AND user_id = $2", [DEFAULT_SERVER_ID, "second"]);
     expect(await repository.performRetentionCleanup()).toEqual({ anonymizedUserIds: ["second"], expiredBanUserIds: [] });
     expect((await database.query<{ public_key: string; display_name: string; username: string | null; avatar: string | null; member_background: string | null }>("SELECT public_key, display_name, username, avatar, member_background FROM users WHERE id = $1", ["second"]))[0]).toEqual({ public_key: "second-public-key", display_name: "unknown", username: null, avatar: null, member_background: null });
-    expect((await repository.getHistory(textChannel.id, 10, "member"))[0]).toMatchObject({ authorId: "second", authorName: "unknown", authorAvatar: null, content: "Сообщение остаётся" });
+    expect((await repository.getHistory(textChannel.id, 10, "member")).messages[0]).toMatchObject({ authorId: "second", authorName: "unknown", authorAvatar: null, content: "Сообщение остаётся" });
 
     await repository.upsertUser("second", "second-public-key", { username: "second", discriminator: "9999", avatar });
     await repository.ensureMembership("second", "second-public-key");
@@ -491,12 +491,12 @@ describe("ChatRepository", () => {
     const created = await repository.createMessage(messageId, channel.id, "author", "Привет <@mentioned>!", [], ["mentioned", "mentioned", "outsider"]);
     expect(created?.mentions).toEqual([{ userId: "mentioned" }]);
 
-    const history = await repository.getHistory(channel.id, 50, "author");
+    const history = (await repository.getHistory(channel.id, 50, "author")).messages;
     expect(history[0]?.mentions).toEqual([{ userId: "mentioned" }]);
 
     const updated = await repository.updateMessage(messageId, "author", "Привет всем!", [], ["author"]);
     expect(updated?.message.mentions).toEqual([{ userId: "author" }]);
-    expect((await repository.getHistory(channel.id, 50, "author"))[0]?.mentions).toEqual([{ userId: "author" }]);
+    expect((await repository.getHistory(channel.id, 50, "author")).messages[0]?.mentions).toEqual([{ userId: "author" }]);
 
     const search = await repository.searchMessages({ query: "Привет", authorId: "author", channelId: null, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(search.messages[0]?.mentions).toEqual([{ userId: "author" }]);
@@ -521,12 +521,12 @@ describe("ChatRepository", () => {
     const another = await repository.toggleReaction(messageId, "reactor", "❤️");
     expect(another).toEqual([{ emoji: "👍", userIds: ["author", "reactor"] }, { emoji: "❤️", userIds: ["reactor"] }]);
 
-    const history = await repository.getHistory(channel.id, 50, "author");
+    const history = (await repository.getHistory(channel.id, 50, "author")).messages;
     expect(history[0]?.reactions).toEqual(another);
 
     const removed = await repository.toggleReaction(messageId, "author", "👍");
     expect(removed).toEqual([{ emoji: "👍", userIds: ["reactor"] }, { emoji: "❤️", userIds: ["reactor"] }]);
-    expect((await repository.getHistory(channel.id, 50, "author"))[0]?.reactions).toEqual(removed);
+    expect((await repository.getHistory(channel.id, 50, "author")).messages[0]?.reactions).toEqual(removed);
 
     const search = await repository.searchMessages({ query: "реакций", authorId: "author", channelId: null, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(search.messages[0]?.reactions).toEqual(removed);
@@ -549,7 +549,7 @@ describe("ChatRepository", () => {
     const apm = await repository.createMessage(randomUUID(), channel.id, "sender", "Секрет", [], [], "apm", "receiver", true);
     expect(apm).toMatchObject({ kind: "apm", anonymous: true });
 
-    const forReceiver = await repository.getHistory(channel.id, 50, "receiver");
+    const forReceiver = (await repository.getHistory(channel.id, 50, "receiver")).messages;
     expect(forReceiver.map((message) => message.id)).toEqual([pm!.id, apm!.id]);
     const masked = forReceiver.find((message) => message.id === apm!.id)!;
     expect(masked.authorId).not.toBe("sender");
@@ -557,10 +557,10 @@ describe("ChatRepository", () => {
     expect(masked.authorAvatar).toBeNull();
     expect(forReceiver.find((message) => message.id === pm!.id)?.authorName).toBe("sender");
 
-    const forSender = await repository.getHistory(channel.id, 50, "sender");
+    const forSender = (await repository.getHistory(channel.id, 50, "sender")).messages;
     expect(forSender.find((message) => message.id === apm!.id)?.authorId).toBe("sender");
 
-    expect(await repository.getHistory(channel.id, 50, "outsider")).toEqual([]);
+    expect((await repository.getHistory(channel.id, 50, "outsider")).messages).toEqual([]);
 
     const search = await repository.searchMessages({ query: "", authorId: null, channelId: channel.id, contentTypes: ["text"], pinnedOnly: false, offset: 0, limit: 25 });
     expect(search.messages.map((message) => message.id)).not.toContain(pm!.id);

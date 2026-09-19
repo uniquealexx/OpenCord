@@ -1354,6 +1354,44 @@ it("forbids the sender from reacting to their own anonymous private message", as
     outsider.socket.close();
     await Promise.all(closed);
   }, 15_000);
+
+  it("pages history with a before cursor and reports hasMore", async () => {
+    const app = await buildApp({ database: new PGliteDatabase("memory://"), buildInfo: testBuildInfo });
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Unexpected test address");
+    const url = `ws://127.0.0.1:${address.port}/ws`;
+
+    const owner = await connectAndAuthenticate(url, "Owner");
+    const channel = owner.snapshot.server.channels.find((item) => item.kind === "text")!;
+
+    for (let index = 0; index < 5; index += 1) {
+      const created = waitForEvent(owner.socket, "message.created");
+      owner.socket.send(JSON.stringify({ type: "chat.send", requestId: randomUUID(), channelId: channel.id, content: `Сообщение ${index}` }));
+      expect((await created).type).toBe("message.created");
+    }
+
+    const fullRequest = waitForEvent(owner.socket, "history.result");
+    owner.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel.id, limit: 50 }));
+    const full = await fullRequest;
+    if (full.type !== "history.result") throw new Error("History expected");
+    expect(full.messages).toHaveLength(5);
+    expect(full.hasMore).toBe(false);
+
+    const cursor = full.messages[3]!;
+    const olderRequest = waitForEvent(owner.socket, "history.result");
+    owner.socket.send(JSON.stringify({ type: "history.request", requestId: randomUUID(), channelId: channel.id, limit: 50, before: cursor.id }));
+    const page = await olderRequest;
+    if (page.type !== "history.result") throw new Error("History expected");
+    expect(page.messages.map((message) => message.id)).toEqual(full.messages.slice(0, 3).map((message) => message.id));
+    expect(page.hasMore).toBe(false);
+    expect(page.messages.every((message) => message.createdAt < cursor.createdAt || (message.createdAt === cursor.createdAt && message.id < cursor.id))).toBe(true);
+
+    const closed = once(owner.socket, "close");
+    owner.socket.close();
+    await closed;
+  }, 15_000);
 });
 
 async function connectToDeletedServer(url: string): Promise<Extract<ServerEvent, { type: "server.deleted" }>> {

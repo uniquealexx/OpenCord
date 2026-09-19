@@ -39,7 +39,7 @@ describe("ChatRepository.deleteMessages", () => {
     const result = await repository.deleteMessages([firstId, secondId], channel.id);
     expect(result).toMatchObject({ channelId: channel.id, storageKeys: ["bulk-storage-key"] });
     expect(new Set(result?.deletedIds)).toEqual(new Set([firstId, secondId]));
-    expect(await repository.getHistory(channel.id, 50, "user-1")).toEqual([]);
+    expect((await repository.getHistory(channel.id, 50, "user-1")).messages).toEqual([]);
   });
 
   it("rejects a mixture from another channel and deletes nothing", async () => {
@@ -53,8 +53,8 @@ describe("ChatRepository.deleteMessages", () => {
     await repository.createMessage(secondId, second.id, "user-1", "Во втором");
 
     expect(await repository.deleteMessages([firstId, secondId], first.id)).toBeNull();
-    expect(await repository.getHistory(first.id, 50, "user-1")).toHaveLength(1);
-    expect(await repository.getHistory(second.id, 50, "user-1")).toHaveLength(1);
+    expect((await repository.getHistory(first.id, 50, "user-1")).messages).toHaveLength(1);
+    expect((await repository.getHistory(second.id, 50, "user-1")).messages).toHaveLength(1);
   });
 
   it("rejects private messages and missing ids without deleting anything", async () => {
@@ -69,7 +69,7 @@ describe("ChatRepository.deleteMessages", () => {
     expect(await repository.deleteMessages([regularId, pmId], channel.id)).toBeNull();
     expect(await repository.deleteMessages([regularId, randomUUID()], channel.id)).toBeNull();
     expect(await repository.deleteMessages([], channel.id)).toBeNull();
-    expect(await repository.getHistory(channel.id, 50, "sender")).toHaveLength(2);
+    expect((await repository.getHistory(channel.id, 50, "sender")).messages).toHaveLength(2);
   });
 });
 

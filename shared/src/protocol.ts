@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 52 as const;
+export const PROTOCOL_VERSION = 53 as const;
 export const PROFILE_RETENTION_DAYS = 7 as const;
 export const BAN_DURATION_MINUTES = [10, 30, 60, 360, 720, 1_440, 4_320, 10_080, 43_200] as const;
 export const banDurationMinutesSchema = z.union([
@@ -718,7 +718,8 @@ export const clientEventSchema = z.discriminatedUnion("type", [
     signature: z.string().min(40).max(1_000),
     profile: publicProfileSchema,
   }),
-  z.object({ type: z.literal("history.request"), requestId: requestIdSchema, channelId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }),
+  // Пагинация истории (протокол v53): before — id самого старого загруженного сообщения канала.
+  z.object({ type: z.literal("history.request"), requestId: requestIdSchema, channelId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50), before: z.string().uuid().nullable().default(null) }),
   z.object({ type: z.literal("message.search"), requestId: requestIdSchema, filters: messageSearchFiltersSchema }),
   z.object({ type: z.literal("chat.send"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().max(4_000), attachmentIds: attachmentIdsSchema.default([]), mentions: mentionIdsSchema.default([]), replyToMessageId: messageReplyIdSchema }),
   z.object({ type: z.literal("chat.pm"), requestId: requestIdSchema, channelId: z.string().uuid(), content: z.string().trim().min(1).max(4_000), targetUserId: privateMessageTargetSchema, replyToMessageId: messageReplyIdSchema }),
@@ -786,7 +787,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("server.avatar.updated"), serverId: z.string().uuid(), avatar: serverAvatarSchema }),
   z.object({ type: z.literal("server.banner.updated"), serverId: z.string().uuid(), banner: serverBannerSchema }),
   z.object({ type: z.literal("server.deleted"), serverId: z.string().uuid() }),
-  z.object({ type: z.literal("history.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema) }),
+  z.object({ type: z.literal("history.result"), requestId: requestIdSchema, channelId: z.string().uuid(), messages: z.array(chatMessageSchema), hasMore: z.boolean().default(false) }),
   z.object({ type: z.literal("message.search.result"), requestId: requestIdSchema, result: messageSearchResultSchema }),
   z.object({ type: z.literal("message.created"), message: chatMessageSchema }),
   z.object({ type: z.literal("message.updated"), message: chatMessageSchema }),

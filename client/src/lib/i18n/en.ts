@@ -111,6 +111,7 @@ export const en = {
   chat: {
     placeholder: "Message in",
     empty: "It's quiet here. Start the conversation.",
+    loadingOlder: "Loading older messages…",
     members: "Members",
     openChannels: "Open channels",
     mockNotice: "Messages are only stored locally",

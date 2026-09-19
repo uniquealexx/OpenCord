@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { DEFAULT_ATTACHMENT_LIMIT_BYTES, DEFAULT_SCREEN_SHARE_MAX_FRAME_RATE, DEFAULT_SCREEN_SHARE_MAX_RESOLUTION, DEFAULT_SERVER_HELP_PAGE, DEFAULT_WELCOME_MESSAGE, MEBIBYTE, PRESENCE_IDLE_MS, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_RESOLUTIONS, SLOWMODE_SECONDS_OPTIONS, type Attachment, type
 BanDurationMinutes, type AuditEntry, type ChannelOverwrite, type CustomRole, type MemberRole, type MessageSearchFilters, type MessageSearchResult, type NameFont, type Permission, type
@@ -200,6 +200,9 @@ export function ClientApp(): React.ReactElement {
   const [auditHasMore, setAuditHasMore] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
+  // Пагинация истории (протокол v53): эфемерное состояние канала — остались ли
+  // более старые страницы и идёт ли загрузка. Намеренно не сохраняется в storage.
+  const [historyMeta, setHistoryMeta] = useState<Record<string, { hasMore: boolean; loading: boolean }>>({});
   // Массовое удаление (протокол v47): режим выбора виден только менеджерам чата.
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   const [bulkSelected, setBulkSelected] = useState<string[]>([]);
@@ -238,6 +241,10 @@ export function ClientApp(): React.ReactElement {
   // Зеркало статуса для интервальной проверки idle без подписки на ре-рендеры.
   const profileStatusRef = useRef<UserStatus | undefined>(undefined);
   const messageScrollRef = useRef<HTMLDivElement>(null);
+  // Якорь сохранения позиции чтения при вставке старых сообщений сверху.
+  const prependAnchorRef = useRef<{ channelId: string; scrollTop: number; scrollHeight: number; wasAtBottom: boolean } | null>(null);
+  // Подавляет прыжок к низу на рендере, вызванном prepend, а не новым сообщением.
+  const skipNextAutoScrollRef = useRef(false);
   const serverMuteStateRef = useRef(false);
   const voiceSoundStatusRef = useRef<VoiceSessionStatus>("idle");
   const mutedBeforeServerMuteRef = useRef(false);
@@ -321,11 +328,23 @@ export function ClientApp(): React.ReactElement {
           servers: current.servers.map((server) => (server.id === connectionServer.id ? { ...server, banner } : server)),
         }));
       },
-      onHistory: (channelId, messages) =>
+      onHistory: (channelId, messages, hasMore) => {
         commit((current) => ({
           ...current,
           messages: [...current.messages.filter((message) => message.channelId !== channelId), ...messages.map(toLocalMessage)],
-        })),
+        }));
+        setHistoryMeta((current) => ({ ...current, [channelId]: { hasMore, loading: false } }));
+      },
+      onOlderHistory: (channelId, messages, hasMore) => {
+        commit((current) => {
+          const others = current.messages.filter((message) => message.channelId !== channelId);
+          const existing = current.messages.filter((message) => message.channelId === channelId);
+          const seen = new Set(existing.map((message) => message.id));
+          const fresh = messages.map(toLocalMessage).filter((message) => !seen.has(message.id));
+          return { ...current, messages: [...others, ...fresh, ...existing] };
+        });
+        setHistoryMeta((current) => ({ ...current, [channelId]: { hasMore: messages.length ? hasMore : false, loading: false } }));
+      },
       onMessage: (message) => {
         pushToastForMessage(message);
         commit((current) =>
@@ -839,6 +858,12 @@ export function ClientApp(): React.ReactElement {
   useEffect(() => {
     const container = messageScrollRef.current;
     if (!container) return;
+    // Рендер, вызванный догрузкой старых сообщений, не прыгает к низу:
+    // позицию чтения восстанавливает отдельный layout-эффект.
+    if (skipNextAutoScrollRef.current) {
+      skipNextAutoScrollRef.current = false;
+      return;
+    }
     const scrollToBottom = (): void => {
       container.scrollTop = container.scrollHeight;
     };
@@ -882,6 +907,27 @@ export function ClientApp(): React.ReactElement {
       observer.disconnect();
     };
   }, [state?.activeChannelId]);
+  // Догрузка старых страниц при прокрутке к верхней кромке (протокол v53).
+  useEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container || !state?.activeChannelId) return;
+    const onScroll = (): void => { if (container.scrollTop <= 160) requestOlderHistory(); };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    // Если лента ещё не прокручивается (окно выше стопки первой страницы), сразу догружаем,
+    // иначе пользователь никогда не дотянется до верхней кромки.
+    if (container.scrollHeight <= container.clientHeight + 32) requestOlderHistory();
+    return () => container.removeEventListener("scroll", onScroll);
+  }, [state?.activeChannelId, state?.messages, historyMeta]);
+  // Сохранение позиции чтения при вставке старых сообщений сверху (протокол v53).
+  useLayoutEffect(() => {
+    const container = messageScrollRef.current;
+    const anchor = prependAnchorRef.current;
+    if (!container || !anchor || anchor.channelId !== state?.activeChannelId) return;
+    prependAnchorRef.current = null;
+    if (anchor.wasAtBottom) container.scrollTop = container.scrollHeight;
+    else container.scrollTop = anchor.scrollTop + (container.scrollHeight - anchor.scrollHeight);
+    skipNextAutoScrollRef.current = true;
+  }, [state?.messages]);
   useEffect(() => {
     if (!highlightedMessageId) return;
     const frame = window.requestAnimationFrame(() => {
@@ -970,6 +1016,26 @@ export function ClientApp(): React.ReactElement {
   const messages = activeChannel ? sortMessagesChronologically(state.messages.filter((message) => message.channelId === activeChannel.id)) : [];
   const draft = activeChannel ? (state.messageDrafts[activeChannel.id] ?? "") : "";
   const visibleMessages = pinnedOnly ? messages.filter((message) => message.pinned) : messages;
+
+  /**
+   * Догрузка более ранней страницы (протокол v53). Вызывается из слушателя прокрутки,
+   * а не из колбэков соединения: пока идёт одна страница на канал, повторные вызовы
+   * отбрасываются. В режиме только закреплённых история не листается.
+   */
+  function requestOlderHistory(): void {
+    if (!state || !activeChannel || pinnedOnly) return;
+    const meta = historyMeta[activeChannel.id];
+    if (!meta?.hasMore || meta.loading) return;
+    if (connection.status !== "connected") return;
+    const oldest = messages[0];
+    if (!oldest) return;
+    const container = messageScrollRef.current;
+    if (container) prependAnchorRef.current = { channelId: activeChannel.id, scrollTop: container.scrollTop, scrollHeight: container.scrollHeight, wasAtBottom: container.scrollHeight - container.clientHeight - container.scrollTop <= 120 };
+    setHistoryMeta((current) => ({ ...current, [activeChannel.id]: { ...meta, loading: true } }));
+    if (!connection.loadOlderMessages(activeChannel.id, oldest.id)) {
+      setHistoryMeta((current) => ({ ...current, [activeChannel.id]: { ...meta, loading: false } }));
+    }
+  }
   // Чужой индикатор набора для активного канала: до трёх имён, дальше — счётчик.
   const selfTypingId = currentAccess?.id ?? profile.id;
   const typingNames = activeChannel
@@ -2200,7 +2266,8 @@ export function ClientApp(): React.ReactElement {
               )}
               <div className="flex min-h-0 flex-1">
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <div ref={messageScrollRef} className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-md:px-2.5 max-md:py-3", state.preferences.compactMode && "py-3")}>
+                  <div ref={messageScrollRef} data-testid="message-scroll" className={cn("scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5 max-md:px-2.5 max-md:py-3", state.preferences.compactMode && "py-3")}>
+                    {historyMeta[activeChannel?.id ?? ""]?.loading && <p role="status" className="py-3 text-center text-xs text-slate-500">{t.chat.loadingOlder}</p>}
                     <ChannelIntro name={activeChannel?.name ?? t.chat.channelFallback} description={activeChannel?.description ?? ""} networked={Boolean(activeServer.address)} />
                     {visibleMessages.length ? visibleMessages.map((message, index) => <Message key={message.id} message={message} replyToMessage={message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : undefined} member={activeServer.members.find((member) => member.id === message.authorId)} members={searchMembers} profile={state.profile} compact={state.preferences.compactMode} grouped={index > 0 && visibleMessages[index - 1]?.authorId === message.authorId} privateStackPosition={privateMessageStackPosition(visibleMessages, index)} ownAvatar={message.authorId === state.profile?.id ? state.profile?.avatar : null} currentUserId={activeServer.address ? currentAccess?.id : profile.id} canManageMessages={currentAccess?.permissions.includes("MANAGE_MESSAGES") === true} previewAvailable={Boolean(activeServer.address && connection.sessionToken)} canAttach={Boolean(activeServer.address && connection.sessionToken)} attachmentLimitLabel={formatAttachmentLimit(activeServer.maxAttachmentBytes, t)} uploading={uploadingAttachment} linkPreviewsEnabled={state.preferences.showLinkPreviews} selectMode={bulkSelectMode} selected={bulkSelected.includes(message.id)} onToggleSelect={() => toggleBulkMessage(message.id)} onAttach={selectAndUploadAttachment} onEdit={editMessage} onDelete={deleteMessage} onPin={pinMessage} onDownload={saveAttachment} onPreview={loadAttachmentPreview} onToggleReaction={connection.toggleReaction} onReply={(target) => setReplyingToId(target.id)} canReact={Boolean(activeServer.address && connection.status === "connected")} />) : <p className="py-8 text-center text-sm text-slate-600">{pinnedOnly ? t.chat.pinnedEmpty : t.chat.empty}</p>}
                   </div>

@@ -13,7 +13,8 @@ interface ConnectionCallbacks {
   onSnapshot(server: ServerSnapshot): void;
   onServerAvatarUpdated(serverId: string, avatar: string | null): void;
   onServerBannerUpdated?(serverId: string, banner: string | null): void;
-  onHistory(channelId: string, messages: ChatMessage[]): void;
+  onHistory(channelId: string, messages: ChatMessage[], hasMore: boolean): void;
+  onOlderHistory?(channelId: string, messages: ChatMessage[], hasMore: boolean): void;
   onMessage(message: ChatMessage): void;
   onMessageUpdated(message: ChatMessage): void;
   onMessageDeleted(messageId: string, channelId: string): void;
@@ -43,12 +44,13 @@ interface ConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
-export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; banExpiresAt: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[], replyToMessageId?: string | null): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string, replyToMessageId?: string | null): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; bulkDeleteMessages(channelId: string, messageIds: string[]): string | null; toggleReaction(messageId: string, emoji: string): boolean; sendTypingStart(channelId: string): boolean; sendTypingStop(channelId: string): boolean; setStatus(status: UserStatus): boolean; pinMessage(messageId: string): boolean; unpinMessage(messageId: string): boolean; listPinnedMessages(channelId: string, limit?: number): string | null; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string, participantLimit: number | null): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null, slowmodeSeconds: number): boolean; setChannelsSlowmode(channelIds: string[], slowmodeSeconds: number): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerBanner(banner: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; setMemberRoles(userId: string, roleIds: string[]): boolean; createRole(name: string, color: string | null, position: number, permissions: Permission[]): boolean; updateRole(roleId: string, patch: { name?: string; color?: string | null; position?: number; permissions?: Permission[] }): boolean; deleteRole(roleId: string): boolean; listRoles(): string | null; kickMember(userId: string): boolean; banMember(userId: string, durationMinutes: BanDurationMinutes): boolean; unbanMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean; moveVoiceParticipant(userId: string, targetChannelId: string): boolean; acceptHelp(controls: Record<string, boolean | string>): boolean; setChannelOverwrites(channelId: string, roleId: string, allow: Permission[], deny: Permission[]): boolean; listAuditLog(limit?: number, before?: string | null): string | null } {
+export function useServerConnection(server: MockServer | undefined, profile: LocalProfile | null | undefined, callbacks: ConnectionCallbacks, reconnectToken = 0): { status: ConnectionStatus; sessionToken: string | null; banExpiresAt: string | null; sendMessage(channelId: string, content: string, attachmentIds?: string[], mentions?: string[], replyToMessageId?: string | null): boolean; sendPrivateMessage(kind: "pm" | "apm", channelId: string, content: string, targetUserId: string, replyToMessageId?: string | null): boolean; setChatMuted(userId: string, muted: boolean, durationMinutes?: number | null): boolean; updateMessage(messageId: string, content: string, attachmentIds?: string[], mentions?: string[]): boolean; deleteMessage(messageId: string): boolean; bulkDeleteMessages(channelId: string, messageIds: string[]): string | null; toggleReaction(messageId: string, emoji: string): boolean; sendTypingStart(channelId: string): boolean; sendTypingStop(channelId: string): boolean; setStatus(status: UserStatus): boolean; pinMessage(messageId: string): boolean; unpinMessage(messageId: string): boolean; listPinnedMessages(channelId: string, limit?: number): string | null; searchMessages(filters: MessageSearchFilters): string | null; updateProfile(profile: PublicProfile): boolean; leaveServer(): boolean; createChannel(name: string, kind: Channel["kind"], description: string, participantLimit: number | null): boolean; updateChannel(channelId: string, name: string, description: string, participantLimit: number | null, slowmodeSeconds: number): boolean; setChannelsSlowmode(channelIds: string[], slowmodeSeconds: number): boolean; deleteChannel(channelId: string): boolean; updateServerAvatar(avatar: string | null): boolean; updateServerBanner(banner: string | null): boolean; updateServerSettings(settings: ServerSettings): boolean; setMemberRole(userId: string, role: Exclude<MemberRole, "owner">): boolean; setMemberRoles(userId: string, roleIds: string[]): boolean; createRole(name: string, color: string | null, position: number, permissions: Permission[]): boolean; updateRole(roleId: string, patch: { name?: string; color?: string | null; position?: number; permissions?: Permission[] }): boolean; deleteRole(roleId: string): boolean; listRoles(): string | null; kickMember(userId: string): boolean; banMember(userId: string, durationMinutes: BanDurationMinutes): boolean; unbanMember(userId: string): boolean; deleteServer(): boolean; joinVoice(channelId: string): boolean; leaveVoice(): boolean; updateVoiceState(muted: boolean, deafened: boolean, viewingScreenShareUserId: string | null): boolean; disconnectVoiceMember(userId: string): boolean; setVoiceMemberMuted(userId: string, muted: boolean): boolean; moveVoiceParticipant(userId: string, targetChannelId: string): boolean; acceptHelp(controls: Record<string, boolean | string>): boolean; setChannelOverwrites(channelId: string, roleId: string, allow: Permission[], deny: Permission[]): boolean; listAuditLog(limit?: number, before?: string | null): string | null; loadOlderMessages(channelId: string, beforeMessageId: string): boolean } {
   const connectionKey = server?.address && profile ? `${server.id}|${server.address}|${profile.id}|${reconnectToken}` : null;
   const endpoint = server?.address ? safeWebsocketEndpoint(server.address) : null;
   const [connectionState, setConnectionState] = useState<{ key: string | null; status: ConnectionStatus; banExpiresAt?: string | null }>({ key: null, status: "connecting" });
   const [sessionState, setSessionState] = useState<{ key: string; token: string } | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const olderRequestsRef = useRef(new Map<string, string>());
   const profileRef = useRef(profile);
   const callbacksRef = useRef(callbacks);
   useEffect(() => { profileRef.current = profile; }, [profile]);
@@ -91,6 +93,8 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     const connect = (): void => {
       if (stopped || fatal) return;
       if (!waitingForServerUpdate) setConnectionState({ key: connectionKey, status: retryCount === 0 ? "connecting" : "reconnecting" });
+      // Свежий сокет: незавершённые запросы старой страницы не должны пережить переподключение.
+      olderRequestsRef.current.clear();
 
       let socket: WebSocket;
       try {
@@ -151,7 +155,7 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
           callbacksRef.current.onSnapshot(event.server);
           for (const channel of event.server.channels) {
             if (channel.kind === "text" && socket.readyState === WebSocket.OPEN) {
-              sendEvent(socket, { type: "history.request", requestId: crypto.randomUUID(), channelId: channel.id, limit: 50 });
+              sendEvent(socket, { type: "history.request", requestId: crypto.randomUUID(), channelId: channel.id, limit: 50, before: null });
             }
           }
         } else if (event.type === "server.avatar.updated") {
@@ -159,7 +163,12 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
         } else if (event.type === "server.banner.updated") {
           callbacksRef.current.onServerBannerUpdated?.(event.serverId, event.banner);
         } else if (event.type === "history.result") {
-          callbacksRef.current.onHistory(event.channelId, event.messages);
+          if (olderRequestsRef.current.has(event.requestId)) {
+            olderRequestsRef.current.delete(event.requestId);
+            callbacksRef.current.onOlderHistory?.(event.channelId, event.messages, event.hasMore);
+          } else {
+            callbacksRef.current.onHistory(event.channelId, event.messages, event.hasMore);
+          }
         } else if (event.type === "message.search.result") {
           callbacksRef.current.onSearchResult?.(event.requestId, event.result);
         } else if (event.type === "message.created") {
@@ -225,6 +234,12 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
             waitingForServerUpdate = event.code === "PROTOCOL_MISMATCH";
             setConnectionState({ key: connectionKey, status: event.code === "PROTOCOL_MISMATCH" ? "server-outdated" : "error" });
             socket.close(1000, "Authentication rejected");
+          }
+          if (event.requestId && olderRequestsRef.current.has(event.requestId)) {
+            // Провалившаяся страница не должна оставлять вечный индикатор загрузки.
+            const channelId = olderRequestsRef.current.get(event.requestId)!;
+            olderRequestsRef.current.delete(event.requestId);
+            callbacksRef.current.onOlderHistory?.(channelId, [], false);
           }
           callbacksRef.current.onRequestError?.(event.requestId, event.code, event.message);
           callbacksRef.current.onError(event.code === "PROTOCOL_MISMATCH" ? currentDictionary().connectionErrors.protocolMismatch : event.code === "ACCEPT_REQUIRED" ? currentDictionary().connectionErrors.acceptRequired : event.message);
@@ -560,7 +575,17 @@ export function useServerConnection(server: MockServer | undefined, profile: Loc
     return requestId;
   }, [status]);
 
-  return { status, sessionToken, banExpiresAt, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, bulkDeleteMessages, toggleReaction, sendTypingStart, sendTypingStop, setStatus, pinMessage, unpinMessage, listPinnedMessages, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, setChannelsSlowmode, deleteChannel, updateServerAvatar, updateServerBanner, updateServerSettings, setMemberRole, setMemberRoles, createRole, updateRole, deleteRole, listRoles, kickMember, banMember, unbanMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted, moveVoiceParticipant, acceptHelp, setChannelOverwrites, listAuditLog };
+  const loadOlderMessages = useCallback((channelId: string, beforeMessageId: string): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || status !== "connected") return false;
+    for (const pending of olderRequestsRef.current.values()) if (pending === channelId) return false; // один запрос на канал
+    const requestId = crypto.randomUUID();
+    olderRequestsRef.current.set(requestId, channelId);
+    sendEvent(socket, { type: "history.request", requestId, channelId, limit: 50, before: beforeMessageId });
+    return true;
+  }, [status]);
+
+  return { status, sessionToken, banExpiresAt, sendMessage, sendPrivateMessage, setChatMuted, updateMessage, deleteMessage, bulkDeleteMessages, toggleReaction, sendTypingStart, sendTypingStop, setStatus, pinMessage, unpinMessage, listPinnedMessages, searchMessages, updateProfile, leaveServer, createChannel, updateChannel, setChannelsSlowmode, deleteChannel, updateServerAvatar, updateServerBanner, updateServerSettings, setMemberRole, setMemberRoles, createRole, updateRole, deleteRole, listRoles, kickMember, banMember, unbanMember, deleteServer, joinVoice, leaveVoice, updateVoiceState, disconnectVoiceMember, setVoiceMemberMuted, moveVoiceParticipant, acceptHelp, setChannelOverwrites, listAuditLog, loadOlderMessages };
 }
 
 async function authenticate(socket: WebSocket, requestId: string, challenge: string, profile: LocalProfile): Promise<void> {

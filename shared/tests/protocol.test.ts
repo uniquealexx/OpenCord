@@ -50,13 +50,28 @@ describe("OpenCord protocol", () => {
     expect(serverEventSchema.parse({ type: "profile.anonymized", userId: "member-1" })).toEqual({ type: "profile.anonymized", userId: "member-1" });
   });
 
-  it("pins the protocol version at 52 with voice move events", () => {
-    expect(PROTOCOL_VERSION).toBe(52);
+  it("pins the protocol version at 53 with voice move events", () => {
+    expect(PROTOCOL_VERSION).toBe(53);
     const requestId = crypto.randomUUID();
     const targetChannelId = crypto.randomUUID();
     expect(clientEventSchema.parse({ type: "voice.member.move", requestId, userId: "voice-member", targetChannelId })).toMatchObject({ type: "voice.member.move", targetChannelId });
     expect(() => clientEventSchema.parse({ type: "voice.member.move", requestId, userId: "", targetChannelId })).toThrow();
     expect(serverEventSchema.parse({ type: "voice.participant.moved", userId: "voice-member", channelId: targetChannelId, reason: "moved" })).toEqual({ type: "voice.participant.moved", userId: "voice-member", channelId: targetChannelId, reason: "moved" });
+  });
+
+  it("paginates message history with a before cursor (v53)", () => {
+    const requestId = crypto.randomUUID();
+    const channelId = crypto.randomUUID();
+    const before = crypto.randomUUID();
+    // Без курсора запрос означает новейшую страницу: before приводится к null.
+    expect(clientEventSchema.parse({ type: "history.request", requestId, channelId, limit: 50 })).toMatchObject({ before: null });
+    expect(clientEventSchema.parse({ type: "history.request", requestId, channelId, limit: 50, before })).toMatchObject({ before });
+    expect(clientEventSchema.parse({ type: "history.request", requestId, channelId, limit: 50, before: null })).toMatchObject({ before: null });
+    expect(() => clientEventSchema.parse({ type: "history.request", requestId, channelId, limit: 50, before: "not-a-uuid" })).toThrow();
+    // Старый сервер/тест без hasMore парсится как false, с флагом — как есть.
+    const base = { type: "history.result", requestId, channelId, messages: [] };
+    expect(serverEventSchema.parse(base)).toMatchObject({ hasMore: false });
+    expect(serverEventSchema.parse({ ...base, hasMore: true })).toMatchObject({ hasMore: true });
   });
 
   it("validates voice mute and deafen state synchronization", () => {

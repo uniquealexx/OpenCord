@@ -288,6 +288,38 @@ describe("server connection", () => {
     act(() => socket?.disconnect());
     unmount();
   });
+
+  it("loads older history pages with a single-flight cursor request", async () => {
+    vi.useFakeTimers();
+    const callbacks = { onSnapshot: vi.fn(), onServerAvatarUpdated: vi.fn(), onHistory: vi.fn(), onOlderHistory: vi.fn(), onMessage: vi.fn(), onMessageUpdated: vi.fn(), onMessageDeleted: vi.fn(), onMember: vi.fn(), onMemberRemoved: vi.fn(), onServerDeleted: vi.fn(), onError: vi.fn() };
+    const { result, unmount } = renderHook(() => useServerConnection(server, profile, callbacks));
+    const socket = FakeWebSocket.instances[0];
+
+    await act(async () => {
+      socket?.receive({ type: "auth.challenge", requestId: "12515573-1ff0-4b9a-9bcf-2ad3fa14323d", protocolVersion: PROTOCOL_VERSION, challenge: "challenge", expiresAt: "2026-07-22T12:00:00.000Z" });
+      await Promise.resolve();
+    });
+    act(() => socket?.receive({ type: "auth.ok", requestId: "12515573-1ff0-4b9a-9bcf-2ad3fa14323d", userId: "user-id", serverId: "5a07aa54-16ef-46ec-a193-9d72a624c253", sessionToken: "A".repeat(43), sessionExpiresAt: "2026-07-22T13:00:00.000Z" }));
+    expect(result.current.status).toBe("connected");
+
+    const channelId = "12959e6f-7ea9-41d9-8be3-f412354d3e95";
+    const beforeId = "22959e6f-7ea9-41d9-8be3-f412354d3e95";
+    act(() => expect(result.current.loadOlderMessages(channelId, beforeId)).toBe(true));
+    const sent = JSON.parse(socket?.sent.at(-1) ?? "{}") as { type: string; requestId: string; channelId: string; limit: number; before: string | null };
+    expect(sent).toMatchObject({ type: "history.request", channelId, limit: 50, before: beforeId });
+    // Второй запрос на тот же канал, пока первый в полёте, не отправляется.
+    expect(result.current.loadOlderMessages(channelId, beforeId)).toBe(false);
+
+    act(() => socket?.receive({ type: "history.result", requestId: sent.requestId, channelId, messages: [], hasMore: false }));
+    expect(callbacks.onOlderHistory).toHaveBeenCalledWith(channelId, [], false);
+    expect(callbacks.onHistory).not.toHaveBeenCalled();
+
+    // Снапшот-запрос приходит в onHistory и несёт hasMore.
+    act(() => socket?.receive({ type: "history.result", requestId: crypto.randomUUID(), channelId, messages: [], hasMore: true }));
+    expect(callbacks.onHistory).toHaveBeenCalledWith(channelId, [], true);
+
+    unmount();
+  });
 });
 
 type Listener = (event: MessageEvent<string> | Event) => void;

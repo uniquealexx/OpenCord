@@ -112,6 +112,7 @@ export const ru = {
   chat: {
     placeholder: "Написать в",
     empty: "Здесь пока тихо. Начните разговор.",
+    loadingOlder: "Загружаем более ранние сообщения…",
     members: "Участники",
     openChannels: "Открыть каналы",
     mockNotice: "Сообщения сохраняются только локально",
