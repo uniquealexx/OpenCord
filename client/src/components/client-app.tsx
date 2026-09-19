@@ -336,6 +336,13 @@ export function ClientApp(): React.ReactElement {
         setHistoryMeta((current) => ({ ...current, [channelId]: { hasMore, loading: false } }));
       },
       onOlderHistory: (channelId, messages, hasMore) => {
+        // Якорь позиции чтения снимается в момент прихода страницы, а не запроса:
+        // иначе промежуточный рендер (чужое сообщение, правка) израсходовал бы его,
+        // и поздний prepend прыгнул бы к низу. Только для текущего канала зрителя.
+        const container = messageScrollRef.current;
+        if (container && activeChannel?.id === channelId) {
+          prependAnchorRef.current = { channelId, scrollTop: container.scrollTop, scrollHeight: container.scrollHeight, wasAtBottom: container.scrollHeight - container.clientHeight - container.scrollTop <= 120 };
+        }
         commit((current) => {
           const others = current.messages.filter((message) => message.channelId !== channelId);
           const existing = current.messages.filter((message) => message.channelId === channelId);
@@ -917,17 +924,25 @@ export function ClientApp(): React.ReactElement {
     // иначе пользователь никогда не дотянется до верхней кромки.
     if (container.scrollHeight <= container.clientHeight + 32) requestOlderHistory();
     return () => container.removeEventListener("scroll", onScroll);
+    // Обработчик должен читать requestOlderHistory текущего рендера (актуальные
+    // messages/historyMeta), а не пересоздаваться через useCallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.activeChannelId, state?.messages, historyMeta]);
   // Сохранение позиции чтения при вставке старых сообщений сверху (протокол v53).
   useLayoutEffect(() => {
     const container = messageScrollRef.current;
     const anchor = prependAnchorRef.current;
-    if (!container || !anchor || anchor.channelId !== state?.activeChannelId) return;
+    if (!container || !anchor) return;
+    // Якорь другого канала устарел (смена канала/сервера): не применяем его к чужой ленте.
+    if (anchor.channelId !== state?.activeChannelId) {
+      prependAnchorRef.current = null;
+      return;
+    }
     prependAnchorRef.current = null;
     if (anchor.wasAtBottom) container.scrollTop = container.scrollHeight;
     else container.scrollTop = anchor.scrollTop + (container.scrollHeight - anchor.scrollHeight);
     skipNextAutoScrollRef.current = true;
-  }, [state?.messages]);
+  }, [state?.messages, state?.activeChannelId]);
   useEffect(() => {
     if (!highlightedMessageId) return;
     const frame = window.requestAnimationFrame(() => {
@@ -1029,8 +1044,6 @@ export function ClientApp(): React.ReactElement {
     if (connection.status !== "connected") return;
     const oldest = messages[0];
     if (!oldest) return;
-    const container = messageScrollRef.current;
-    if (container) prependAnchorRef.current = { channelId: activeChannel.id, scrollTop: container.scrollTop, scrollHeight: container.scrollHeight, wasAtBottom: container.scrollHeight - container.clientHeight - container.scrollTop <= 120 };
     setHistoryMeta((current) => ({ ...current, [activeChannel.id]: { ...meta, loading: true } }));
     if (!connection.loadOlderMessages(activeChannel.id, oldest.id)) {
       setHistoryMeta((current) => ({ ...current, [activeChannel.id]: { ...meta, loading: false } }));
