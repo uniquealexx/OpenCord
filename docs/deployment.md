@@ -165,7 +165,7 @@ Old release directories are not removed automatically, so as not to destroy the 
 
 The same invocation of the Docker installer is an update operation. It does not recreate the PostgreSQL password, does not run `docker compose down -v`, and does not remove named volumes. The native installer likewise preserves PostgreSQL and the password, creates a new release, and switches the systemd service only after the build. Every successful deployment records a new instance generation and the common server name. This makes it possible to safely activate a previously deleted tombstone and to replace the client's local record at the same normalized address without creating a duplicate.
 
-Before significant updates, run `sudo opencordctl backup` and copy the resulting file off the VPS. The verified restore command and the automatic schedule are not implemented yet and will be added before the public production release.
+Before significant updates, run `sudo opencordctl backup` and copy the resulting file off the VPS. The verified restore command is available: `sudo opencordctl restore <backup.dump> RESTORE-OPENCORD-BACKUP`; it creates a safety backup of the current state first. The automatic backup schedule is not implemented yet and will be added before the public production release.
 
 ## Managing the installed server
 
@@ -195,6 +195,7 @@ sudo opencordctl logs 200
 sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
+sudo opencordctl restore <backup.dump> RESTORE-OPENCORD-BACKUP
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
 sudo opencordctl check-update
 sudo opencordctl update --channel stable
@@ -205,6 +206,8 @@ sudo opencordctl uninstall
 The backup is created atomically in `/home/opencord/backups/` via `pg_dump` in the custom format. A normal `uninstall` stops the server but preserves the application, configuration, database, and backups. Irreversible removal requires the exact phrase `--purge-data DELETE-OPENCORD-DATA` and also deletes local backups.
 
 `clear-messages` temporarily stops the OpenCord Server process, automatically creates a backup, removes all rows only from the `messages` table, and starts the server again. Channels, members, roles, and settings are preserved. The command requires the exact safety phrase `DELETE-ALL-MESSAGES`; without a successfully created backup, the clearing is not performed.
+
+`restore` restores PostgreSQL and attachments from a `backup` pair. It requires the exact phrase `RESTORE-OPENCORD-BACKUP`, creates a mandatory safety backup of the current state first, stops only the OpenCord Server process, restores both files, and verifies the healthcheck afterwards.
 
 `update` does not require a new SSH deployment from the client. Channel mode obtains the bundle from the official stable GitHub Release, and manual mode downloads the specified HTTPS release bundle or reads `--bundle-file`. The command verifies the SHA-256 and the archive structure, creates a backup of PostgreSQL and attachments, and runs the idempotent Docker or native installer. Working data is not removed.
 
@@ -228,7 +231,7 @@ The working database and secrets are intentionally not placed in the home direct
 
 ## Attachment storage
 
-Docker stores files in a separate named volume `opencord_attachments_data`, while native installation stores them in `/var/lib/opencord/attachments` with access for the `opencord` system user. Re-deployment preserves this storage. `sudo opencordctl backup` creates a pair of files: the PostgreSQL `.dump` and `.attachments.tar`; for a full restore, both must be copied. A normal `uninstall` preserves attachments, while `uninstall --purge-data DELETE-OPENCORD-DATA` removes them irreversibly.
+Docker stores files in a separate named volume `opencord_attachments_data`, while native installation stores them in `/var/lib/opencord/attachments` with access for the `opencord` system user. Re-deployment preserves this storage. `sudo opencordctl backup` creates a pair of files: the PostgreSQL `.dump` and `.attachments.tar`; for a full restore, both must be copied. The `restore` command also restores attachments from the same pair. A normal `uninstall` preserves attachments, while `uninstall --purge-data DELETE-OPENCORD-DATA` removes them irreversibly.
 
 ## Local Docker check
 
@@ -455,7 +458,7 @@ sudo bash deploy/scripts/install-native-ubuntu.sh --insecure \
 
 Тот же вызов Docker-установщика является операцией обновления. Он не пересоздаёт пароль PostgreSQL, не выполняет `docker compose down -v` и не удаляет named volumes. Нативный установщик также сохраняет PostgreSQL и пароль, создаёт новый release и переключает systemd-службу только после сборки. Каждое успешное развёртывание записывает новое поколение экземпляра и общее имя сервера. Это позволяет безопасно активировать ранее удалённый tombstone и заменить локальную запись клиента по тому же нормализованному адресу без создания дубликата.
 
-Перед существенными обновлениями следует выполнить `sudo opencordctl backup` и скопировать полученный файл с VPS. Проверенная команда восстановления и автоматическое расписание ещё не реализованы и будут добавлены до публичного production-релиза.
+Перед существенными обновлениями следует выполнить `sudo opencordctl backup` и скопировать полученный файл с VPS. Проверенная команда восстановления доступна: `sudo opencordctl restore <backup.dump> RESTORE-OPENCORD-BACKUP`; перед восстановлением она создаёт резервную копию текущего состояния. Автоматическое расписание резервных копий ещё не реализовано и будет добавлено до публичного production-релиза.
 
 ## Управление установленным сервером
 
@@ -485,6 +488,7 @@ sudo opencordctl logs 200
 sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
+sudo opencordctl restore <backup.dump> RESTORE-OPENCORD-BACKUP
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
 sudo opencordctl check-update
 sudo opencordctl update --channel stable
@@ -495,6 +499,8 @@ sudo opencordctl uninstall
 Резервная копия создаётся атомарно в `/home/opencord/backups/` через `pg_dump` в custom-формате. Обычный `uninstall` отключает сервер, но сохраняет приложение, конфигурацию, базу и копии. Необратимое удаление требует точной фразы `--purge-data DELETE-OPENCORD-DATA` и удаляет также локальные копии.
 
 `clear-messages` временно останавливает процесс OpenCord Server, автоматически создаёт backup, удаляет все строки только из таблицы `messages` и снова запускает сервер. Каналы, участники, роли и настройки сохраняются. Команда требует точной защитной фразы `DELETE-ALL-MESSAGES`; без успешно созданной резервной копии очистка не выполняется.
+
+`restore` восстанавливает PostgreSQL и вложения из пары, созданной `backup`. Команда требует точной фразы `RESTORE-OPENCORD-BACKUP`, сначала создаёт обязательную резервную копию текущего состояния, останавливает только процесс OpenCord Server, восстанавливает оба файла и после этого проверяет healthcheck.
 
 `update` не требует нового SSH-развёртывания из клиента. Канальный режим получает bundle из официального stable GitHub Release, а ручной режим загружает указанный HTTPS release bundle либо читает `--bundle-file`. Команда проверяет SHA-256, структуру архива, создаёт backup PostgreSQL и вложений и запускает идемпотентный установщик Docker или native. Рабочие данные не удаляются.
 
@@ -518,7 +524,7 @@ sudo opencordctl uninstall --purge-data DELETE-OPENCORD-DATA
 
 ## Хранилище вложений
 
-Docker хранит файлы в отдельном named volume `opencord_attachments_data`, а нативная установка — в `/var/lib/opencord/attachments` с доступом системного пользователя `opencord`. Повторное развёртывание сохраняет это хранилище. `sudo opencordctl backup` создаёт пару файлов: PostgreSQL `.dump` и `.attachments.tar`; для полного восстановления необходимо скопировать оба. Обычный `uninstall` сохраняет вложения, а `uninstall --purge-data DELETE-OPENCORD-DATA` удаляет их необратимо.
+Docker хранит файлы в отдельном named volume `opencord_attachments_data`, а нативная установка — в `/var/lib/opencord/attachments` с доступом системного пользователя `opencord`. Повторное развёртывание сохраняет это хранилище. `sudo opencordctl backup` создаёт пару файлов: PostgreSQL `.dump` и `.attachments.tar`; для полного восстановления необходимо скопировать оба. Команда `restore` также восстанавливает вложения из этой пары. Обычный `uninstall` сохраняет вложения, а `uninstall --purge-data DELETE-OPENCORD-DATA` удаляет их необратимо.
 
 ## Локальная Docker-проверка
 
@@ -745,7 +751,7 @@ sudo bash deploy/scripts/install-native-ubuntu.sh --insecure \
 
 再次以相同方式调用 Docker 安装程序即是一次更新操作。它不会重新生成 PostgreSQL 密码，不会执行 `docker compose down -v`，也不会删除 named volume。原生安装程序同样会保留 PostgreSQL 和密码，创建新的 release，并且只在构建完成后才切换 systemd 服务。每次成功部署都会记录新的实例代号（generation）和通用的服务器名称。这样可以安全地激活之前已删除的 tombstone，并在同一规范化地址下替换客户端的本地记录，而不会产生重复项。
 
-在进行重大更新之前，应执行 `sudo opencordctl backup` 并将生成的文件从 VPS 复制出来。经过验证的恢复命令和自动计划尚未实现，将在公开生产版本发布之前添加。
+在进行重大更新之前，应执行 `sudo opencordctl backup` 并将生成的文件从 VPS 复制出来。经过验证的恢复命令可用：`sudo opencordctl restore <backup.dump> RESTORE-OPENCORD-BACKUP`；它会在恢复之前创建当前状态的安全备份。自动备份计划尚未实现，将在公开生产版本发布之前添加。
 
 ## 管理已安装的服务器
 
@@ -775,6 +781,7 @@ sudo opencordctl logs 200
 sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
+sudo opencordctl restore <backup.dump> RESTORE-OPENCORD-BACKUP
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
 sudo opencordctl check-update
 sudo opencordctl update --channel stable
@@ -785,6 +792,8 @@ sudo opencordctl uninstall
 备份通过 `pg_dump` 以 custom 格式原子化地创建在 `/home/opencord/backups/` 中。普通的 `uninstall` 会停止服务器，但保留应用程序、配置、数据库和备份。不可逆的删除需要精确的短语 `--purge-data DELETE-OPENCORD-DATA`，并且也会删除本地备份。
 
 `clear-messages` 会暂时停止 OpenCord Server 进程，自动创建备份，只从 `messages` 表中删除所有行，然后重新启动服务器。频道、成员、角色和设置都会得到保留。该命令需要精确的安全短语 `DELETE-ALL-MESSAGES`；如果没有成功创建备份，则不会执行清理。
+
+`restore` 命令从 `backup` 创建的一对文件恢复 PostgreSQL 和附件。它需要精确的短语 `RESTORE-OPENCORD-BACKUP`，会先创建当前状态的强制安全备份，只停止 OpenCord Server 进程，恢复两个文件，并在之后验证 healthcheck。
 
 `update` 不需要从客户端重新进行 SSH 部署。通道模式（channel mode）从官方 stable GitHub Release 获取 bundle，手动模式则下载指定的 HTTPS release bundle 或读取 `--bundle-file`。该命令会校验 SHA-256 和归档结构，创建 PostgreSQL 和附件的备份，然后运行幂等的 Docker 或原生安装程序。工作数据不会被删除。
 
@@ -808,7 +817,7 @@ sudo opencordctl uninstall --purge-data DELETE-OPENCORD-DATA
 
 ## 附件存储
 
-Docker 将文件存储在单独的 named volume `opencord_attachments_data` 中，而原生安装则将文件存储在 `/var/lib/opencord/attachments` 中，并授予系统用户 `opencord` 访问权限。重新部署会保留此存储。`sudo opencordctl backup` 会创建一对文件：PostgreSQL 的 `.dump` 和 `.attachments.tar`；要进行完整恢复，必须将两者都复制出来。普通的 `uninstall` 会保留附件，而 `uninstall --purge-data DELETE-OPENCORD-DATA` 会不可逆地删除它们。
+Docker 将文件存储在单独的 named volume `opencord_attachments_data` 中，而原生安装则将文件存储在 `/var/lib/opencord/attachments` 中，并授予系统用户 `opencord` 访问权限。重新部署会保留此存储。`sudo opencordctl backup` 会创建一对文件：PostgreSQL 的 `.dump` 和 `.attachments.tar`；要进行完整恢复，必须将两者都复制出来。`restore` 命令也会从同一对文件恢复附件。普通的 `uninstall` 会保留附件，而 `uninstall --purge-data DELETE-OPENCORD-DATA` 会不可逆地删除它们。
 
 ## 本地 Docker 验证
 

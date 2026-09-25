@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -178,7 +179,7 @@ describe("production deployment", () => {
     expect(controller).toContain("История не удалена: не удалось создать обязательную резервную копию");
     expect(installer).toContain('chmod 0640 "${MANAGEMENT_ROOT}/settings/server.env"');
     expect(installer).toContain('ln -sfnT -- "${MANAGEMENT_ROOT}/opencordctl" /usr/local/bin/opencordctl');
-    expect(installer).toContain("backup clear-messages check-update update");
+    expect(installer).toContain("backup restore clear-messages check-update update");
     expect(installer).toContain("OpenCord management assets are incomplete");
     expect(installer).toContain('"${SOURCE_DIR}/update-server"');
     expect(installer).toContain('"${SOURCE_DIR}/release-channel.mjs"');
@@ -207,5 +208,32 @@ describe("production deployment", () => {
     expect(manifestGenerator).toContain("createReadStream");
     expect(installer).not.toContain("usermod");
     expect(installer).not.toContain("database_password");
+  });
+
+  it("restores a verified backup pair with a mandatory safety backup", async () => {
+    const controller = await readFile(path.join(repositoryRoot, "deploy", "management", "opencordctl"), "utf8");
+    const installer = await readFile(path.join(repositoryRoot, "deploy", "management", "install-management-home"), "utf8");
+    const readme = await readFile(path.join(repositoryRoot, "deploy", "management", "README.md"), "utf8");
+    const deployment = await readFile(path.join(repositoryRoot, "docs", "deployment.md"), "utf8");
+    expect(controller).toContain("RESTORE-OPENCORD-BACKUP");
+    expect(controller).toContain("PGDMP");
+    expect(controller).toContain("pg_restore");
+    expect(controller).toContain("--clean --if-exists");
+    expect(controller).toContain("--single-transaction");
+    expect(controller).toContain("--exit-on-error");
+    expect(controller).toContain("attachments-init");
+    expect(controller).toContain("-mindepth 1 -delete");
+    expect(controller).toContain("-xf -");
+    expect(controller).toContain("Восстановление отменено: не удалось создать резервную копию текущего состояния.");
+    expect(controller).toContain("restore <dump>");
+    expect(installer).toContain("backup restore clear-messages check-update update");
+    expect(deployment).toContain("opencordctl restore");
+    expect(deployment).not.toContain("The verified restore command and the automatic schedule are not implemented yet");
+    expect(readme).toContain("opencordctl restore");
+    for (const script of ["opencordctl", "install-management-home"]) {
+      const result = spawnSync("bash", ["-n", path.join(repositoryRoot, "deploy", "management", script)], { encoding: "utf8" });
+      if (result.error) continue;
+      expect(result.status).toBe(0);
+    }
   });
 });

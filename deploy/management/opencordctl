@@ -43,6 +43,8 @@ usage() {
   start|stop|restart     управление сервером
   settings               публичные настройки и расположение данных
   backup                 резервная копия PostgreSQL и вложений
+  restore <dump> [--attachments <tar>] RESTORE-OPENCORD-BACKUP
+                         восстановить PostgreSQL и вложения из резервной копии
   clear-messages DELETE-ALL-MESSAGES
                          удалить всю историю сообщений после создания backup
   check-update [--channel stable]
@@ -230,6 +232,193 @@ create_backup() {
   printf 'Резервные копии созданы: %s и %s\n' "${backup_path}" "${attachments_path}"
 }
 
+restore_backup() {
+  local dump_path="" attachments_path="" was_running="false" message_count attachment_count
+  local safety_backup_message attempt
+
+  if [[ $# -lt 1 || "${!#}" != "RESTORE-OPENCORD-BACKUP" ]]; then
+    printf 'Для восстановления добавьте точную фразу: RESTORE-OPENCORD-BACKUP\n' >&2
+    return 1
+  fi
+  local -a restore_args=("${@:1:$#-1}")
+
+  # Parse the positional dump path and the optional --attachments override.
+  while [[ ${#restore_args[@]} -gt 0 ]]; do
+    case "${restore_args[0]}" in
+      --attachments)
+        if [[ ${#restore_args[@]} -lt 2 || -n "${attachments_path}" ]]; then
+          printf 'Использование: sudo opencordctl restore <dump> [--attachments <tar>] RESTORE-OPENCORD-BACKUP\n' >&2
+          return 1
+        fi
+        attachments_path="${restore_args[1]}"
+        restore_args=("${restore_args[@]:2}")
+        ;;
+      -*)
+        printf 'Неизвестный параметр: %s\n' "${restore_args[0]}" >&2
+        return 1
+        ;;
+      *)
+        if [[ -n "${dump_path}" ]]; then
+          printf 'Указано несколько путей к дампу.\n' >&2
+          return 1
+        fi
+        dump_path="${restore_args[0]}"
+        restore_args=("${restore_args[@]:1}")
+        ;;
+    esac
+  done
+  if [[ -z "${dump_path}" ]]; then
+    printf 'Использование: sudo opencordctl restore <dump> [--attachments <tar>] RESTORE-OPENCORD-BACKUP\n' >&2
+    return 1
+  fi
+  if [[ -z "${attachments_path}" ]]; then
+    if [[ "${dump_path}" == *.dump ]]; then
+      attachments_path="${dump_path%.dump}.attachments.tar"
+    else
+      printf 'Не удалось определить архив вложений: путь к дампу должен заканчиваться на .dump либо укажите --attachments.\n' >&2
+      return 1
+    fi
+  fi
+
+  # Validate every input before touching the current state.
+  if [[ ! -f "${dump_path}" || ! -r "${dump_path}" || ! -s "${dump_path}" ]]; then
+    printf 'Файл дампа не найден, недоступен для чтения или пуст: %s\n' "${dump_path}" >&2
+    return 1
+  fi
+  if [[ "$(head -c 5 -- "${dump_path}")" != "PGDMP" ]]; then
+    printf 'Файл дампа не является дампом PostgreSQL в custom-формате: %s\n' "${dump_path}" >&2
+    return 1
+  fi
+  if [[ ! -f "${attachments_path}" || ! -r "${attachments_path}" || ! -s "${attachments_path}" ]]; then
+    printf 'Архив вложений не найден, недоступен для чтения или пуст: %s\n' "${attachments_path}" >&2
+    return 1
+  fi
+  if ! tar --list --file "${attachments_path}" >/dev/null 2>&1; then
+    printf 'Архив вложений повреждён или не читается: %s\n' "${attachments_path}" >&2
+    return 1
+  fi
+
+  restart_after_restore() {
+    if [[ "${was_running}" != "true" ]]; then return 0; fi
+    if [[ "${INSTALL_MODE}" == "docker" ]]; then
+      compose up --detach server
+    else
+      systemctl start opencord-server
+    fi
+  }
+
+  # Make sure the database is available before restoring into it.
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    compose up --detach database
+    for attempt in $(seq 1 30); do
+      if compose exec -T database pg_isready --username opencord --dbname opencord >/dev/null 2>&1; then
+        break
+      fi
+      if [[ "${attempt}" -eq 30 ]]; then
+        printf 'PostgreSQL не готов к восстановлению.\n' >&2
+        return 1
+      fi
+      sleep 1
+    done
+  else
+    if ! systemctl is-active --quiet postgresql; then
+      systemctl start postgresql
+    fi
+    for attempt in $(seq 1 30); do
+      if runuser -u postgres -- pg_isready -q; then
+        break
+      fi
+      if [[ "${attempt}" -eq 30 ]]; then
+        printf 'PostgreSQL не готов к восстановлению.\n' >&2
+        return 1
+      fi
+      sleep 1
+    done
+  fi
+
+  # Mandatory safety backup of the current state. Nothing has changed yet.
+  if ! safety_backup_message="$(create_backup)"; then
+    printf 'Восстановление отменено: не удалось создать резервную копию текущего состояния.\n' >&2
+    return 1
+  fi
+
+  # Stop only the OpenCord Server process, remembering whether it was running.
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if [[ -n "$(compose ps --status running --quiet server)" ]]; then
+      was_running="true"
+      compose stop server
+    fi
+  elif systemctl is-active --quiet opencord-server; then
+    was_running="true"
+    systemctl stop opencord-server
+  fi
+
+  # Restore PostgreSQL atomically.
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if ! compose exec -T database pg_restore --username opencord --dbname opencord --clean --if-exists --single-transaction --exit-on-error < "${dump_path}"; then
+      restart_after_restore || true
+      printf 'Не удалось восстановить PostgreSQL.\n' >&2
+      return 1
+    fi
+  else
+    if ! runuser -u postgres -- pg_restore --dbname opencord --clean --if-exists --single-transaction --exit-on-error < "${dump_path}"; then
+      restart_after_restore || true
+      printf 'Не удалось восстановить PostgreSQL.\n' >&2
+      return 1
+    fi
+  fi
+
+  # Restore attachments into the clean attachments directory.
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    if ! { compose run --rm --no-deps attachments-init \
+      && compose run --rm -T --no-deps --user 10001:10001 --entrypoint sh server -c 'find /var/lib/opencord/attachments -mindepth 1 -delete; tar -C /var/lib/opencord/attachments -xf -' < "${attachments_path}"; }; then
+      restart_after_restore || true
+      printf 'Не удалось восстановить вложения.\n' >&2
+      return 1
+    fi
+  else
+    if ! { install -d -m 0700 -o opencord -g opencord /var/lib/opencord/attachments \
+      && find /var/lib/opencord/attachments -mindepth 1 -delete \
+      && tar -C /var/lib/opencord/attachments -xf "${attachments_path}" \
+      && chown -R opencord:opencord /var/lib/opencord/attachments; }; then
+      restart_after_restore || true
+      printf 'Не удалось восстановить вложения.\n' >&2
+      return 1
+    fi
+  fi
+
+  # Restart the server only if it was running before the restore.
+  if [[ "${was_running}" == "true" ]]; then
+    if ! restart_after_restore; then
+      printf 'Восстановление завершено, но OpenCord Server не удалось запустить. Проверьте sudo opencordctl status и logs.\n' >&2
+      return 1
+    fi
+  else
+    printf 'OpenCord Server был остановлен до восстановления и остаётся остановленным. Запустите: sudo opencordctl start\n'
+  fi
+
+  # Verify the restored state and report it.
+  if [[ "${INSTALL_MODE}" == "docker" ]]; then
+    message_count="$(compose exec -T database psql --username opencord --dbname opencord --tuples-only --no-align --command 'SELECT count(*) FROM messages;')"
+    attachment_count="$(compose run --rm -T --no-deps --user 10001:10001 --entrypoint sh server -c 'find /var/lib/opencord/attachments -mindepth 1 | wc -l')"
+  else
+    message_count="$(runuser -u postgres -- psql --dbname opencord --tuples-only --no-align --command 'SELECT count(*) FROM messages;')"
+    attachment_count="$(find /var/lib/opencord/attachments -mindepth 1 | wc -l)"
+  fi
+  message_count="${message_count//[[:space:]]/}"
+  attachment_count="${attachment_count//[[:space:]]/}"
+  if [[ ! "${message_count}" =~ ^[0-9]+$ ]]; then message_count="неизвестно"; fi
+  if [[ ! "${attachment_count}" =~ ^[0-9]+$ ]]; then attachment_count="неизвестно"; fi
+
+  if [[ "${was_running}" == "true" ]] && ! inspect_health false; then
+    printf 'Сервер запущен, но healthcheck не прошёл.\n' >&2
+    return 1
+  fi
+
+  printf 'Восстановление завершено: %s и %s; сообщений: %s; файлов вложений: %s.\n' "${dump_path}" "${attachments_path}" "${message_count}" "${attachment_count}"
+  printf 'Состояние до восстановления сохранено: %s\n' "${safety_backup_message}"
+}
+
 clear_messages() {
   local confirmation="${1:-}" was_running="false" deleted_count
   if [[ "${confirmation}" != "DELETE-ALL-MESSAGES" || $# -ne 1 ]]; then
@@ -335,6 +524,7 @@ case "${command_name}" in
   start|stop|restart) service_action "${command_name}" ;;
   settings) show_settings ;;
   backup) create_backup ;;
+  restore) restore_backup "$@" ;;
   clear-messages) clear_messages "$@" ;;
   check-update) "${MANAGEMENT_ROOT}/libexec/update-server" --check-only "$@" ;;
   update) "${MANAGEMENT_ROOT}/libexec/update-server" "$@" ;;

@@ -15,6 +15,7 @@ sudo opencordctl logs 200
 sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
+sudo opencordctl restore <dump> RESTORE-OPENCORD-BACKUP
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
 sudo opencordctl check-update
 sudo opencordctl update --channel stable
@@ -27,6 +28,8 @@ sudo opencordctl uninstall
 Manual `--bundle-url` and `--bundle-file` are retained for disaster recovery. For them, the SHA-256 must be obtained from a separate trusted source.
 
 Similar short scripts are located in `scripts/`. The `backup` command creates a pair of files in `backups/`: PostgreSQL in `pg_dump` custom format and a `.attachments.tar` archive with attachments. Both files are needed for full recovery.
+
+The `restore` command restores PostgreSQL and attachments from a `backup` pair. It requires the exact phrase `RESTORE-OPENCORD-BACKUP`, creates a mandatory safety backup of the current state first, stops only the OpenCord Server process, restores both files, and verifies the healthcheck afterwards.
 
 The `update` command accepts a release bundle only over HTTPS or from an explicitly specified local file and requires the expected SHA-256 sum. After verifying the archive, it creates a mandatory backup and runs the idempotent installer of the current mode. PostgreSQL and attachments are preserved. Until the official release channel is published, the URL and SHA-256 must be taken from a specific trusted release publication; the command intentionally does not download "latest" from an unfixed source.
 
@@ -61,6 +64,7 @@ sudo opencordctl logs 200
 sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
+sudo opencordctl restore <dump> RESTORE-OPENCORD-BACKUP
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
 sudo opencordctl check-update
 sudo opencordctl update --channel stable
@@ -77,6 +81,8 @@ sudo opencordctl uninstall
 SHA-256 нужно получить из отдельного доверенного источника.
 
 Аналогичные короткие сценарии находятся в `scripts/`. Команда `backup` создаёт в `backups/` пару файлов: PostgreSQL в custom-формате `pg_dump` и архив `.attachments.tar` с вложениями. Оба файла нужны для полного восстановления.
+
+Команда `restore` восстанавливает PostgreSQL и вложения из пары, созданной `backup`. Она требует точной фразы `RESTORE-OPENCORD-BACKUP`, сначала создаёт обязательную резервную копию текущего состояния, останавливает только процесс OpenCord Server, восстанавливает оба файла и после этого проверяет healthcheck.
 
 Команда `update` принимает release bundle только по HTTPS либо из явно указанного локального файла и требует ожидаемую SHA-256 сумму. После проверки архива она создаёт обязательную резервную копию и запускает идемпотентный установщик текущего режима. PostgreSQL и вложения сохраняются. Пока официальный канал релизов не опубликован, URL и SHA-256 должны браться из конкретной доверенной публикации релиза; команда намеренно не скачивает «latest» из незафиксированного источника.
 
@@ -111,6 +117,7 @@ sudo opencordctl logs 200
 sudo opencordctl restart
 sudo opencordctl settings
 sudo opencordctl backup
+sudo opencordctl restore <dump> RESTORE-OPENCORD-BACKUP
 sudo opencordctl clear-messages DELETE-ALL-MESSAGES
 sudo opencordctl check-update
 sudo opencordctl update --channel stable
@@ -123,6 +130,8 @@ sudo opencordctl uninstall
 手动方式 `--bundle-url` 和 `--bundle-file` 保留用于灾难恢复。对于它们，SHA-256 必须从单独的可信来源获取。
 
 类似的简短脚本位于 `scripts/`。`backup` 命令在 `backups/` 中创建一对文件：`pg_dump` custom 格式的 PostgreSQL，以及包含附件的 `.attachments.tar` 归档。这两个文件都是完整恢复所必需的。
+
+`restore` 命令会从 `backup` 创建的一对文件恢复 PostgreSQL 和附件。它需要精确的短语 `RESTORE-OPENCORD-BACKUP`，会先创建当前状态的强制安全备份，只停止 OpenCord Server 进程，恢复两个文件，并在之后验证 healthcheck。
 
 `update` 命令只通过 HTTPS 或从显式指定的本地文件接受 release bundle，并要求预期的 SHA-256 校验和。在验证归档之后，它会创建强制备份并运行当前模式的幂等安装程序。PostgreSQL 和附件会被保留。在官方发布渠道发布之前，URL 和 SHA-256 必须取自特定的可信发布公告；该命令有意不从来源未固定的位置下载「latest」。
 
